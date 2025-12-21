@@ -19,10 +19,10 @@ standard_ec2_post_install = ['pip install awscli &&'
                              'mkdir /usr/local/ec2 &&'
                              'unzip ec2-api-tools.zip -d /usr/local/ec2 &&'
                              'rm -f ec2-api-tools.zip &&'
-                             'cat /etc/environment | grep -v "^EC2_HOME=" | grep -v "^JAVA_HOME" | grep -v "PATH=\$EC2_HOME" | cat > /etc/environment_temp &&'
+                             'cat /etc/environment | grep -v "^EC2_HOME=" | grep -v "^JAVA_HOME" | grep -v "PATH=\\$EC2_HOME" | cat > /etc/environment_temp &&'
                              'echo "EC2_HOME=`ls -d /usr/local/ec2/ec2-api-tools-*`" >> /etc/environment_temp &&'
                              'echo "JAVA_HOME=`readlink -f /usr/bin/javac | sed \"s:bin/javac::\"`" >> /etc/environment_temp &&'
-                             'echo "PATH=\$EC2_HOME/bin:\$PATH" >> /etc/environment_temp &&'
+                             'echo "PATH=\\$EC2_HOME/bin:\\$PATH" >> /etc/environment_temp &&'
                              'cp /etc/environment /etc/environment.bk &&'
                              'mv /etc/environment_temp /etc/environment &&'
                              'echo Done. Re-login to apply environment changes for EC2']
@@ -186,8 +186,16 @@ class Fedora(object):
         ec2_post_install = None
         version = '42'
 
+    class Fedora_43(object):
+        removed =['java-1.8.0-openjdk']
+        packages = []
+        ec2_packages = []
+        test_packages = []
+        ec2_post_install = None
+        version = '43'
+
     versions = [
-        Fedora_27, Fedora_28, Fedora_29, Fedora_30, Fedora_31, Fedora_32, Fedora_33, Fedora_34, Fedora_35, Fedora_37, Fedora_38, Fedora_39, Fedora_40, Fedora_41, Fedora_42
+        Fedora_27, Fedora_28, Fedora_29, Fedora_30, Fedora_31, Fedora_32, Fedora_33, Fedora_34, Fedora_35, Fedora_37, Fedora_38, Fedora_39, Fedora_40, Fedora_41, Fedora_42, Fedora_43
     ]
 
 
@@ -512,6 +520,8 @@ for distro in distros:
                 if hasattr(dver, 'pre_install'):
                     subprocess.check_call(dver.pre_install, shell=True)
                 pkg = distro.packages + dver.packages
+                if hasattr(dver, 'removed'):
+                    pkg = [p for p in pkg if p not in dver.removed]
                 if cmdargs.ec2:
                     pkg += distro.ec2_packages + dver.ec2_packages
                 if cmdargs.test:
