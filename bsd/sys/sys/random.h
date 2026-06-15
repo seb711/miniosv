@@ -68,19 +68,6 @@ __BEGIN_DECLS
 void random_harvest(const void *, u_int, u_int, enum esource);
 __END_DECLS
 
-/* Allow the sysadmin to select the broad category of
- * entropy types to harvest
- */
-struct harvest_select {
-	int ethernet;
-	int point_to_point;
-	int interrupt;
-	int swi;
-	int namei;
-};
-
-extern struct harvest_select harvest;
-
 #endif /* _KERNEL */
 
 #endif /* _SYS_RANDOM_H_ */
