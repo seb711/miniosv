@@ -1,0 +1,23 @@
+{
+  "printf": {
+    "LIBC_CONF_PRINTF_DISABLE_FLOAT": {
+      "value": false
+    },
+    "LIBC_CONF_PRINTF_DISABLE_INDEX_MODE": {
+      "value": false
+    },
+    "LIBC_CONF_PRINTF_DISABLE_STRERROR": {
+      "value": false
+    }
+  },
+  "math": {
+    "LIBC_CONF_MATH_OPTIMIZATIONS": {
+      "value": 0
+    }
+  },
+  "qsort": {
+    "LIBC_CONF_QSORT_IMPL": {
+      "value": "LIBC_QSORT_QUICK_SORT"
+    }
+  }
+}

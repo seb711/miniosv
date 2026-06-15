@@ -1710,6 +1710,28 @@ musl += locale/iconv.o
 musl += locale/iconv_close.o
 endif
 
+# LLVM libc (LLVM_LIBC_PLAN.md): opt-in, family-by-family migration of generic
+# libc functions from musl to llvm-libc. With conf_llvm_libc=1 the objects in
+# llvm-libc-replaces are dropped from the musl list and resolved instead from
+# the llvm-libc archive, which sits behind the kernel objects so the linker only
+# pulls members for symbols nothing else defines. The archive is a no-syscall
+# baremetal libc built automatically by scripts/build-llvm-libc.sh (x86/arm
+# only) - no manual step. The conformance suite (make app=tests) is the gate.
+conf_llvm_libc ?= 0
+llvm_libc_libdir = build/llvm-libc/$(arch)/libc/lib
+llvm_libc_archives = $(llvm_libc_libdir)/libc.a $(llvm_libc_libdir)/libm.a
+llvm_libc_replaces = string/bcmp.o
+llvm_libc_dep =
+ifeq ($(conf_llvm_libc),1)
+$(out)/.llvm-libc-built: scripts/build-llvm-libc.sh tools/llvm-libc/entrypoints.txt tools/llvm-libc/config.json tools/llvm-libc/headers.txt
+	$(call quiet, scripts/build-llvm-libc.sh $(arch), LLVM-LIBC $(arch))
+	$(call very-quiet, touch $@)
+$(llvm_libc_archives): $(out)/.llvm-libc-built
+llvm_libc_dep = $(llvm_libc_archives)
+musl := $(filter-out $(llvm_libc_replaces),$(musl))
+linker_archives_options += $(llvm_libc_archives)
+endif
+
 ifeq ($(arch),aarch64)
 def_symbols = --defsym=OSV_KERNEL_VM_BASE=$(kernel_vm_base)
 else
