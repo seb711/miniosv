@@ -12,6 +12,7 @@ extern "C" {
 #define __NEED_size_t
 #define __NEED_wchar_t
 #define __NEED_wint_t
+#define __NEED_mbstate_t
 
 #if defined(_POSIX_SOURCE) || defined(_POSIX_C_SOURCE) \
  || defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE)
@@ -37,12 +38,9 @@ extern "C" {
 #undef WEOF
 #define WEOF (-1)
 
-typedef struct
-{
-	unsigned __opaque1, __opaque2;
-} __mbstate_t;
-
-typedef __mbstate_t mbstate_t;
+/* mbstate_t comes from <bits/alltypes.h> via __NEED_mbstate_t above (as in
+ * upstream musl), so that libc++ built in musl mode resolves the same
+ * ::mbstate_t and there is a single, include-order-independent definition. */
 
 wchar_t *wcscpy (wchar_t *__restrict, const wchar_t *__restrict);
 wchar_t *wcsncpy (wchar_t *__restrict, const wchar_t *__restrict, size_t);

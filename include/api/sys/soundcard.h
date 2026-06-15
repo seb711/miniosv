@@ -1,1 +1,1 @@
-../../../musl/include/sys/soundcard.h
+#include <bits/soundcard.h>

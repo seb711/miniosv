@@ -1,1 +1,6 @@
-../../musl_0.9.12/src/stdio/getchar.c
+#include <stdio.h>
+
+int getchar(void)
+{
+	return fgetc(stdin);
+}

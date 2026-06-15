@@ -33,6 +33,7 @@
 #  include <locale>
 #endif
 
+#ifndef BOOST_DYNAMIC_BITSET_NO_LOCALE_STREAMS
 #if defined(BOOST_OLD_IOSTREAMS)
 #  include <iostream.h>
 #  include <ctype.h> // for isspace
@@ -40,6 +41,7 @@
 #  include <istream>
 #  include <ostream>
 #endif
+#endif // BOOST_DYNAMIC_BITSET_NO_LOCALE_STREAMS
 
 #include "boost/dynamic_bitset_fwd.hpp"
 #include "boost/dynamic_bitset/detail/dynamic_bitset.hpp"
@@ -352,9 +354,11 @@ public:
                                  dynamic_bitset<B, A>& result);
 
 
+#ifndef BOOST_DYNAMIC_BITSET_NO_LOCALE_STREAMS
     template <typename CharT, typename Traits, typename B, typename A>
     friend std::basic_istream<CharT, Traits>& operator>>(std::basic_istream<CharT, Traits>& is,
                                                          dynamic_bitset<B, A>& b);
+#endif
 
     template <typename B, typename A, typename stringT>
     friend void to_string_helper(const dynamic_bitset<B, A> & b, stringT & s, bool dump_all);
@@ -600,6 +604,7 @@ bool operator>=(const dynamic_bitset<Block, Allocator>& a,
                 const dynamic_bitset<Block, Allocator>& b);
 
 // stream operators
+#ifndef BOOST_DYNAMIC_BITSET_NO_LOCALE_STREAMS
 #ifdef BOOST_OLD_IOSTREAMS
 template <typename Block, typename Allocator>
 std::ostream& operator<<(std::ostream& os,
@@ -618,6 +623,7 @@ std::basic_istream<CharT, Traits>&
 operator>>(std::basic_istream<CharT, Traits>& is,
            dynamic_bitset<Block, Allocator>& b);
 #endif
+#endif // BOOST_DYNAMIC_BITSET_NO_LOCALE_STREAMS
 
 // bitset operations
 template <typename Block, typename Allocator>
@@ -1661,6 +1667,7 @@ inline std::size_t hash_value(const dynamic_bitset<Block, Allocator>& a)
 //-----------------------------------------------------------------------------
 // stream operations
 
+#ifndef BOOST_DYNAMIC_BITSET_NO_LOCALE_STREAMS
 #ifdef BOOST_OLD_IOSTREAMS
 template < typename Block, typename Alloc>
 std::ostream&
@@ -1964,6 +1971,7 @@ operator>>(std::basic_istream<Ch, Tr>& is, dynamic_bitset<Block, Alloc>& b)
 
 
 #endif
+#endif // BOOST_DYNAMIC_BITSET_NO_LOCALE_STREAMS
 
 
 //-----------------------------------------------------------------------------

@@ -54,6 +54,14 @@ extern "C" int* ___errno_location()
     return &errno;
 }
 
+// llvm-libc in external-errno mode (LIBC_CONF_ERRNO_MODE_EXTERNAL, the
+// baremetal default) routes all its errno accesses through this hook, so
+// llvm-libc entrypoints share OSv's TLS errno.
+extern "C" int* __llvm_libc_errno() noexcept
+{
+    return &errno;
+}
+
 int getrlimit(int resource, struct rlimit *rlim)
 {
     auto set = [=] (rlim_t r) { rlim->rlim_cur = rlim->rlim_max = r; };

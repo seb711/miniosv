@@ -33,6 +33,8 @@ TYPEDEF int wint_t;
 TYPEDEF const int * wctrans_t;
 TYPEDEF unsigned long wctype_t;
 
+TYPEDEF struct __mbstate_t { unsigned __opaque1, __opaque2; } mbstate_t;
+
 TYPEDEF signed char int8_t;
 TYPEDEF short       int16_t;
 TYPEDEF int         int32_t;
