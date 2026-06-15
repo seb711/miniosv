@@ -135,7 +135,7 @@ static void do_tzset()
 
 	for (i=0; i<5; i++) r0[i] = r1[i] = 0;
 
-	if (zi) __munmap((void *)zi, map_size);
+	if (zi) munmap((void *)zi, map_size);
 
 	/* Cache the old value of TZ to check if it has changed. Avoid
 	 * free so as not to pull it into static programs. Growth
@@ -156,24 +156,22 @@ static void do_tzset()
 	if (*s == ':' || ((p=strchr(s, '/')) && !memchr(s, ',', p-s))) {
 		if (*s == ':') s++;
 		if (*s == '/' || *s == '.') {
-			if (!strcmp(s, "/etc/localtime"))
-				map = __map_file(s, &map_size);
+			/* No filesystem in the slim kernel: tz data files can
+			 * never be mapped, so this always falls back to UTC
+			 * (drops the musl __map_file/__mmap dependency). */
+			(void)s;
 		} else {
 			size_t l = strlen(s);
 			if (l <= NAME_MAX && !strchr(s, '.')) {
 				memcpy(pathname, s, l+1);
 				pathname[l] = 0;
-				for (try=search; !map && *try; try+=l+1) {
-					l = strlen(try);
-					memcpy(pathname-l, try, l);
-					map = __map_file(pathname-l, &map_size);
-				}
+				(void)search; (void)try; (void)pathname;
 			}
 		}
 		if (!map) s = __utc;
 	}
 	if (map && (map_size < 44 || memcmp(map, "TZif", 4))) {
-		__munmap((void *)map, map_size);
+		munmap((void *)map, map_size);
 		map = 0;
 		s = __utc;
 	}
