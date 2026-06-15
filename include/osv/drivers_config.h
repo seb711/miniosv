@@ -6,7 +6,6 @@
 #define CONF_drivers_ahci 0
 #define CONF_drivers_ena 1
 #define CONF_drivers_hpet 1
-#define CONF_drivers_hyperv 1
 #define CONF_drivers_ide 0
 #define CONF_drivers_mmio 1
 #define CONF_drivers_nvme 0
@@ -18,6 +17,5 @@
 #define CONF_drivers_virtio_net 1
 #define CONF_drivers_virtio_rng 1
 #define CONF_drivers_vmxnet3 1
-#define CONF_drivers_xen 0
 
 #endif
