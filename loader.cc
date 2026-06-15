@@ -7,8 +7,6 @@
 
 #include <osv/drivers_config.h>
 #include <osv/kernel_config.h>
-#include <bsd/init.hh>
-#include <bsd/net.hh>
 #include <cctype>
 #include <osv/elf.hh>
 #include "arch-tls.hh"
@@ -27,16 +25,6 @@
 #include <osv/power.hh>
 #include <osv/rcu.hh>
 #include <osv/mempool.hh>
-#if CONF_networking_stack
-#include <bsd/porting/networking.hh>
-#endif
-#include <bsd/porting/shrinker.h>
-#if CONF_networking_stack
-#include <bsd/porting/route.h>
-#endif
-#if CONF_networking_dhcp
-#include <osv/dhcp.hh>
-#endif
 #include <osv/version.h>
 #include <osv/shutdown.hh>
 #include <osv/boot.hh>
@@ -300,13 +288,6 @@ void main_cont()
 #endif
 #endif
     sched::init_detached_threads_reaper();
-
-    bsd_init();
-
-#if CONF_networking_stack
-    net_init();
-    boot_time.event("Network initialized");
-#endif
 
     arch::irq_enable();
 

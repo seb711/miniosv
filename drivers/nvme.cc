@@ -32,7 +32,6 @@
 using namespace memory;
 
 #include <sys/mman.h>
-#include <sys/refcount.h>
 
 #include <osv/drivers_config.h>
 
