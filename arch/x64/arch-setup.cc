@@ -14,9 +14,6 @@
 #include "processor.hh"
 #include "processor-flags.h"
 #include "msr.hh"
-#if CONF_drivers_xen
-#include <osv/xen.hh>
-#endif
 #include <osv/elf.hh>
 #include <osv/types.h>
 #include <alloca.h>
@@ -220,13 +217,8 @@ void arch_setup_tls(void *tls, const elf::tls_data& info)
 
 static inline void disable_pic()
 {
-#if CONF_drivers_xen
-    // PIC not present in Xen
-    XENPV_ALTERNATIVE({ processor::outb(0xff, 0x21); processor::outb(0xff, 0xa1); }, {});
-#else
     processor::outb(0xff, 0x21);
     processor::outb(0xff, 0xa1);
-#endif
 }
 
 void arch_init_premain()
@@ -259,9 +251,6 @@ void arch_init_premain()
 #endif
 #if CONF_drivers_virtio_fs
 #include "drivers/virtio-fs.hh"
-#endif
-#if CONF_drivers_xen
-#include "drivers/xenplatform-pci.hh"
 #endif
 #if CONF_drivers_ahci
 #include "drivers/ahci.hh"
@@ -314,9 +303,6 @@ void arch_init_drivers()
 #endif
 #if CONF_drivers_virtio_fs
     drvman->register_driver(virtio::fs::probe);
-#endif
-#if CONF_drivers_xen
-    drvman->register_driver(xenfront::xenplatform_pci::probe);
 #endif
 #if CONF_drivers_ahci
     drvman->register_driver(ahci::hba::probe);

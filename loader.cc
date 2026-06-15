@@ -42,9 +42,6 @@
 #include <osv/boot.hh>
 #include <osv/sampler.hh>
 #include <osv/firmware.hh>
-#if CONF_drivers_xen
-#include <osv/xen.hh>
-#endif
 
 #include "drivers/random.hh"
 #include "drivers/console.hh"

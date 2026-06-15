@@ -337,7 +337,7 @@ COMMON = $(autodepend) -g -Wall -Wno-pointer-arith $(CFLAGS_WERROR) -Wformat=0 -
 	-fno-omit-frame-pointer $(compiler-specific) \
 	-include compiler/include/intrinsics.hh \
 	$(conf_compiler_cflags) $(conf_compiler_opt) $(tracing-flags) $(gcc-sysroot) \
-	-D__OSV__ -D__XEN_INTERFACE_VERSION__="0x00030207" -DARCH_STRING=$(ARCH_STR) $(EXTRA_FLAGS)
+	-D__OSV__ -DARCH_STRING=$(ARCH_STR) $(EXTRA_FLAGS)
 COMMON += $(standard-includes-flag)
 COMMON += $(wno-unused-private-field)
 
@@ -557,25 +557,6 @@ bsd += bsd/porting/kthread.o
 bsd += bsd/porting/mmu.o
 bsd += bsd/porting/pcpu.o
 bsd += bsd/porting/bus_dma.o
-ifeq ($(conf_drivers_xen),1)
-bsd += bsd/sys/xen/evtchn.o
-$(out)/bsd/sys/xen/evtchn.o: COMMON += -Wno-array-bounds -Wno-stringop-overread -Wno-stringop-overflow
-endif
-
-ifeq ($(arch),x64)
-$(out)/bsd/%.o: COMMON += -DXEN -DXENHVM
-ifeq ($(conf_drivers_xen),1)
-bsd += bsd/sys/xen/gnttab.o
-bsd += bsd/sys/xen/xenstore/xenstore.o
-bsd += bsd/sys/xen/xenbus/xenbus.o
-bsd += bsd/sys/xen/xenbus/xenbusb.o
-bsd += bsd/sys/xen/xenbus/xenbusb_front.o
-bsd += bsd/sys/dev/xen/blkfront/blkfront.o
-endif
-ifeq ($(conf_drivers_hyperv),1)
-bsd += bsd/sys/dev/hyperv/vmbus/hyperv.o
-endif
-endif
 
 $(out)/bsd/sys/%.o: COMMON += -Wno-sign-compare -Wno-narrowing -Wno-write-strings -Wno-parentheses -Wno-unused-but-set-variable
 
@@ -789,9 +770,6 @@ drivers += drivers/virtio-rng.o
 endif
 
 drivers += drivers/kvmclock.o
-ifeq ($(conf_drivers_hyperv),1)
-drivers += drivers/hypervclock.o
-endif
 ifeq ($(conf_drivers_acpi),1)
 drivers += drivers/acpi.o
 endif
@@ -805,12 +783,6 @@ endif
 ifeq ($(conf_drivers_ide),1)
 drivers += drivers/ide.o
 endif
-
-ifeq ($(conf_drivers_xen),1)
-drivers += drivers/xenclock.o
-drivers += drivers/xenfront.o drivers/xenfront-xenbus.o drivers/xenfront-blk.o
-drivers += drivers/xenplatform-pci.o
-endif
 endif # x64
 
 ifeq ($(arch),aarch64)
@@ -819,9 +791,6 @@ drivers += drivers/pl011.o
 drivers += drivers/pl031.o
 ifeq ($(conf_drivers_cadence),1)
 drivers += drivers/cadence-uart.o
-endif
-ifeq ($(conf_drivers_xen),1)
-drivers += drivers/xenconsole.o
 endif
 
 ifeq ($(conf_drivers_virtio),1)
@@ -890,10 +859,6 @@ objects += arch/$(arch)/msi.o
 endif
 objects += arch/$(arch)/power.o
 objects += arch/$(arch)/feexcept.o
-ifeq ($(conf_drivers_xen),1)
-objects += arch/$(arch)/xen.o
-endif
-
 ifeq ($(conf_memory_optimize),1)
 wno-unknown-attributes := $(call compiler-flag, -Wno-unknown-attributes, -Wno-unknown-attributes, compiler/empty.cc)
 $(out)/arch/x64/string-ssse3.o: CXXFLAGS += -mssse3 $(wno-unknown-attributes)
@@ -926,16 +891,13 @@ endif
 objects += arch/x64/ioapic.o
 objects += arch/x64/apic.o
 objects += arch/x64/apic-clock.o
-objects += arch/x64/entry-xen.o
 objects += arch/x64/prctl.o
 objects += arch/x64/vmlinux.o
 objects += arch/x64/vmlinux-boot64.o
 objects += arch/x64/pvh-boot.o
+objects += arch/x64/pvh-entry.o
 endif # x64
 
-ifeq ($(conf_drivers_xen),1)
-objects += core/xen_intr.o
-endif
 objects += core/math.o
 objects += core/spinlock.o
 objects += core/lfmutex.o

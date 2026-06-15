@@ -18,9 +18,6 @@
 #include <osv/boot.hh>
 #include <osv/debug.hh>
 #include <osv/commands.hh>
-#if CONF_drivers_xen
-#include <osv/xen.hh>
-#endif
 
 #include "arch-mmu.hh"
 #include "arch-dtb.hh"
@@ -261,14 +258,6 @@ void arch_init_drivers()
 void arch_init_early_console()
 {
     console::mmio_isa_serial_console::_phys_mmio_address = 0;
-
-#if CONF_drivers_xen
-    if (is_xen()) {
-        new (&console::aarch64_console.xen) console::XEN_Console();
-        console::arch_early_console = console::aarch64_console.xen;
-        return;
-    }
-#endif
 
     int irqid;
     u64 mmio_serial_address = dtb_get_mmio_serial_console(&irqid);

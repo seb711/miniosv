@@ -18,9 +18,6 @@ hypervisor_type hypervisor()
     if (processor::features().kvm_clocksource || processor::features().kvm_clocksource2) {
         return hypervisor_type::kvm;
     }
-    if (processor::features().xen_clocksource || firmware_vendor() == "Xen") {
-        return hypervisor_type::xen;
-    }
     return hypervisor_type::unknown;
 }
 
@@ -29,8 +26,6 @@ std::string hypervisor_name()
     switch (osv::hypervisor()) {
     case osv::hypervisor_type::kvm:
         return "kvm";
-    case osv::hypervisor_type::xen:
-        return "xen";
     default:
         return "Unknown";
     }

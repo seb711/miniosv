@@ -62,7 +62,5 @@ conf_drivers_virtio_net=1
 conf_drivers_virtio_rng=1
 conf_drivers_mmio=1
 conf_drivers_nvme=0
-conf_drivers_xen=0
-conf_drivers_hyperv=1
 conf_drivers_ena=1
 conf_drivers_vmxnet3=1
