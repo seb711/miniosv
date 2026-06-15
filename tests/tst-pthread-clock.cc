@@ -124,7 +124,7 @@ int main(int ac, char** av)
     // On near-future computers, a single function call may complete in less
     // then a nanosecond. But lets hope that the following loop will spend at
     // least a nanosecond.
-    for (register int j=0; j<1000; j++) {
+    for (int j=0; j<1000; j++) {
         // To force gcc to not optimize this loop away
         asm volatile("" : : : "memory");
     }

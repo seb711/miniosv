@@ -48,7 +48,7 @@ void pinned_thread::pin(unsigned cpu)
 
 void pinned_thread::start()
 {
-    _thread.reset(new std::thread([=] { do_pin(); _f(); }));
+    _thread.reset(new std::thread([this] { do_pin(); _f(); }));
 }
 
 void pinned_thread::do_pin()
