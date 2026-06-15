@@ -6,632 +6,266 @@
  */
 
 #include <osv/drivers_config.h>
-#include <map>
-#include <memory>
+#include <cstring>
 
-extern "C" {
-    #include "acpi.h"
-    #include "acpiosxf.h"
-    #include "acpixf.h"
-}
-#include <stdlib.h>
 #include <osv/mmu.hh>
-#include <osv/sched.hh>
-#include <osv/shutdown.hh>
-#include "processor.hh"
 #include <osv/align.hh>
+#include <osv/debug.h>
+#include <osv/prio.hh>
+#include "processor.hh"
 #if CONF_drivers_xen
 #include <osv/xen.hh>
 #endif
 
-#include <osv/debug.h>
-#include <osv/mutex.h>
-#include <osv/semaphore.hh>
-
-#include "drivers/console.hh"
-#include <osv/pci.hh>
-#include <osv/interrupt.hh>
-
-#include <osv/prio.hh>
 #include "acpi.hh"
 
 #define acpi_tag "acpi"
-#define acpi_d(...)   tprintf_d(acpi_tag, __VA_ARGS__)
-#define acpi_i(...)   tprintf_i(acpi_tag, __VA_ARGS__)
 #define acpi_w(...)   tprintf_w(acpi_tag, __VA_ARGS__)
-#define acpi_e(...)   tprintf_e(acpi_tag, __VA_ARGS__)
-
-ACPI_STATUS AcpiOsInitialize()
-{
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsTerminate()
-{
-    return AE_OK;
-}
-
-ACPI_PHYSICAL_ADDRESS AcpiOsGetRootPointer()
-{
-    ACPI_SIZE rsdp;
-    if (acpi::pvh_rsdp_paddr) {
-        rsdp = acpi::pvh_rsdp_paddr;
-    } else {
-        auto st = AcpiFindRootPointer(&rsdp);
-        if (ACPI_FAILURE(st)) {
-            abort();
-        }
-    }
-    return rsdp;
-}
-
-ACPI_STATUS AcpiOsPredefinedOverride(const ACPI_PREDEFINED_NAMES *InitVal,
-        ACPI_STRING *NewVal)
-{
-    *NewVal = nullptr;
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsTableOverride(ACPI_TABLE_HEADER *ExistingTable,
-        ACPI_TABLE_HEADER **NewTable)
-{
-    *NewTable = nullptr;
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsPhysicalTableOverride(ACPI_TABLE_HEADER *ExistingTable,
-    ACPI_PHYSICAL_ADDRESS *NewAddress, UINT32 *NewTableLength)
-{
-    *NewAddress = 0;
-    *NewTableLength = 0;
-    return AE_OK;
-}
-
-// Note: AcpiOsCreateLock requires a lock which can be used for mutual
-// exclusion of a resources between multiple threads *AND* interrupt handlers.
-// Normally, this requires a spinlock (which disables interrupts), to ensure
-// that while a thread is using the protected resource, an interrupt handler
-// with the same context as the thread doesn't use it.
-// However, in OSV, interrupt handlers are run in ordinary threads, so the
-// mutual exclusion of an ordinary "mutex" is enough.
-ACPI_STATUS AcpiOsCreateLock(ACPI_SPINLOCK *OutHandle)
-{
-    *OutHandle = new mutex();
-    return AE_OK;
-}
-
-ACPI_CPU_FLAGS AcpiOsAcquireLock(ACPI_SPINLOCK Handle)
-{
-    reinterpret_cast<mutex *>(Handle) -> lock();
-    return 0;
-}
-
-void AcpiOsReleaseLock(ACPI_SPINLOCK Handle, ACPI_CPU_FLAGS Flags)
-{
-    reinterpret_cast<mutex *>(Handle) -> unlock();;
-}
-
-void AcpiOsDeleteLock(ACPI_SPINLOCK Handle)
-{
-    delete reinterpret_cast<mutex *>(Handle);
-}
-
-ACPI_STATUS AcpiOsCreateSemaphore(UINT32 MaxUnits,
-        UINT32 InitialUnits, ACPI_SEMAPHORE *OutHandle)
-{
-    // Note: we ignore MaxUnits.
-    *OutHandle = new semaphore(InitialUnits);
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsDeleteSemaphore(ACPI_SEMAPHORE Handle)
-{
-    if (!Handle)
-        return AE_BAD_PARAMETER;
-    delete reinterpret_cast<semaphore *>(Handle);
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsWaitSemaphore(ACPI_SEMAPHORE Handle,
-        UINT32 Units, UINT16 Timeout)
-{
-    if (!Handle)
-        return AE_BAD_PARAMETER;
-    semaphore *sem = reinterpret_cast<semaphore *>(Handle);
-    switch(Timeout) {
-    case ACPI_DO_NOT_WAIT:
-        return sem->trywait(Units) ? AE_OK : AE_TIME;
-    case ACPI_WAIT_FOREVER:
-        sem->wait(Units);
-        return AE_OK;
-    default:
-        sched::timer timer(*sched::thread::current());
-        timer.set(std::chrono::milliseconds(Timeout));
-        return sem->wait(Units, &timer) ? AE_OK : AE_TIME;
-    }
-}
-
-ACPI_STATUS AcpiOsSignalSemaphore(ACPI_SEMAPHORE Handle, UINT32 Units)
-{
-    if (!Handle)
-        return AE_BAD_PARAMETER;
-    semaphore *sem = reinterpret_cast<semaphore *>(Handle);
-    sem->post(Units);
-    return AE_OK;
-}
-
-void *AcpiOsAllocate(ACPI_SIZE Size)
-{
-    return malloc(Size);
-}
-
-void AcpiOsFree(void *Memory)
-{
-    free(Memory);
-}
-
-void *AcpiOsMapMemory(ACPI_PHYSICAL_ADDRESS Where, ACPI_SIZE Length)
-{
-    uint64_t _where = align_down(Where, mmu::huge_page_size);
-    size_t map_size = align_up(Length + Where - _where, mmu::huge_page_size);
-    
-    mmu::linear_map(mmu::phys_to_virt(_where), _where, map_size, "acpi");
-    return mmu::phys_to_virt(Where);
-}
-
-void AcpiOsUnmapMemory(void *LogicalAddress, ACPI_SIZE Size)
-{
-    // Unmap is a no-op and leaves the mapppings in place because the amount of
-    // mapped ACPI memory is limited, and we don't track whether what it maps
-    // was previously mapped (so unmap can poke a hole where a previous mapping
-    // existed, even before ACPI).
-}
-
-ACPI_STATUS AcpiOsGetPhysicalAddress(void *LogicalAddress,
-        ACPI_PHYSICAL_ADDRESS *PhysicalAddress)
-{
-    *PhysicalAddress = mmu::virt_to_phys(LogicalAddress);
-    return AE_OK;
-}
-
-#if 0
-ACPI_STATUS AcpiOsCreateCache (
-    char                    *CacheName,
-    UINT16                  ObjectSize,
-    UINT16                  MaxDepth,
-    ACPI_CACHE_T            **ReturnCache);
-
-ACPI_STATUS
-AcpiOsDeleteCache (
-    ACPI_CACHE_T            *Cache);
-
-ACPI_STATUS
-AcpiOsPurgeCache (
-    ACPI_CACHE_T            *Cache);
-
-void *
-AcpiOsAcquireObject (
-    ACPI_CACHE_T            *Cache);
-
-ACPI_STATUS
-AcpiOsReleaseObject (
-    ACPI_CACHE_T            *Cache,
-    void                    *Object);
-
-#endif
-
-/*
- * Interrupt handlers
- */
-
-namespace osv {
-
-class acpi_interrupt {
-public:
-    acpi_interrupt(unsigned gsi, ACPI_OSD_HANDLER sr, void* ctxt)
-        : _service_routine(sr)
-        , _context(ctxt)
-        , _stopped(false)
-        , _counter(0)
-        , _thread(sched::thread::make([this] { process_interrupts(); }))
-        , _intr(gsi, [this] { _counter.fetch_add(1); _thread->wake_with_irq_disabled(); })
-    {
-        _thread->start();
-    }
-    ~acpi_interrupt() {
-        _stopped.store(true);
-        _thread->wake();
-        _thread->join();
-    }
-private:
-    void process_interrupts() {
-        uint64_t local_counter = 0;
-        while (!_stopped.load()) {
-            sched::thread::wait_for(
-                    [=] { return _stopped.load(); },
-                    [=] { return local_counter != _counter.load(); });
-            if (local_counter != _counter.load()) {
-                local_counter = _counter.load();
-                _service_routine(_context);
-            }
-        }
-    }
-private:
-    ACPI_OSD_HANDLER _service_routine;
-    void* _context;
-    std::atomic<bool> _stopped;
-    std::atomic<uint64_t> _counter;
-    std::unique_ptr<sched::thread> _thread;
-    gsi_edge_interrupt _intr;
-};
-
-std::map<UINT32, std::unique_ptr<acpi_interrupt>> acpi_interrupts;
-}
-
-ACPI_STATUS
-AcpiOsInstallInterruptHandler(
-    UINT32                  InterruptNumber,
-    ACPI_OSD_HANDLER        ServiceRoutine,
-    void                    *Context)
-{
-    if (ServiceRoutine == nullptr) {
-        return AE_BAD_PARAMETER;
-    }
-
-    if (osv::acpi_interrupts.count(InterruptNumber)) {
-        return AE_ALREADY_EXISTS;
-    }
-
-    osv::acpi_interrupts[InterruptNumber] = std::unique_ptr<osv::acpi_interrupt>(
-        new osv::acpi_interrupt(InterruptNumber, ServiceRoutine, Context));
-
-    return AE_OK;
-}
-
-ACPI_STATUS
-AcpiOsRemoveInterruptHandler(
-    UINT32                  InterruptNumber,
-    ACPI_OSD_HANDLER        ServiceRoutine)
-{
-    if (ServiceRoutine == nullptr) {
-        return AE_BAD_PARAMETER;
-    }
-
-    if (!osv::acpi_interrupts.count(InterruptNumber)) {
-        return AE_NOT_EXIST;
-    }
-
-    osv::acpi_interrupts.erase(InterruptNumber);
-    return AE_OK;
-}
-
-ACPI_THREAD_ID AcpiOsGetThreadId()
-{
-    return reinterpret_cast<uintptr_t>(sched::thread::current());
-}
-
-ACPI_STATUS AcpiOsExecute(
-    ACPI_EXECUTE_TYPE       Type,
-    ACPI_OSD_EXEC_CALLBACK  Function,
-    void                    *Context)
-{
-    return AE_NOT_IMPLEMENTED;
-}
-
-void AcpiOsWaitEventsComplete()
-{
-    // FIXME: ?
-}
-
-void AcpiOsSleep(UINT64 Milliseconds)
-{
-    sched::thread::sleep(std::chrono::milliseconds(Milliseconds));
-}
-
-void AcpiOsStall(UINT32 Microseconds)
-{
-    // spec says to spin, but...
-    sched::thread::sleep(std::chrono::microseconds(Microseconds));
-}
-
-ACPI_STATUS AcpiOsReadPort(
-    ACPI_IO_ADDRESS         Address,
-    UINT32                  *Value,
-    UINT32                  Width)
-{
-    switch (Width) {
-    case 8:
-        *Value = processor::inb(Address);
-        break;
-    case 16:
-        *Value = processor::inw(Address);
-        break;
-    case 32:
-        *Value = processor::inl(Address);
-        break;
-    default:
-        return AE_BAD_PARAMETER;
-    }
-    return AE_OK;
-}
-
-ACPI_STATUS AcpiOsWritePort(
-    ACPI_IO_ADDRESS         Address,
-    UINT32                  Value,
-    UINT32                  Width)
-{
-    switch (Width) {
-    case 8:
-        processor::outb(Value, Address);
-        break;
-    case 16:
-        processor::outw(Value, Address);
-        break;
-    case 32:
-        processor::outl(Value, Address);
-        break;
-    default:
-        return AE_BAD_PARAMETER;
-    }
-    return AE_OK;
-}
-
-
-ACPI_STATUS
-AcpiOsReadMemory (
-    ACPI_PHYSICAL_ADDRESS   Address,
-    UINT64                  *Value,
-    UINT32                  Width)
-{
-    switch (Width) {
-    case 8:
-        *Value = *mmu::phys_cast<u8>(Address);
-        break;
-    case 16:
-        *Value = *mmu::phys_cast<u16>(Address);
-        break;
-    case 32:
-        *Value = *mmu::phys_cast<u32>(Address);
-        break;
-    case 64:
-        *Value = *mmu::phys_cast<u64>(Address);
-        break;
-    default:
-        return AE_BAD_PARAMETER;
-    }
-    return AE_OK;
-}
-
-ACPI_STATUS
-AcpiOsWriteMemory (
-    ACPI_PHYSICAL_ADDRESS   Address,
-    UINT64                  Value,
-    UINT32                  Width)
-{
-    switch (Width) {
-    case 8:
-        *mmu::phys_cast<u8>(Address) = Value;
-        break;
-    case 16:
-        *mmu::phys_cast<u16>(Address) = Value;
-        break;
-    case 32:
-        *mmu::phys_cast<u32>(Address) = Value;
-        break;
-    case 64:
-        *mmu::phys_cast<u64>(Address) = Value;
-        break;
-    default:
-        return AE_BAD_PARAMETER;
-    }
-    return AE_OK;
-}
-
-ACPI_STATUS
-AcpiOsReadPciConfiguration(
-    ACPI_PCI_ID             *PciId,
-    UINT32                  Reg,
-    UINT64                  *Value,
-    UINT32                  Width)
-{
-    switch(Width) {
-    case 64:
-        // OSv pci config functions does not do 64 bits reads
-        return AE_NOT_IMPLEMENTED;
-        break;
-    case 32:
-        *Value = pci::read_pci_config(PciId->Bus,
-                                      PciId->Device,
-                                      PciId->Function,
-                                      Reg);
-        break;
-    case 16:
-        *Value = pci::read_pci_config_word(PciId->Bus,
-                                           PciId->Device,
-                                           PciId->Function,
-                                           Reg);
-        break;
-    case 8:
-        *Value = pci::read_pci_config_byte(PciId->Bus,
-                                           PciId->Device,
-                                           PciId->Function,
-                                           Reg);
-        break;
-    default:
-        return AE_BAD_PARAMETER;
-    }
-    return AE_OK;
-}
-
-ACPI_STATUS
-AcpiOsWritePciConfiguration (
-    ACPI_PCI_ID             *PciId,
-    UINT32                  Reg,
-    UINT64                  Value,
-    UINT32                  Width)
-{
-    switch(Width) {
-    case 64:
-        // OSv pci config functions does not do 64 bits writes
-        return AE_NOT_IMPLEMENTED;
-        break;
-    case 32:
-        pci::write_pci_config(PciId->Bus,
-                              PciId->Device,
-                              PciId->Function,
-                              Reg,
-                              Value);
-        break;
-    case 16:
-        pci::write_pci_config_word(PciId->Bus,
-                                   PciId->Device,
-                                   PciId->Function,
-                                   Reg,
-                                   Value);
-        break;
-    case 8:
-        pci::write_pci_config_byte(PciId->Bus,
-                                   PciId->Device,
-                                   PciId->Function,
-                                   Reg,
-                                   Value);
-        break;
-    default:
-        return AE_BAD_PARAMETER;
-    }
-    return AE_OK;
-}
-
-BOOLEAN
-AcpiOsReadable(void *Pointer, ACPI_SIZE Length)
-{
-    return mmu::isreadable(Pointer, Length);
-}
-
-BOOLEAN
-AcpiOsWritable(void *Pointer, ACPI_SIZE Length)
-{
-    return true;
-}
-
-UINT64 AcpiOsGetTimer()
-{
-    return clock::get()->time() / 100;
-}
-
-ACPI_STATUS AcpiOsSignal(UINT32 Function, void *Info)
-{
-    abort();
-}
-
-void ACPI_INTERNAL_VAR_XFACE AcpiOsPrintf(const char *Format, ...)
-{
-    va_list va;
-    va_start(va, Format);
-    AcpiOsVprintf(Format, va);
-    va_end(va);
-}
-
-void AcpiOsVprintf(const char *Format, va_list Args)
-{
-    static char msg[1024];
-
-    vsnprintf(msg, sizeof(msg), Format, Args);
-
-    acpi_i(msg);
-}
 
 namespace acpi {
 
 uint64_t pvh_rsdp_paddr = 0;
 
-#define ACPI_MAX_INIT_TABLES 16
-
-static ACPI_TABLE_DESC TableArray[ACPI_MAX_INIT_TABLES];
-
 static bool enabled = false;
 
-bool is_enabled() {
+bool is_enabled()
+{
     return enabled;
+}
+
+// Root System Description Pointer - the entry point into the ACPI tables.
+#pragma pack(push, 1)
+struct rsdp {
+    char     signature[8];   // "RSD PTR "
+    uint8_t  checksum;       // covers the first 20 bytes (ACPI 1.0)
+    char     oem_id[6];
+    uint8_t  revision;       // 0 -> use rsdt_address, >=2 -> use xsdt_address
+    uint32_t rsdt_address;
+    uint32_t length;
+    uint64_t xsdt_address;
+    uint8_t  extended_checksum;
+    uint8_t  reserved[3];
+};
+#pragma pack(pop)
+
+// Fixed ACPI Description Table ("FACP"). Only the leading fields up to the
+// PM1 control blocks are declared - that and the DSDT address are all we need
+// to drive an S5 power-off.
+#pragma pack(push, 1)
+struct fadt {
+    table_header header;
+    uint32_t firmware_ctrl;
+    uint32_t dsdt;
+    uint8_t  reserved;
+    uint8_t  preferred_profile;
+    uint16_t sci_interrupt;
+    uint32_t smi_command;
+    uint8_t  acpi_enable;
+    uint8_t  acpi_disable;
+    uint8_t  s4bios_request;
+    uint8_t  pstate_control;
+    uint32_t pm1a_event_block;
+    uint32_t pm1b_event_block;
+    uint32_t pm1a_control_block;
+    uint32_t pm1b_control_block;
+};
+#pragma pack(pop)
+
+// The parsed tables. A plain static array (rather than a std::vector) so that
+// it is zero-initialized at load time - early_init() runs as a constructor and
+// must not race with the initialization of a non-trivial global.
+static const table_header *tables[64];
+static unsigned ntables;
+
+// ACPI S5 ("soft off") parameters, extracted from the FADT and DSDT. The
+// SLP_TYP values are already shifted into their PM1_CNT bit position.
+static constexpr uint16_t SLP_EN = 1 << 13;
+static uint16_t pm1a_cnt_port;
+static uint16_t pm1b_cnt_port;
+static uint16_t slp_typ_a;
+static uint16_t slp_typ_b;
+static bool s5_ready;
+
+// Linear-map a physical range (huge-page aligned) and return a virtual pointer
+// to it. Each huge page is mapped at most once - ACPI tables are tiny and
+// clustered, so this typically only maps a handful of pages overall.
+static void *map_phys(uint64_t pa, size_t len)
+{
+    static uint64_t mapped[16];
+    static unsigned nmapped;
+
+    uint64_t base = align_down(pa, mmu::huge_page_size);
+    uint64_t end = align_up(pa + len, mmu::huge_page_size);
+    for (uint64_t p = base; p < end; p += mmu::huge_page_size) {
+        bool already = false;
+        for (unsigned i = 0; i < nmapped; i++) {
+            if (mapped[i] == p) {
+                already = true;
+                break;
+            }
+        }
+        if (!already) {
+            mmu::linear_map(mmu::phys_to_virt(p), p, mmu::huge_page_size, "acpi");
+            if (nmapped < 16) {
+                mapped[nmapped++] = p;
+            }
+        }
+    }
+    return mmu::phys_to_virt(pa);
+}
+
+static bool checksum_ok(const void *p, size_t len)
+{
+    uint8_t sum = 0;
+    auto b = static_cast<const uint8_t *>(p);
+    for (size_t i = 0; i < len; i++) {
+        sum += b[i];
+    }
+    return sum == 0;
+}
+
+static const rsdp *scan_rsdp(uint64_t start, uint64_t end)
+{
+    for (uint64_t pa = start; pa < end; pa += 16) {
+        auto r = static_cast<const rsdp *>(map_phys(pa, sizeof(rsdp)));
+        if (!memcmp(r->signature, "RSD PTR ", 8) && checksum_ok(r, 20)) {
+            return r;
+        }
+    }
+    return nullptr;
+}
+
+static const rsdp *find_rsdp()
+{
+    // A PVH boot hands us the RSDP address directly.
+    if (pvh_rsdp_paddr) {
+        return static_cast<const rsdp *>(map_phys(pvh_rsdp_paddr, sizeof(rsdp)));
+    }
+
+    // Otherwise scan the two BIOS regions the spec allows the RSDP to live in:
+    // the first KB of the Extended BIOS Data Area, and the BIOS read-only area.
+    uint16_t ebda_seg = *static_cast<const uint16_t *>(map_phys(0x40e, sizeof(uint16_t)));
+    uint64_t ebda = static_cast<uint64_t>(ebda_seg) << 4;
+    if (ebda) {
+        if (auto r = scan_rsdp(ebda, ebda + 1024)) {
+            return r;
+        }
+    }
+    return scan_rsdp(0xe0000, 0x100000);
+}
+
+// Map a table given its physical address and remember its header. The first
+// mapping only covers the fixed header; once we know the real length we remap
+// to make sure the whole table is reachable.
+static void add_table(uint64_t pa)
+{
+    if (!pa || ntables >= 64) {
+        return;
+    }
+    auto hdr = static_cast<const table_header *>(map_phys(pa, sizeof(table_header)));
+    hdr = static_cast<const table_header *>(map_phys(pa, hdr->length));
+    tables[ntables++] = hdr;
+}
+
+const table_header *find_table(const char *signature)
+{
+    for (unsigned i = 0; i < ntables; i++) {
+        if (!memcmp(tables[i]->signature, signature, 4)) {
+            return tables[i];
+        }
+    }
+    return nullptr;
+}
+
+// Locate the FADT, grab its PM1 control ports and the DSDT, then scan the DSDT
+// bytecode for the predefined "\_S5_" object to extract the S5 sleep-type
+// values. This is enough to issue an ACPI soft-off without a full AML
+// interpreter. The scan recognizes the handful of byte sequences that compilers
+// emit for "Name (_S5, Package () { ... })".
+static void parse_s5()
+{
+    auto fadt = reinterpret_cast<const struct fadt *>(find_table("FACP"));
+    if (!fadt || !fadt->pm1a_control_block || !fadt->dsdt) {
+        return;
+    }
+
+    auto dsdt = static_cast<const table_header *>(
+            map_phys(fadt->dsdt, sizeof(table_header)));
+    dsdt = static_cast<const table_header *>(map_phys(fadt->dsdt, dsdt->length));
+
+    auto aml = reinterpret_cast<const uint8_t *>(dsdt);
+    uint32_t len = dsdt->length;
+    for (uint32_t i = sizeof(table_header); i + 6 < len; i++) {
+        if (memcmp(aml + i, "_S5_", 4)) {
+            continue;
+        }
+        // Must be introduced by a NameOp (0x08), possibly with a leading root
+        // prefix ('\'), and followed by a PackageOp (0x12).
+        bool name_op = aml[i - 1] == 0x08 ||
+                       (i >= 2 && aml[i - 2] == 0x08 && aml[i - 1] == '\\');
+        if (!name_op || aml[i + 4] != 0x12) {
+            continue;
+        }
+        const uint8_t *p = aml + i + 5;
+        p += (*p >> 6) + 1;   // skip the PkgLength encoding bytes
+        p++;                  // skip the element count
+        if (*p == 0x0a) {     // optional BytePrefix before SLP_TYPa
+            p++;
+        }
+        slp_typ_a = static_cast<uint16_t>(*p++) << 10;
+        if (*p == 0x0a) {     // optional BytePrefix before SLP_TYPb
+            p++;
+        }
+        slp_typ_b = static_cast<uint16_t>(*p) << 10;
+        pm1a_cnt_port = fadt->pm1a_control_block;
+        pm1b_cnt_port = fadt->pm1b_control_block;
+        s5_ready = true;
+        return;
+    }
+}
+
+bool power_off()
+{
+    if (!s5_ready) {
+        return false;
+    }
+    processor::outw(slp_typ_a | SLP_EN, pm1a_cnt_port);
+    if (pm1b_cnt_port) {
+        processor::outw(slp_typ_b | SLP_EN, pm1b_cnt_port);
+    }
+    return true;
 }
 
 void early_init()
 {
-    if (!acpi::pvh_rsdp_paddr) {
-        ACPI_SIZE rsdp;
-        auto st = AcpiFindRootPointer(&rsdp);
-        if (ACPI_FAILURE(st)) {
-            acpi_w("Warning: Failed to find ACPI root pointer!\n");
-            return;
-        }
-    }
-
-    ACPI_STATUS status;
-
-    status = AcpiInitializeTables(TableArray, ACPI_MAX_INIT_TABLES, TRUE);
-    if (ACPI_FAILURE(status)) {
-        acpi_e("AcpiInitializeTables failed: %s\n", AcpiFormatException(status));
+    auto r = find_rsdp();
+    if (!r) {
+        acpi_w("Warning: Failed to find ACPI root pointer!\n");
         return;
     }
 
-    // Initialize ACPICA subsystem
-    status = AcpiInitializeSubsystem();
-    if (ACPI_FAILURE(status)) {
-        acpi_e("AcpiInitializeSubsystem failed: %s\n", AcpiFormatException(status));
-        return;
+    // Prefer the 64-bit XSDT (ACPI 2.0+) and fall back to the RSDT.
+    bool use_xsdt = r->revision >= 2 && r->xsdt_address;
+    uint64_t sdt_pa = use_xsdt ? r->xsdt_address : r->rsdt_address;
+    size_t entry_size = use_xsdt ? sizeof(uint64_t) : sizeof(uint32_t);
+
+    auto sdt = static_cast<const table_header *>(map_phys(sdt_pa, sizeof(table_header)));
+    uint32_t sdt_length = sdt->length;
+    sdt = static_cast<const table_header *>(map_phys(sdt_pa, sdt_length));
+
+    // The entry array follows the header. It is only 4-byte aligned, so copy
+    // each (possibly 8-byte) entry out with memcpy to avoid unaligned access.
+    auto entries = reinterpret_cast<const char *>(sdt) + sizeof(table_header);
+    unsigned count = (sdt_length - sizeof(table_header)) / entry_size;
+    for (unsigned i = 0; i < count; i++) {
+        uint64_t table_pa = 0;
+        memcpy(&table_pa, entries + i * entry_size, entry_size);
+        add_table(table_pa);
     }
 
-    // Copy the root table list to dynamic memory
-    status = AcpiReallocateRootTable();
-    if (ACPI_FAILURE(status)) {
-        acpi_e("AcpiReallocateRootTable failed: %s\n", AcpiFormatException(status));
-        return;
-    }
+    enabled = ntables > 0;
 
-    // Create the ACPI namespace from ACPI tables
-    status = AcpiLoadTables();
-    if (ACPI_FAILURE(status)) {
-        acpi_e("AcpiLoadTables failed: %s\n", AcpiFormatException(status));
-        return;
-    }
-
-    enabled = true;
-}
-
-UINT32 acpi_poweroff(void *unused)
-{
-    osv::shutdown();
-    return 1;
-}
-
-// must be called after the scheduler, apic and smp where started to run
-// The following function comes from the documentation example page 262
-void init()
-{
-    if (!enabled) {
-        return;
-    }
-
-    ACPI_STATUS status;
-
-
-    // TODO: Installation of Local handlers
-
-    // Initialize the ACPI hardware
-    status = AcpiEnableSubsystem(ACPI_FULL_INITIALIZATION);
-    if (ACPI_FAILURE(status)) {
-        acpi_e("AcpiEnableSubsystem failed: %s\n", AcpiFormatException(status));
-        return;
-    }
-
-    // Complete the ACPI namespace object initialization
-    status = AcpiInitializeObjects(ACPI_FULL_INITIALIZATION);
-    if (ACPI_FAILURE(status)) {
-        acpi_e("AcpiInitializeObjects failed: %s\n", AcpiFormatException(status));
-    }
-
-    AcpiInstallFixedEventHandler(ACPI_EVENT_POWER_BUTTON, acpi_poweroff, nullptr);
-    AcpiEnableEvent(ACPI_EVENT_POWER_BUTTON, 0);
+    parse_s5();
 }
 
 }

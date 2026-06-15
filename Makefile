@@ -118,13 +118,9 @@ endif
 # default "make" depends on the following directories:
 #   musl/ -  for some of the header files (symbolic links in include/api) and
 #            some of the source files ($(musl) below).
-#   external/x64/acpica - for the ACPICA library (see $(acpi) below).
 # Additional submodules are need when certain make parameters are used.
 ifeq (,$(wildcard musl/include))
     $(error Missing musl/ directory. Please run "git submodule update --init --recursive")
-endif
-ifeq (,$(wildcard external/x64/acpica/source))
-    $(error Missing external/x64/acpica/ directory. Please run "git submodule update --init --recursive")
 endif
 
 # This makefile wraps all commands with the $(quiet) or $(very-quiet) macros
@@ -252,10 +248,6 @@ else
   standard-includes-flag =
 endif
 
-ifeq ($(arch),x64)
-INCLUDES += -isystem external/$(arch)/acpica/source/include
-endif
-
 ifeq ($(arch),aarch64)
 libfdt_base = external/$(arch)/libfdt
 INCLUDES += -isystem $(libfdt_base)
@@ -332,7 +324,7 @@ COMMON = $(autodepend) -g -Wall -Wno-pointer-arith $(CFLAGS_WERROR) -Wformat=0 -
 	$(kernel-defines) \
 	-fno-omit-frame-pointer $(compiler-specific) \
 	-include compiler/include/intrinsics.hh \
-	$(conf_compiler_cflags) $(conf_compiler_opt) $(acpi-defines) $(tracing-flags) $(gcc-sysroot) \
+	$(conf_compiler_cflags) $(conf_compiler_opt) $(tracing-flags) $(gcc-sysroot) \
 	-D__OSV__ -D__XEN_INTERFACE_VERSION__="0x00030207" -DARCH_STRING=$(ARCH_STR) $(EXTRA_FLAGS)
 COMMON += $(standard-includes-flag)
 
@@ -457,13 +449,6 @@ $(out)/vmlinuz.bin: $(out)/vmlinuz-boot.bin $(out)/loader-stripped.elf
 	$(call quiet, dd if=$(out)/vmlinuz-boot.bin of=$@ > /dev/null 2>&1, DD vmlinuz.bin vmlinuz-boot.bin)
 	$(call quiet, dd if=$(out)/loader-stripped.elf of=$@ conv=notrunc seek=4 > /dev/null 2>&1, \
 		DD vmlinuz.bin loader-stripped.elf)
-
-acpi-defines = -DACPI_MACHINE_WIDTH=64 -DACPI_USE_LOCAL_CACHE
-
-acpi-source := $(shell find external/$(arch)/acpica/source/components -type f -name '*.c')
-acpi = $(patsubst %.c, %.o, $(acpi-source))
-
-$(acpi:%=$(out)/%): CFLAGS += -fno-strict-aliasing -Wno-stringop-truncation
 
 kernel_vm_shift := $(shell printf "0x%X" $(shell expr $$(( $(kernel_vm_base) - $(kernel_base) )) ))
 
@@ -902,9 +887,6 @@ endif
 ifeq ($(conf_drivers_hpet),1)
 drivers += drivers/hpet.o
 endif
-ifeq ($(conf_drivers_pvpanic),1)
-drivers += drivers/pvpanic.o
-endif
 drivers += drivers/rtc.o
 ifeq ($(conf_drivers_ahci),1)
 drivers += drivers/ahci.o
@@ -1032,9 +1014,6 @@ objects += arch/x64/vmlinux.o
 objects += arch/x64/vmlinux-boot64.o
 objects += arch/x64/pvh-boot.o
 objects += arch/x64/syscall.o
-ifeq ($(conf_drivers_acpi),1)
-objects += $(acpi)
-endif
 endif # x64
 
 ifeq ($(conf_drivers_xen),1)

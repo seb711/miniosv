@@ -277,9 +277,6 @@ void arch_init_premain()
 }
 
 #include "drivers/driver.hh"
-#if CONF_drivers_acpi
-#include "drivers/pvpanic.hh"
-#endif
 #if CONF_drivers_virtio
 #include "drivers/virtio.hh"
 #endif
@@ -329,12 +326,6 @@ void arch_init_premain()
 extern bool opt_pci_disabled;
 void arch_init_drivers()
 {
-#if CONF_drivers_acpi
-    // initialize panic drivers
-    panic::pvpanic::probe_and_setup();
-    boot_time.event("pvpanic done");
-#endif
-
 #if CONF_drivers_pci
     if (!opt_pci_disabled) {
         // Enumerate PCI devices
