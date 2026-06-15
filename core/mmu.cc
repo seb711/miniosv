@@ -17,12 +17,9 @@
 #include <osv/ilog2.hh>
 #include <osv/prio.hh>
 #include <safe-ptr.hh>
-#include "fs/vfs/vfs.h"
 #include <osv/error.h>
 #include <osv/trace.hh>
 #include <stack>
-#include <fs/fs.hh>
-#include <osv/file.h>
 #include "dump.hh"
 #include <osv/rcu.hh>
 #include <osv/rwlock.h>

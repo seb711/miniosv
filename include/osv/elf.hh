@@ -8,7 +8,6 @@
 #ifndef ELF_HH
 #define ELF_HH
 
-#include "fs/fs.hh"
 #include <vector>
 #include <map>
 #include <stack>

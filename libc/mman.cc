@@ -11,8 +11,6 @@
 #include <osv/mempool.hh>
 #include <osv/debug.hh>
 #include "osv/trace.hh"
-#include "osv/dentry.h"
-#include "osv/mount.h"
 #include <osv/stubbing.hh>
 #include "libc/libc.hh"
 #include <safe-ptr.hh>
