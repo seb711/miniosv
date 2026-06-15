@@ -4,7 +4,7 @@
  */
 #define CONF_tracepoints 1
 #define CONF_compiler_cflags " -msse2"
-#define CONF_networking_dhcp 1
+#define CONF_networking_dhcp 0
 #define CONF_core_c_wrappers 1
 #define CONF_memory_optimize 1
 #define CONF_fs_max_file_descriptors 0x4000
@@ -25,7 +25,7 @@
 #define CONF_threads_default_pthread_stack_size 0x100000
 #define CONF_preempt 1
 #define CONF_fs_procfs 1
-#define CONF_networking_stack 1
+#define CONF_networking_stack 0
 #define CONF_core_dynamic_percpu_size 65536
 #define CONF_compiler_cxx_level "gnu++14"
 #define CONF_core_commands_runscript 1
