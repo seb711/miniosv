@@ -191,7 +191,7 @@ m_getm2_zcopy(struct mbuf *m, struct uio *uio, int len, int how, short type,
 
 			/* but if pages are physically contiguous, don't split */
 			while(1) {
-				auto next_vbase = vbase + mmu::page_size;
+				auto next_vbase = (char*)vbase + mmu::page_size;
 				auto next_pbase = mmu::virt_to_phys(next_vbase);
 				if (next_pbase == pbase + mmu::page_size) {
 					cnt += mmu::page_size;

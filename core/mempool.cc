@@ -291,8 +291,8 @@ void pool::add_page()
         header->owner = this;
         header->nalloc = 0;
         header->local_free = nullptr;
-        for (auto p = page + page_size - _size; p >= header + 1; p -= _size) {
-            auto obj = static_cast<free_object*>(p);
+        for (auto p = static_cast<char*>(page) + page_size - _size; p >= reinterpret_cast<char*>(header + 1); p -= _size) {
+            auto obj = reinterpret_cast<free_object*>(p);
             obj->next = header->local_free;
             header->local_free = obj;
         }
@@ -405,8 +405,8 @@ struct mark_smp_allocator_intialized {
             for (auto j = 0U; j < ncpus; j++) {
                 static_assert(!(sizeof(garbage_sink) %
                         alignof(garbage_sink)), "garbage_sink align");
-                auto p = pcpu_free_list[i][j] = static_cast<garbage_sink *>(
-                        buf + sizeof(garbage_sink) * (i * ncpus + j));
+                auto p = pcpu_free_list[i][j] = reinterpret_cast<garbage_sink *>(
+                        static_cast<char*>(buf) + sizeof(garbage_sink) * (i * ncpus + j));
                 new (p) garbage_sink;
             }
         }
@@ -639,7 +639,7 @@ private:
     template<bool UseBitmap = true>
     void insert(page_range& pr) {
         auto addr = static_cast<void*>(&pr);
-        auto pr_end = static_cast<page_range**>(addr + pr.size - sizeof(page_range**));
+        auto pr_end = reinterpret_cast<page_range**>(static_cast<char*>(addr) + pr.size - sizeof(page_range**));
         *pr_end = &pr;
         auto order = ilog2(pr.size / page_size);
         if (order >= max_order) {
@@ -785,7 +785,7 @@ page_range* page_range_allocator::alloc(size_t size, bool contiguous)
 
     auto& pr = *range;
     if (pr.size > size) {
-        auto& np = *new (static_cast<void*>(&pr) + size)
+        auto& np = *new (reinterpret_cast<char*>(&pr) + size)
                         page_range(pr.size - size);
         insert<UseBitmap>(np);
         pr.size = size;
@@ -837,7 +837,7 @@ void page_range_allocator::free(page_range* pr)
     }
     auto next_idx = get_bitmap_idx(*pr) + pr->size / page_size;
     if (next_idx < _bitmap.size() && _bitmap[next_idx]) {
-        auto pr2 = static_cast<page_range*>(static_cast<void*>(pr) + pr->size);
+        auto pr2 = reinterpret_cast<page_range*>(reinterpret_cast<char*>(pr) + pr->size);
         remove(*pr2);
         pr->size += pr2->size;
     }
@@ -901,12 +901,12 @@ static void* mapped_malloc_large(size_t size, size_t offset)
     void* obj = mmu::map_anon(nullptr, size, mmu::mmap_populate, mmu::perm_read | mmu::perm_write);
     size_t* ret_header = static_cast<size_t*>(obj);
     *ret_header = size;
-    return obj + offset;
+    return static_cast<char*>(obj) + offset;
 }
 
 static void mapped_free_large(void *object)
 {
-    object = align_down(object - 1, mmu::page_size);
+    object = align_down(static_cast<char*>(object) - 1, mmu::page_size);
     size_t* ret_header = static_cast<size_t*>(object);
     mmu::munmap(object, *ret_header);
 }
@@ -942,8 +942,7 @@ static void* malloc_large(size_t size, size_t alignment, bool block = true, bool
             }
             if (ret_header) {
                 on_alloc(size);
-                void* obj = ret_header;
-                obj += offset;
+                void* obj = reinterpret_cast<char*>(ret_header) + offset;
                 trace_memory_malloc_large(obj, requested_size, size, alignment);
                 return obj;
             } else if (!contiguous) {
@@ -1180,14 +1179,14 @@ static void free_page_range(void *addr, size_t size)
 
 static void free_large(void* obj)
 {
-    obj = align_down(obj - 1, page_size);
+    obj = align_down(static_cast<char*>(obj) - 1, page_size);
     free_page_range(static_cast<page_range*>(obj));
 }
 
 static size_t large_object_offset(void *&obj)
 {
     void *original_obj = obj;
-    obj = align_down(obj - 1, page_size);
+    obj = align_down(static_cast<char*>(obj) - 1, page_size);
     return reinterpret_cast<uint64_t>(original_obj) - reinterpret_cast<uint64_t>(obj);
 }
 
@@ -1296,7 +1295,7 @@ public:
         , _watermark_lo(_max * 1 / 4)
         , _watermark_hi(_max * 3 / 4)
         , _stack(_max)
-        , _fill_thread(sched::thread::make([=] { fill_thread(); }, sched::thread::attr().name("page_pool_l2")))
+        , _fill_thread(sched::thread::make([this] { fill_thread(); }, sched::thread::attr().name("page_pool_l2")))
     {
        _fill_thread->start();
     }
@@ -1522,7 +1521,7 @@ void l2::fill_thread()
 
     sched::thread::wait_until([] {return smp_allocator;});
     for (;;) {
-        sched::thread::wait_for([=] {
+        sched::thread::wait_for([this] {
                 auto nr = get_nr();
                 return nr < _watermark_lo || nr > _watermark_hi;
         });
@@ -1632,7 +1631,7 @@ static void early_free_page(void* v)
 mutex early_alloc_lock;
 // early_object_pages holds a pointer to the beginning of the current page
 // intended to be used for next early object allocation
-static void* early_object_page = nullptr;
+static char* early_object_page = nullptr;
 // early_alloc_next_offset points to the 0-relative address of free
 // memory within a page pointed by early_object_page. Normally it is an
 // offset of the first byte right after last byte of the previously
@@ -1650,7 +1649,7 @@ static early_page_header* to_early_page_header(void* object)
 }
 
 static void setup_early_alloc_page() {
-    early_object_page = early_alloc_page();
+    early_object_page = static_cast<char*>(early_alloc_page());
     early_page_header *page_header = to_early_page_header(early_object_page);
     // Set the owner field to null so that functions that free objects
     // or compute object size can differentiate between post-SMP malloc pool
@@ -1715,7 +1714,7 @@ static void early_free_object(void *object)
     WITH_LOCK(early_alloc_lock) {
         early_page_header *page_header = to_early_page_header(object);
         assert(!page_header->owner);
-        unsigned short *size_addr = reinterpret_cast<unsigned short*>(object - sizeof(unsigned short));
+        unsigned short *size_addr = reinterpret_cast<unsigned short*>(static_cast<char*>(object) - sizeof(unsigned short));
         unsigned short size = *size_addr;
         if (!size) {
             return;
@@ -1725,15 +1724,15 @@ static void early_free_object(void *object)
         page_header->allocations_count--;
         if (page_header->allocations_count <= 0) { // Any early page
             early_free_page(page_header);
-            if (early_object_page == page_header) {
+            if (early_object_page == reinterpret_cast<char*>(page_header)) {
                 early_object_page = nullptr;
             }
         }
-        else if(early_object_page == page_header) { // Current early page
+        else if(early_object_page == reinterpret_cast<char*>(page_header)) { // Current early page
             // Assuming we are freeing the object that was the last one allocated,
             // simply subtract its size from the early_alloc_next_offset to arrive at the previous
             // value of early_alloc_next_offset it was when allocating last object
-            void *last_obj = static_cast<void *>(page_header) + (early_alloc_next_offset - size);
+            void *last_obj = reinterpret_cast<char*>(page_header) + (early_alloc_next_offset - size);
             // Check if we are freeing last allocated object (free followed by malloc)
             // and deallocate if so by moving the early_alloc_next_offset to the previous
             // position
@@ -1746,7 +1745,7 @@ static void early_free_object(void *object)
 
 static size_t early_object_size(void* v)
 {
-    return *reinterpret_cast<unsigned short*>(v - sizeof(unsigned short));
+    return *reinterpret_cast<unsigned short*>(static_cast<char*>(v) - sizeof(unsigned short));
 }
 
 static void* untracked_alloc_page()
@@ -1829,7 +1828,7 @@ void free_initial_memory_range(void* addr, size_t size)
     if (delta > size) {
         return;
     }
-    addr += delta;
+    addr = static_cast<char*>(addr) + delta;
     size -= delta;
     size = align_down(size, page_size);
     if (!size) {
@@ -2066,7 +2065,7 @@ void free(void* v)
     recursed = true;
     auto unrecurse = defer([&] { recursed = false; });
     WITH_LOCK(memory::reclaimer_lock) {
-        auto h = static_cast<header*>(v - pad_before);
+        auto h = reinterpret_cast<header*>(static_cast<char*>(v) - pad_before);
         auto size = h->size;
         auto asize = align_up(size, mmu::page_size);
         char* vv = reinterpret_cast<char*>(v);
@@ -2080,7 +2079,7 @@ void free(void* v)
 
 static inline size_t object_size(void* v)
 {
-    return static_cast<header*>(v - pad_before)->size;
+    return reinterpret_cast<header*>(static_cast<char*>(v) - pad_before)->size;
 }
 
 }

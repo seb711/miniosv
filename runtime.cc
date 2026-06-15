@@ -87,7 +87,7 @@ static void print_backtrace(void)
     /* Start with i=1 to skip abort(const char *)  */
     for (int i = 1; i < len; i++) {
         char name[1024];
-        void *addr = addrs[i] - INSTR_SIZE_MIN;
+        void *addr = (char*)addrs[i] - INSTR_SIZE_MIN;
         osv::lookup_name_demangled(addr, name, sizeof(name));
         if (strncmp(name, "abort+", 6) == 0) {
             // Skip abort() (which called abort(const char*) already skipped
@@ -520,7 +520,7 @@ static int prio_find_thread(sched::thread **th, int which, int id)
 //    prio * prio_k = ln(osv_prio)
 //    prio = ln(osv_prio) / prio_k
 //
-static constexpr float prio_k = log(86) / 20;
+static const float prio_k = log(86) / 20;
 
 OSV_LIBC_API
 int getpriority(int which, int id)

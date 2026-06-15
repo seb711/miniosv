@@ -28,9 +28,9 @@ public:
     virtual u64 processor_to_nano(u64 ticks) override __attribute__((no_instrument_function));
     static bool probe();
 protected:
-    virtual u64 wall_clock_boot();
-    virtual u64 system_time();
-    virtual void init_on_cpu();
+    virtual u64 wall_clock_boot() override;
+    virtual u64 system_time() override;
+    virtual void init_on_cpu() override;
     void sync_wall_clock();
 private:
     static bool _new_kvmclock_msrs;

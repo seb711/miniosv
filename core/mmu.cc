@@ -37,7 +37,9 @@
 
 // FIXME: Without this pragma, we get a lot of warnings that I don't know
 // how to explain or fix. For now, let's just ignore them :-(
+#ifndef __clang__
 #pragma GCC diagnostic ignored "-Wstringop-overflow"
+#endif
 
 extern void* elf_start;
 extern size_t elf_size;
@@ -147,12 +149,12 @@ extern "C" u64 kernel_vm_shift;
 void* phys_to_virt(phys pa)
 {
     void* phys_addr = reinterpret_cast<void*>(pa);
-    if ((phys_addr >= elf_phys_start) && (phys_addr < elf_phys_start + elf_size)) {
+    if ((phys_addr >= elf_phys_start) && (phys_addr < static_cast<char*>(elf_phys_start) + elf_size)) {
 #ifdef __x86_64__
-        return (void*)(phys_addr + OSV_KERNEL_VM_SHIFT);
+        return static_cast<char*>(phys_addr) + OSV_KERNEL_VM_SHIFT;
 #endif
 #ifdef __aarch64__
-        return (void*)(phys_addr + kernel_vm_shift);
+        return static_cast<char*>(phys_addr) + kernel_vm_shift;
 #endif
     }
 
@@ -163,12 +165,12 @@ phys virt_to_phys_pt(void* virt);
 
 phys virt_to_phys(void *virt)
 {
-    if ((virt >= elf_start) && (virt < elf_start + elf_size)) {
+    if ((virt >= elf_start) && (virt < static_cast<char*>(elf_start) + elf_size)) {
 #ifdef __x86_64__
-        return reinterpret_cast<phys>((void*)(virt - OSV_KERNEL_VM_SHIFT));
+        return reinterpret_cast<phys>(static_cast<char*>(virt) - OSV_KERNEL_VM_SHIFT);
 #endif
 #ifdef __aarch64__
-        return reinterpret_cast<phys>((void*)(virt - kernel_vm_shift));
+        return reinterpret_cast<phys>(static_cast<char*>(virt) - kernel_vm_shift);
 #endif
     }
 
@@ -299,7 +301,7 @@ void clamp(uintptr_t& vstart1, uintptr_t& vend1,
     vend1 = std::min(vend1, max);
 }
 
-constexpr unsigned pt_index(uintptr_t virt, unsigned level)
+inline unsigned pt_index(uintptr_t virt, unsigned level)
 {
     return pt_index(reinterpret_cast<void*>(virt), level);
 }
@@ -1362,7 +1364,7 @@ void* map_file(const void* addr, size_t size, unsigned flags, unsigned perm,
 
 bool is_linear_mapped(const void *addr, size_t size)
 {
-    if ((addr >= elf_start) && (addr + size <= elf_start + elf_size)) {
+    if ((addr >= elf_start) && (static_cast<const char*>(addr) + size <= static_cast<char*>(elf_start) + elf_size)) {
         return true;
     }
     return addr >= phys_mem;

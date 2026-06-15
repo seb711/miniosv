@@ -154,7 +154,7 @@ int ide_drive::make_request(struct bio* bio)
 
             start(bio->bio_cmd, sector, 0, base, count, base == bio->bio_data);
 
-            base += size;
+            base = (char*)base + size;
             sector++;
             offset = 0;
         }

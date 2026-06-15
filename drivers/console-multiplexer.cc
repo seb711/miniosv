@@ -31,9 +31,9 @@ void console_multiplexer::start()
     _ldisc = new LineDiscipline(_tio);
     _ldisc->set_fp(single_fp);
     for (auto driver : _drivers) {
-        driver->start([=] { _ldisc->read_poll(driver); });
+        driver->start([=, this] { _ldisc->read_poll(driver); });
     }
-    _drivers_writer =  [=](const char * str, size_t len) { this->drivers_write(str, len); };
+    _drivers_writer =  [=, this](const char * str, size_t len) { this->drivers_write(str, len); };
     _started = true;
 }
 

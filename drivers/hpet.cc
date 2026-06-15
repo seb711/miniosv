@@ -25,7 +25,7 @@ public:
     hpetclock(mmioaddr_t hpet_mmio_address);
     virtual s64 boot_time() override __attribute__((no_instrument_function));
 protected:
-    mmioaddr_t _addr;
+    volatile char* _addr;
     uint64_t _wall;
     uint64_t _period;
 };
@@ -102,7 +102,7 @@ protected:
 
 hpetclock::hpetclock(mmioaddr_t hpet_mmio_address)
 {
-    _addr = hpet_mmio_address;
+    _addr = static_cast<volatile char*>(hpet_mmio_address);
     // If we ever need another rtc user, it should be global. But
     // we should really, really avoid it. So let it local.
     auto r = new rtc();
@@ -168,7 +168,7 @@ void __attribute__((constructor(init_prio::hpet))) hpet_init()
         // construct relevant hpet clock instance
         mmioaddr_t hpet_mmio_address = mmio_map(hpet_address.address, 4096, "hpet");
 
-        auto cap = mmio_getl(hpet_mmio_address + HPET_CAP);
+        auto cap = mmio_getl(mmio_a(hpet_mmio_address, HPET_CAP));
         if (cap & HPET_CAP_COUNT_SIZE) {
             clock::register_clock(new hpet_64bit_clock(hpet_mmio_address));
         }

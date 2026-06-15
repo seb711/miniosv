@@ -14,6 +14,11 @@ typedef volatile void* mmioaddr_t;
 
 const mmioaddr_t mmio_nullptr = 0;
 
+// Helper for pointer arithmetic on mmioaddr_t (void* arithmetic is a Clang error in C++)
+static inline mmioaddr_t mmio_a(mmioaddr_t base, size_t offset) {
+    return static_cast<volatile char*>(base) + offset;
+}
+
 // Functions used to access mmio regions
 void mmio_setb(mmioaddr_t addr, u8 val);
 void mmio_setw(mmioaddr_t addr, u16 val);

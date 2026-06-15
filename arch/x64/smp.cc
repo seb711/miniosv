@@ -132,11 +132,11 @@ static mp_table *find_mp_table(unsigned long base, long length)
 {
     // First find MP floating pointer structure in the physical memory
     // region specified by the base and length
-    void *addr = mmu::phys_to_virt(base);
+    char *addr = static_cast<char*>(mmu::phys_to_virt(base));
     while (length > 0) {
-       if (*static_cast<uint32_t *>(addr) == MPF_IDENTIFIER) {
+       if (*reinterpret_cast<uint32_t *>(addr) == MPF_IDENTIFIER) {
            // We found the MP floating pointer structure
-           auto mpf_struct = static_cast<mpf_structure*>(addr);
+           auto mpf_struct = reinterpret_cast<mpf_structure*>(addr);
            // Now let us dereference physical address of MP table itself,
            // check signature and return its virtual address
            void *mp_table_addr = mmu::phys_to_virt(mpf_struct->configuration_table);
@@ -169,12 +169,12 @@ void parse_mp_table()
 
     unsigned nr_cpus = 0;
     if (table) {
-        void *mp_entries = static_cast<void*>(table) + sizeof(mp_table);
+        char *mp_entries = reinterpret_cast<char*>(table) + sizeof(mp_table);
         int entries_size = table->length - sizeof(mp_table);
 
         while (entries_size > 0) {
             int entry_size = NON_PROCESSOR_ENTRY_SIZE;
-            auto proc_desc = static_cast<mp_processor*>(mp_entries);
+            auto proc_desc = reinterpret_cast<mp_processor*>(mp_entries);
             if (proc_desc->type == 0) {
                 register_cpu(nr_cpus++, proc_desc->local_apic_id);
                 entry_size = sizeof(mp_processor);

@@ -20,7 +20,7 @@ class event_fd final : public special_file {
             _count(initval), _is_semaphore(is_semaphore)
         {}
 
-        int close() { return 0; }
+        virtual int close() override { return 0; }
 
         virtual int read(struct uio *uio, int flags) override;
         virtual int write(struct uio *uio, int flags) override;
@@ -185,7 +185,7 @@ int eventfd(unsigned int initval, int flags)
         return libc_error(EINVAL);
     }
 
-    if (initval >= ULLONG_MAX) {
+    if ((uint64_t)initval >= ULLONG_MAX) {
         return libc_error(EINVAL);
     }
 

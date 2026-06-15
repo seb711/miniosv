@@ -73,7 +73,7 @@ public:
         std::map<u32, nvme_ns_t*>& ns
     );
 
-    ~queue_pair();
+    virtual ~queue_pair();
 
     u64 sq_phys_addr() { return (u64) mmu::virt_to_phys((void*) _sq._addr); }
     u64 cq_phys_addr() { return (u64) mmu::virt_to_phys((void*) _cq._addr); }

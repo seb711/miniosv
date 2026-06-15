@@ -946,7 +946,7 @@ thread::stack_info::stack_info()
 thread::stack_info::stack_info(void* _begin, size_t _size)
     : begin(_begin), size(_size), deleter(nullptr)
 {
-    auto end = align_down(begin + size, 16);
+    auto end = align_down(static_cast<char*>(begin) + size, 16);
     size = static_cast<char*>(end) - static_cast<char*>(begin);
 }
 
@@ -959,7 +959,7 @@ void thread::stack_info::default_deleter(thread::stack_info si)
 // numeric (4-byte) threads ids to the thread object, to support Linux
 // functions which take numeric thread ids.
 static mutex thread_map_mutex;
-using id_type = std::result_of<decltype(&thread::id)(thread)>::type;
+using id_type = std::invoke_result_t<decltype(&thread::id), thread>;
 std::unordered_map<id_type, thread *> thread_map
     __attribute__((init_priority((int)init_prio::threadlist)));
 
@@ -1848,7 +1848,7 @@ bool operator<(const timer_base& t1, const timer_base& t2)
 }
 
 thread::reaper::reaper()
-    : _mtx{}, _zombies{}, _thread(thread::make_unique([=] { reap(); }))
+    : _mtx{}, _zombies{}, _thread(thread::make_unique([this] { reap(); }))
 {
     _thread->start();
 }
@@ -1857,7 +1857,7 @@ void thread::reaper::reap()
 {
     while (true) {
         WITH_LOCK(_mtx) {
-            wait_until(_mtx, [=] { return !_zombies.empty(); });
+            wait_until(_mtx, [this] { return !_zombies.empty(); });
             while (!_zombies.empty()) {
                 auto z = _zombies.front();
                 _zombies.pop_front();
@@ -2074,7 +2074,7 @@ thread_runtime::time_until(runtime_t target_local_runtime) const
     }
     auto ret = taulog(runtime_t(1) +
             (target_local_runtime - _Rtt) / _priority / cpu::current()->c);
-    if (ret > thread_runtime::duration::max().count())
+    if (ret > static_cast<runtime_t>(thread_runtime::duration::max().count()))
         return thread_runtime::duration(-1);
     return thread_runtime::duration((thread_runtime::duration::rep) ret);
 }

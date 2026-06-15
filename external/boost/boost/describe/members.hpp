@@ -5,6 +5,11 @@
 // Distributed under the Boost Software License, Version 1.0.
 // https://www.boost.org/LICENSE_1_0.txt
 
+// OSv defines 'hidden' as a GCC visibility macro that conflicts with the
+// local variable of the same name used below. Suppress it for this file.
+#pragma push_macro("hidden")
+#undef hidden
+
 #include <boost/describe/modifiers.hpp>
 #include <boost/describe/bases.hpp>
 #include <boost/describe/detail/void_t.hpp>
@@ -157,5 +162,7 @@ template<class T> using has_describe_members = detail::has_describe_members<T>;
 } // namespace boost
 
 #endif // !defined(BOOST_DESCRIBE_CXX11)
+
+#pragma pop_macro("hidden")
 
 #endif // #ifndef BOOST_DESCRIBE_DATA_MEMBERS_HPP_INCLUDED

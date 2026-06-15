@@ -107,7 +107,7 @@ void LineDiscipline::read_poll(console_driver *driver)
             // available to the reader after a newline (until then, the
             // user can edit it with backspace, etc.).
             if (c == '\n') {
-                if (_tio->c_lflag && ECHO)
+                if (_tio->c_lflag & ECHO)
                     echo(driver, &c, 1);
                 _line_buffer.push_back('\n');
                 while (!_line_buffer.empty()) {
@@ -126,9 +126,9 @@ void LineDiscipline::read_poll(console_driver *driver)
                 }
                 char e = _line_buffer.back();
                 _line_buffer.pop_back();
-                if (_tio->c_lflag && ECHO) {
+                if (_tio->c_lflag & ECHO) {
                     static const char eraser[] = {'\b',' ','\b','\b',' ','\b'};
-                    if (_tio->c_lflag && ECHOE) {
+                    if (_tio->c_lflag & ECHOE) {
                         if (isctrl(e)) { // Erase the two characters ^X
                             echo(driver, eraser, 6);
                         } else {

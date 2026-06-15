@@ -35,7 +35,7 @@ namespace osv {
 	{
 		WITH_LOCK(osv::dns_lock) {
 			osv::nameservers = nameservers;
-			osv::search_domains = search_domains;
+			osv::search_domains = domains;
 		}
 	}
 

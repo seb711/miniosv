@@ -10,7 +10,7 @@ __thread int var_lib_tls;
 extern "C"
 void external_library(int N)
 {
-    for (register int i = 0; i < N; i++) {
+    for (int i = 0; i < N; i++) {
         // To force gcc to not optimize this loop away
         asm volatile("" : : : "memory");
         ++var_lib_tls;

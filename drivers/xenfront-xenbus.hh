@@ -35,7 +35,7 @@ namespace xenfront {
         static xenbus *from_device(struct device *dev) { return bsd_to_dev<xenbus>(dev); }
         struct device _bsd_dev;
     private:
-        static struct xenbus *_instance;
+        static class xenbus *_instance;
         void wait_for_devices();
         struct device _xenstore_device;
 

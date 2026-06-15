@@ -10,7 +10,7 @@ class mtab_file final : public special_file {
     public:
         mtab_file() : special_file(FREAD, DTYPE_UNSPEC) {}
 
-        int close() { return 0; }
+        virtual int close() override { return 0; }
 
         virtual int read(struct uio *uio, int flags) override;
 };

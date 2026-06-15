@@ -67,10 +67,10 @@ struct rofs_cache_key_hasher {
 // This structure holds block_count (typically CACHE_SEGMENT_SIZE_IN_BLOCKS) of 512 blocks
 // of file data starting at starting_block * 512 byte offset relative to the beginning
 // of the file.
-class file_cache_segment {
+struct file_cache_segment {
 private:
     struct file_cache *cache; // Parent file cache
-    void *data;               // Copy of data on disk
+    char *data;               // Copy of data on disk
     uint64_t starting_block;  // This is relative to the 512-block of the inode itself
     uint64_t block_count;     // Length of data in 512 blocks
     bool data_ready;          // Has data been fully read from disk?
@@ -85,9 +85,9 @@ public:
         // Only allocate contiguous page-aligned memory if size greater or equal a page
         // to make sure page-cache mapping works properly
         if (size >= mmu::page_size) {
-            this->data = memory::alloc_phys_contiguous_aligned(size, mmu::page_size);
+            this->data = static_cast<char*>(memory::alloc_phys_contiguous_aligned(size, mmu::page_size));
         } else {
-            this->data = malloc(size);
+            this->data = static_cast<char*>(malloc(size));
         }
 #if defined(ROFS_DIAGNOSTICS_ENABLED)
         rofs_block_allocated += block_count;
@@ -121,7 +121,7 @@ public:
         print("[rofs] [%d] -> file_cache_segment::read() i-node: %d, starting block %d, reading [%d] bytes at segment offset [%d]\n",
               sched::thread::current()->id(), cache->inode->inode_no, starting_block, bytes_to_read,
               offset_in_segment);
-        return uiomove(data + offset_in_segment, bytes_to_read, uio);
+        return uiomove(static_cast<void*>(data + offset_in_segment), bytes_to_read, uio);
     }
 
     //

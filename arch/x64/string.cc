@@ -179,7 +179,7 @@ __attribute__((optimize("unroll-loops"), optimize("omit-frame-pointer")))
 void do_sse_memcpy(void* dest, const void* src)
 {
     do_sse_memcpy_body<N/16, loader, storer>(dest, src);
-    do_sse_memcpy_tail<N % 16, loader, storer>(dest + N/16 * 256, src + N/16 * 256);
+    do_sse_memcpy_tail<N % 16, loader, storer>(static_cast<char*>(dest) + N/16 * 256, static_cast<const char*>(src) + N/16 * 256);
 }
 
 struct load_aligned {
@@ -229,7 +229,7 @@ static bool both_aligned(const void* dest, const void* src, size_t align)
 static inline void* sse_memcpy(void* dest, const void* src, size_t n)
 {
     sse_memcpy_table[both_aligned(dest, src, 16)][n/16](dest, src);
-    small_memcpy(dest + (n & ~15), src + (n & ~15), n & 15);
+    small_memcpy(static_cast<char*>(dest) + (n & ~15), static_cast<const char*>(src) + (n & ~15), n & 15);
     return dest;
 }
 

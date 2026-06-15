@@ -23,14 +23,14 @@ struct config {
  *
  * May block.
  */
-void start_sampler(config) throw();
+void start_sampler(config) noexcept;
 
 /**
  * Stops the sampler.
  *
  * May block.
  */
-void stop_sampler() throw();
+void stop_sampler() noexcept;
 
 }
 

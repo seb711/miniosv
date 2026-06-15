@@ -82,7 +82,7 @@ void xenbus::wait_for_devices()
             _pending_devices.wait(&_children_mutex, 1000_ms);
         }
         for (auto device : _pending_children) {
-            debugf("Device %s bringup failed\n", device->get_name());
+            debugf("Device %s bringup failed\n", device->get_name().c_str());
         }
     }
 }

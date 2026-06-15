@@ -278,7 +278,7 @@ private:
     {
         auto it = arc_cache_map.equal_range(ab);
 
-        arc_cache_map.erase(std::find(it.first, it.second, pc));
+        arc_cache_map.erase(std::find_if(it.first, it.second, [&](const auto& p) { return p.second == pc; }));
 
         return arc_cache_map.find(ab) == arc_cache_map.end();
     }
@@ -309,9 +309,6 @@ public:
     }
 };
 
-static bool operator==(const cached_page_arc::arc_map::value_type& l, const cached_page_arc* r) {
-    return l.second == r;
-}
 
 std::unordered_multimap<arc_buf_t*, cached_page_arc*> cached_page_arc::arc_cache_map;
 //Map used to store read cache pages for ZFS filesystem interacting with ARC

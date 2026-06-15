@@ -43,7 +43,7 @@ u8 requested_options[] = {
     dhcp::DHCP_OPTION_HOSTNAME
 };
 
-const ip::address_v4 ipv4_zero = ip::make_address_v4("0.0.0.0");
+const boost::asio::ip::address_v4 ipv4_zero = boost::asio::ip::make_address_v4("0.0.0.0");
 
 // Returns whether we hooked the packet
 int dhcp_hook_rx(struct mbuf* m)
@@ -221,8 +221,8 @@ namespace dhcp {
 
     void dhcp_mbuf::compose_request(struct ifnet* ifp,
                                     u32 xid,
-                                    ip::address_v4 yip,
-                                    ip::address_v4 sip,
+                                    boost::asio::ip::address_v4 yip,
+                                    boost::asio::ip::address_v4 sip,
                                     dhcp_request_packet_type request_packet_type,
                                     std::string hostname)
     {
@@ -253,8 +253,8 @@ namespace dhcp {
         memcpy(options, dhcp_options_magic, 4);
         options += 4;
 
-        ip::address_v4::bytes_type dhcp_server_ip = sip.to_bytes();
-        ip::address_v4::bytes_type requested_ip = yip.to_bytes();
+        boost::asio::ip::address_v4::bytes_type dhcp_server_ip = sip.to_bytes();
+        boost::asio::ip::address_v4::bytes_type requested_ip = yip.to_bytes();
         options = add_option(options, DHCP_OPTION_MESSAGE_TYPE, 1, DHCP_MT_REQUEST);
         if(request_packet_type == DHCP_REQUEST_SELECTING) {
             options = add_option(options, DHCP_OPTION_DHCP_SERVER, 4, (u8*)&dhcp_server_ip);
@@ -282,8 +282,8 @@ namespace dhcp {
     }
 
     void dhcp_mbuf::compose_release(struct ifnet* ifp,
-                                    ip::address_v4 yip,
-                                    ip::address_v4 sip)
+                                    boost::asio::ip::address_v4 yip,
+                                    boost::asio::ip::address_v4 sip)
     {
         size_t dhcp_len = sizeof(struct dhcp_packet);
         struct dhcp_packet* pkt = pdhcp();
@@ -335,7 +335,7 @@ namespace dhcp {
 
     bool dhcp_mbuf::decode()
     {
-        ip::address_v4::bytes_type bytes;
+        boost::asio::ip::address_v4::bytes_type bytes;
 
         decode_ip_len();
 
@@ -344,7 +344,7 @@ namespace dhcp {
 
         // Read allocated IP address
         memcpy(&bytes, &pdhcp()->yiaddr.s_addr, sizeof(bytes));
-        _your_ip = ip::address_v4(bytes);
+        _your_ip = boost::asio::ip::address_v4(bytes);
 
         // Parse options
         u8* packet_start = mtod(_m, u8*);
@@ -375,38 +375,38 @@ namespace dhcp {
                 PARSE_OP(dhcp_message_type, u8, _message_type);
                 break;
             case DHCP_OPTION_SUBNET_MASK:
-                PARSE_OP(ip::address_v4::bytes_type,
-                         ip::address_v4::bytes_type,
+                PARSE_OP(boost::asio::ip::address_v4::bytes_type,
+                         boost::asio::ip::address_v4::bytes_type,
                          bytes);
-                _subnet_mask = ip::address_v4(bytes);
+                _subnet_mask = boost::asio::ip::address_v4(bytes);
                 break;
             case DHCP_OPTION_ROUTER:
-                PARSE_OP(ip::address_v4::bytes_type,
-                         ip::address_v4::bytes_type,
+                PARSE_OP(boost::asio::ip::address_v4::bytes_type,
+                         boost::asio::ip::address_v4::bytes_type,
                          bytes);
-                _router_ip = ip::address_v4(bytes);
+                _router_ip = boost::asio::ip::address_v4(bytes);
                 break;
             case DHCP_OPTION_DHCP_SERVER:
-                PARSE_OP(ip::address_v4::bytes_type,
-                         ip::address_v4::bytes_type,
+                PARSE_OP(boost::asio::ip::address_v4::bytes_type,
+                         boost::asio::ip::address_v4::bytes_type,
                          bytes);
-                _dhcp_server_ip = ip::address_v4(bytes);
+                _dhcp_server_ip = boost::asio::ip::address_v4(bytes);
                 break;
             case DHCP_OPTION_DOMAIN_NAME_SERVERS:
-                PARSE_OP(ip::address_v4::bytes_type,
-                         ip::address_v4::bytes_type,
+                PARSE_OP(boost::asio::ip::address_v4::bytes_type,
+                         boost::asio::ip::address_v4::bytes_type,
                          bytes);
-                _dns_ips.push_back(ip::address(ip::address_v4(bytes)));
+                _dns_ips.push_back(boost::asio::ip::address(boost::asio::ip::address_v4(bytes)));
                 break;
             case DHCP_OPTION_INTERFACE_MTU:
                 PARSE_OP(u16, u16, _mtu);
                 _mtu = ntohs(_mtu);
                 break;
             case DHCP_OPTION_BROADCAST_ADDRESS:
-                PARSE_OP(ip::address_v4::bytes_type,
-                         ip::address_v4::bytes_type,
+                PARSE_OP(boost::asio::ip::address_v4::bytes_type,
+                         boost::asio::ip::address_v4::bytes_type,
                          bytes);
-                _broadcast_ip = ip::address_v4(bytes);
+                _broadcast_ip = boost::asio::ip::address_v4(bytes);
                 break;
             case DHCP_OPTION_LEASE_TIME:
                 PARSE_OP(u32, u32, _lease_time_sec);
@@ -433,11 +433,11 @@ namespace dhcp {
                         options++; op_len--;
                         net |= (byte << 8*i);
                     }
-                    PARSE_OP(ip::address_v4::bytes_type,
-                             ip::address_v4::bytes_type,
+                    PARSE_OP(boost::asio::ip::address_v4::bytes_type,
+                             boost::asio::ip::address_v4::bytes_type,
                              bytes);
                     options += 4; op_len -= 4;
-                    _routes.emplace_back(ip::address_v4(ntohl(net)), ip::address_v4(u32(((1ull<<mask)-1) << (32-mask))), ip::address_v4(bytes));
+                    _routes.emplace_back(boost::asio::ip::address_v4(ntohl(net)), boost::asio::ip::address_v4(u32(((1ull<<mask)-1) << (32-mask))), boost::asio::ip::address_v4(bytes));
                 }
                 break;
             case DHCP_OPTION_HOSTNAME:
@@ -698,7 +698,7 @@ namespace dhcp {
                           dm.get_your_ip().to_string().c_str(),
                           dm.get_subnet_mask().to_string().c_str());
 
-            if (dm.get_subnet_mask() == ip::address_v4({0xff, 0xff, 0xff, 0xff})) {
+            if (dm.get_subnet_mask() == boost::asio::ip::address_v4({0xff, 0xff, 0xff, 0xff})) {
                 osv_route_add_interface(dm.get_router_ip().to_string().c_str(), nullptr, _ifp->if_xname);
             }
             osv_route_add_network("0.0.0.0",
@@ -712,7 +712,7 @@ namespace dhcp {
 
                 dhcp_i("adding route: %s/%s -> %s", dst.to_string().c_str(), mask.to_string().c_str(), gw.to_string().c_str());
 
-                if (gw == ip::address_v4::any()) {
+                if (gw == boost::asio::ip::address_v4::any()) {
                     osv_route_add_interface(dst.to_string().c_str(), mask.to_string().c_str(),
                             _ifp->if_xname);
                 } else {

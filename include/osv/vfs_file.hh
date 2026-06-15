@@ -22,9 +22,9 @@ public:
     virtual int close() override;
     virtual int chmod(mode_t mode) override;
     virtual std::unique_ptr<mmu::file_vma> mmap(addr_range range, unsigned flags, unsigned perm, off_t offset) override;
-    virtual bool map_page(uintptr_t offset, mmu::hw_ptep<0> ptep, mmu::pt_element<0> pte, bool write, bool shared);
-    virtual bool put_page(void *addr, uintptr_t offset, mmu::hw_ptep<0> ptep);
-    virtual void sync(off_t start, off_t end);
+    virtual bool map_page(uintptr_t offset, mmu::hw_ptep<0> ptep, mmu::pt_element<0> pte, bool write, bool shared) override;
+    virtual bool put_page(void *addr, uintptr_t offset, mmu::hw_ptep<0> ptep) override;
+    virtual void sync(off_t start, off_t end) override;
 
     int read_page_from_cache(void *key, off_t offset);
 };

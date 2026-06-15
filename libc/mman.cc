@@ -293,7 +293,7 @@ static int internal_brk(void *addr)
 {
     if (addr) {
         // Check if new program break falls into a mapped area of memory
-        if (addr >= initial_program_break && addr < initial_program_break + break_area_size) {
+        if (addr >= initial_program_break && addr < static_cast<char*>(initial_program_break) + break_area_size) {
             if (addr < program_break.load()) {
                 // The rare case when the program break goes down. In this case
                 // let us identify potential whole huge pages of the mapping we
@@ -346,7 +346,7 @@ void *sbrk(intptr_t increment)
         // Otherwise increment or decrement the break by
         // delegating to internal_brk()
         auto old_break = program_break.load();
-        if (!internal_brk(old_break + increment)) {
+        if (!internal_brk(static_cast<char*>(old_break) + increment)) {
             return old_break;
         } else {
             return (void *)-1;

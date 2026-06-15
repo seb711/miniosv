@@ -50,13 +50,13 @@ rng::rng(virtio_device& dev)
 
     interrupt_factory int_factory;
     int_factory.register_msi_bindings = [this](interrupt_manager &msi) {
-        msi.easy_register( {{ 0, [=] { this->_queue->disable_interrupts(); }, this->_thread.get() }});
+        msi.easy_register( {{ 0, [this] { this->_queue->disable_interrupts(); }, this->_thread.get() }});
     };
     int_factory.create_pci_interrupt = [this](pci::device &pci_dev) {
         return new pci_interrupt(
             pci_dev,
-            [=] { return this->ack_irq(); },
-            [=] { this->handle_irq(); });
+            [this] { return this->ack_irq(); },
+            [this] { this->handle_irq(); });
     };
     _dev.register_interrupt(int_factory);
 

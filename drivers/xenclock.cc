@@ -24,8 +24,8 @@ class xenclock : public pv_based_clock {
 public:
     xenclock();
 protected:
-    virtual u64 wall_clock_boot();
-    virtual u64 system_time();
+    virtual u64 wall_clock_boot() override;
+    virtual u64 system_time() override;
     virtual u64 processor_to_nano(u64 ticks) override __attribute__((no_instrument_function));
 private:
     pvclock_wall_clock* _wall;
