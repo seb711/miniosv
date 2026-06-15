@@ -757,13 +757,13 @@ libc += env/__environ.o
 libc += env/secure_getenv.o
 
 environ_libc += env/__environ.c
-environ_musl += env/clearenv.c
-environ_musl += env/getenv.c
+environ_libc += env/clearenv.c
+environ_libc += env/getenv.c
 environ_libc += env/secure_getenv.c
-environ_musl += env/putenv.c
-environ_musl += env/setenv.c
-environ_musl += env/unsetenv.c
-environ_musl += string/strchrnul.c
+environ_libc += env/putenv.c
+environ_libc += env/setenv.c
+environ_libc += env/unsetenv.c
+environ_libc += string/strchrnul.c
 
 
 libc += errno/strerror.o
@@ -1182,63 +1182,31 @@ $(out)/.libcxx-built: scripts/build-libcxx.sh
 $(libcxx_archives): $(out)/.libcxx-built
 libcxx_dep = $(libcxx_archives)
 
-# llvm-libc gaps at 22.1.7: wide ctype, the locale _l family, iconv,
-# multibyte mbsinit, temp __randname, env get/setenv, the time internals,
-# strchrnul/strsignal. Kept as musl until owned or dropped.
-musl += ctype/__ctype_tolower_loc.o
-musl += ctype/__ctype_toupper_loc.o
-musl += ctype/isalnum.o
-musl += ctype/isalpha.o
-musl += ctype/isascii.o
-musl += ctype/isblank.o
-musl += ctype/iscntrl.o
-musl += ctype/isdigit.o
-musl += ctype/isgraph.o
-musl += ctype/islower.o
-musl += ctype/isprint.o
-musl += ctype/ispunct.o
-musl += ctype/isspace.o
-musl += ctype/isupper.o
-musl += ctype/isxdigit.o
-musl += ctype/toascii.o
-musl += ctype/tolower.o
-musl += ctype/toupper.o
-musl += env/clearenv.o
-musl += env/getenv.o
-musl += env/putenv.o
-musl += env/setenv.o
-musl += env/unsetenv.o
-musl += ctype/__ctype_b_loc.o
-musl += multibyte/mbsinit.o
-musl += temp/__randname.o
-musl += temp/mkdtemp.o
-musl += temp/mkstemp.o
-musl += temp/mktemp.o
-musl += temp/mkostemp.o
-musl += temp/mkostemps.o
-musl += time/__month_to_secs.o
-musl += time/__secs_to_tm.o
-musl += time/__tm_to_secs.o
-musl += time/asctime.o
-musl += time/asctime_r.o
-musl += time/ctime.o
-musl += time/ctime_r.o
-musl += time/difftime.o
-musl += time/getdate.o
-musl += time/gmtime.o
-musl += time/gmtime_r.o
-musl += time/localtime.o
-musl += time/localtime_r.o
-musl += time/mktime.o
-musl += time/strftime.o
-musl += time/strptime.o
-musl += time/time.o
-musl += time/timegm.o
-musl += time/ftime.o
-musl += string/strchrnul.o
-musl += string/strsignal.o
-musl += math/__fpclassifyl.o
-musl += math/__signbitl.o
+# Former musl gaps, now resolved (Phase 8.12). Most are supplied by llvm-libc
+# (the narrow ctype family, and the bulk of <time.h>: asctime/ctime/gmtime/
+# localtime/mktime/strftime/difftime and the _r variants) - just deleting the
+# `musl +=` lines lets the trailing archive fill them. The handful llvm-libc
+# lacks were vendored into libc/ below. Dropped as dead/unreferenced: the
+# __ctype_*_loc glibc table accessors, the whole temp/ family (mkstemp/mkdtemp/
+# mktemp/__randname - no filesystem), and time/{strptime,timegm,getdate,ftime,
+# __secs_to_tm,__tm_to_secs}.
+libc += math/__fpclassifyl.o     # x87 long-double classify (vfprintf %Lf)
+libc += math/__signbitl.o
+libc += time/__month_to_secs.o
+libc += time/time.o              # time() -> OSv clock_gettime
+libc += multibyte/mbsinit.o      # vfscanf
+libc += string/strchrnul.o       # provides strchrnul + hidden __strchrnul (env)
+libc += string/strsignal.o
+libc += env/getenv.o
+libc += env/setenv.o
+libc += env/putenv.o
+libc += env/unsetenv.o
+libc += env/clearenv.o
+# env + strchrnul use the musl-internal decls (__environ, __putenv, __strchrnul)
+# that live in OSv's internal_musl_headers (the kernel build does not otherwise
+# put that dir on the path, unlike the libenviron.so build).
+$(out)/libc/env/%.o: pre-include-api = -isystem include/api/internal_musl_headers
+$(out)/libc/string/strchrnul.o: pre-include-api = -isystem include/api/internal_musl_headers
 
 ifeq ($(arch),aarch64)
 def_symbols = --defsym=OSV_KERNEL_VM_BASE=$(kernel_vm_base)
