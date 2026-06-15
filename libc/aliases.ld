@@ -5,8 +5,12 @@
  * not compile:
  *   __lseek          - musl's stdio FILE machinery (__stdio_seek); goes when
  *                      the stdio FILE glue becomes OSv-owned.
- *   __isoc23_strtoul - the host's glibc-built libstdc++.a references the C23
- *                      strtoul; only removable by rebuilding libstdc++ against
- *                      a non-glibc libc. */
+ *   __isoc23_strto* - libc++.a was built against the host glibc headers, whose
+ *                      C23 <stdlib.h> renames strtol/strtoul/strtoll/strtoull to
+ *                      __isoc23_*; only removable by rebuilding libc++ against
+ *                      the llvm-libc headers. */
 __lseek = lseek;
+__isoc23_strtol = strtol;
 __isoc23_strtoul = strtoul;
+__isoc23_strtoll = strtoll;
+__isoc23_strtoull = strtoull;

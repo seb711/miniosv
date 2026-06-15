@@ -47,6 +47,15 @@ namespace boost { namespace detail {
 #define BOOST_DYNAMIC_BITSET_PRIVATE private
 #endif
 
+// OSv: libc++ can be built without localization
+// (LIBCXX_ENABLE_LOCALIZATION=OFF), in which case <locale>, <istream>,
+// <ostream> and std::ctype / std::locale do not exist. OSv only ever uses the
+// bit-manipulation API of dynamic_bitset, so detect that configuration and
+// compile out the locale facets and the stream insertion/extraction operators.
+#if defined(_LIBCPP_HAS_LOCALIZATION) && (_LIBCPP_HAS_LOCALIZATION == 0)
+#  define BOOST_DYNAMIC_BITSET_NO_LOCALE_STREAMS
+#endif
+
 // A couple of macros to cope with libraries without locale
 // support. The first macro must be used to declare a reference
 // to a ctype facet. The second one to widen a char by using
@@ -54,7 +63,7 @@ namespace boost { namespace detail {
 // the first macro is a no-op and the second one just expands
 // to its parameter c.
 //
-#if defined (BOOST_USE_FACET)
+#if defined (BOOST_USE_FACET) && !defined(BOOST_DYNAMIC_BITSET_NO_LOCALE_STREAMS)
 
 #define BOOST_DYNAMIC_BITSET_CTYPE_FACET(ch, name, loc)     \
             const std::ctype<ch> & name =                   \

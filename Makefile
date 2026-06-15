@@ -242,6 +242,16 @@ else
   standard-includes-flag =
 endif
 
+# --- libc++ replaces GNU libstdc++ (LLVM_LIBC_PLAN.md, Phase 8) ---
+# Compile the entire C++ surface (kernel + app + vendored boost) against our
+# localization-free libc++ headers instead of the system GNU C++ headers; the
+# libc++ c++/v1 dir itself is added C++-only in CXXFLAGS (with -nostdinc++), so
+# it does not shadow C headers (e.g. its wchar.h wrapper) for C compiles.
+# libunwind's unwind.h/libunwind.h are needed by backtrace.cc (C++ only, but
+# harmless for C) and libc++abi's cxxabi.h is installed alongside under c++/v1.
+CXX_INCLUDES = -isystem external/llvm-project/libunwind/include
+libcxx-includes = -nostdinc++ -isystem build/libcxx/$(arch)/include/c++/v1
+
 ifeq ($(arch),aarch64)
 libfdt_base = external/$(arch)/libfdt
 INCLUDES += -isystem $(libfdt_base)
@@ -354,7 +364,7 @@ gcc-opt-Og := $(call compiler-flag, -Og, -Og, compiler/empty.cc)
 # immediate offsets resolved at link time rather than GOT-based TPOFF64 dynamic
 # relocations that would need processing at boot.
 tls-model = -ftls-model=local-exec
-CXXFLAGS = -std=$(conf_cxx_level) $(COMMON) $(cxx-hide-flags) $(tls-model)
+CXXFLAGS = -std=$(conf_cxx_level) $(libcxx-includes) $(COMMON) $(cxx-hide-flags) $(tls-model)
 CFLAGS = -std=gnu99 $(COMMON) $(tls-model)
 
 # should be limited to files under libc/ eventually
@@ -1198,14 +1208,20 @@ ifneq ($(shell cmp $(out)/version_script $(out)/default_version_script),)
 $(shell cp $(out)/default_version_script $(out)/version_script)
 endif
 endif
-linker_archives_options = --no-whole-archive $(libstdc++.a) $(libgcc.a) $(libgcc_eh.a) $(boost-libs) \
-  --exclude-libs libstdc++.a --gc-sections
+linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group \
+  $(libgcc.a) $(boost-libs) --gc-sections
 ifneq ($(shell grep -c iconv $(out)/version_script),0)
 else
 libc += locale/iconv_stubs.o
 endif
 else
-linker_archives_options = --whole-archive $(libstdc++.a) $(libgcc_eh.a) $(boost-libs) --no-whole-archive $(libgcc.a)
+# The C++ runtime (libc++ / libc++abi / libunwind) is linked on demand inside a
+# --start-group, not whole-archived: the slim kernel links its single app at
+# build time and exports no dynamic C++ ABI, so only referenced runtime objects
+# are needed. The group resolves the libc++ <-> libc++abi cycle, and pulling
+# each symbol once avoids the multiple-definition clash from the libunwind
+# objects that the build bundles into all three archives.
+linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group $(boost-libs) $(libgcc.a)
 endif
 
 # LLVM libc (LLVM_LIBC_PLAN.md): llvm-libc is the generic libc, linked trailing
@@ -1226,6 +1242,21 @@ llvm_libc_dep = $(llvm_libc_archives)
 # libgcc.a repeats after the llvm-libc archives: their members need its soft-int
 # helpers (e.g. __umodti3), and ld resolves archives in order.
 linker_archives_options += $(llvm_libc_archives) $(libgcc.a)
+
+# libc++ / libc++abi / libunwind replace the host GNU libstdc++.a and the libgcc
+# exception unwinder (LLVM_LIBC_PLAN.md, Phase 8). Built by scripts/build-libcxx.sh
+# (x86/arm only, no manual step) from the same pinned llvm-project, localization
+# OFF. They are linked (in the --start-group in linker_archives_options above) in
+# place of libstdc++.a/libgcc_eh.a; libunwind supplies the C++ exception unwinder
+# (OSv uses C++ exceptions) and locates the kernel's .eh_frame via OSv's
+# dl_iterate_phdr.
+libcxx_libdir = build/libcxx/$(arch)/lib
+libcxx_archives = $(libcxx_libdir)/libc++.a $(libcxx_libdir)/libc++abi.a $(libcxx_libdir)/libunwind.a
+$(out)/.libcxx-built: scripts/build-libcxx.sh
+	$(call quiet, scripts/build-libcxx.sh $(arch), LIBCXX $(arch))
+	$(call very-quiet, touch $@)
+$(libcxx_archives): $(out)/.libcxx-built
+libcxx_dep = $(libcxx_archives)
 
 # llvm-libc gaps at 22.1.7: wide ctype, the locale _l family, iconv,
 # multibyte mbsinit, temp __randname, env get/setenv, the time internals,
@@ -1341,10 +1372,10 @@ def_symbols = --defsym=OSV_KERNEL_BASE=$(kernel_base) \
               --defsym=OSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 endif
 
-$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file) $(llvm_libc_dep)
+$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file) $(llvm_libc_dep) $(libcxx_dep)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
 		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -L$(out)/arch/$(arch) \
-            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep),$^))) \
+            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep),$^))) \
 	    $(linker_archives_options) $(conf_linker_extra_options), \
 		LINK loader.elf)
 	@# Build libosv.so matching this loader.elf. This is not a separate

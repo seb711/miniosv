@@ -45,17 +45,9 @@ set_event_state(const regex_t *, bool enable, bool stacktrace = false);
 event_info
 set_event_state(tracepoint_base &, bool enable, bool stacktrace = false);
 
-// Generate a trace dump to temp file.
-// Caller is responsible for deleting the file.
-// This is a somewhat weird API, in a sense...
-// The thought being that at some point we add
-// the ability to make longer recordings, which
-// we _really_ don't want fully in-memory.
-// This should perhaps return a "smart object"
-// providing a binary stream instead, but for now
-// this is ok imho.
-std::string
-create_trace_dump();
+// (create_trace_dump() - the binary trace-dump-to-file API - was removed with
+// the filesystem: it required std::ofstream and a writable temp file, and its
+// only caller was the httpserver-api module.)
 
 struct symbol {
     std::string name;

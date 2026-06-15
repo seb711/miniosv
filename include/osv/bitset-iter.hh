@@ -41,6 +41,28 @@ static inline size_t count_trailing_zeros(long value)
     return __builtin_ctzl((unsigned long)value);
 }
 
+// long long / unsigned long long overloads. On LP64 these are the same width as
+// long but a distinct type; libc++ spells std::chrono::nanoseconds::rep as
+// `long long` (libstdc++ uses `long`), so timer_set's count_leading_zeros call
+// resolves here. They mirror the long/unsigned-long versions exactly to keep
+// identical behavior across the two standard libraries.
+static inline size_t count_leading_zeros(unsigned long long value)
+{
+    return __builtin_clzll(value);
+}
+static inline size_t count_leading_zeros(long long value)
+{
+    return __builtin_clzll((unsigned long long)value) - 1;
+}
+static inline size_t count_trailing_zeros(unsigned long long value)
+{
+    return __builtin_ctzll(value);
+}
+static inline size_t count_trailing_zeros(long long value)
+{
+    return __builtin_ctzll((unsigned long long)value);
+}
+
 /**
  * Returns the index of the first set bit.
  * Result is undefined if bitset.any() == false.

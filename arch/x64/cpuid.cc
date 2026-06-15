@@ -6,6 +6,7 @@
  */
 
 #include <osv/drivers_config.h>
+#include <new>
 #include "cpuid.hh"
 #include "processor.hh"
 #if CONF_drivers_xen
@@ -19,9 +20,22 @@ namespace processor {
 
 const features_type& features()
 {
-    // features() can be used very early, make sure it is initialized
-    static features_type f;
-    return f;
+    // features() is used very early - during ELF relocation processing (the
+    // IFUNC resolvers all consult it), before premain() sets up the TLS. A
+    // function-local static of a non-trivial type would get a __cxa_guard, and
+    // libc++abi's __cxa_guard_acquire takes a lock that mallocs and reads the
+    // TLS current-thread pointer, which faults while fs_base is still 0. So
+    // initialize manually in raw (trivially-initialized, guard-free) storage
+    // with a plain flag: the first use is single-threaded and process_cpuid()
+    // is idempotent.
+    static bool initialized;
+    alignas(features_type) static char storage[sizeof(features_type)];
+    auto f = reinterpret_cast<features_type*>(storage);
+    if (!initialized) {
+        new (f) features_type();
+        initialized = true;
+    }
+    return *f;
 }
 
 namespace {
