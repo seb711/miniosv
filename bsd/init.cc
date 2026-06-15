@@ -6,10 +6,8 @@
  */
 
 #include <osv/debug.hh>
-#include <sys/time.h>
 #include <osv/mempool.hh>
 
-#include <bsd/sys/sys/libkern.h>
 #include <bsd/sys/sys/eventhandler.h>
 
 static void physmem_init()
@@ -23,12 +21,6 @@ void bsd_init(void)
 
     physmem_init();
 
-    /* Random */
-    struct timeval tv;
-    gettimeofday(&tv, NULL);
-    bsd_srandom(tv.tv_sec ^ tv.tv_usec);
-
-    arc4_init();
     eventhandler_init(NULL);
 
     debug(" - done\n");

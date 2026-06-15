@@ -525,8 +525,6 @@ $(out)/zfs_builder.img: $(out)/preboot.bin $(out)/zfs_builder-stripped.elf
 
 endif # aarch64
 
-$(out)/bsd/sys/crypto/rijndael/rijndael-api-fst.o: COMMON+=-fno-strict-aliasing
-$(out)/bsd/sys/crypto/sha2/sha2.o: COMMON+=-fno-strict-aliasing
 $(out)/bsd/sys/net/route.o: COMMON+=-fno-strict-aliasing
 $(out)/bsd/sys/net/rtsock.o: COMMON+=-fno-strict-aliasing
 $(out)/bsd/sys/net/in.o: COMMON+=-fno-strict-aliasing
@@ -555,12 +553,6 @@ ifeq ($(conf_networking_stack),1)
 bsd += bsd/net.o
 endif
 bsd += bsd/$(arch)/machine/in_cksum.o
-bsd += bsd/sys/crypto/rijndael/rijndael-alg-fst.o
-bsd += bsd/sys/crypto/rijndael/rijndael-api.o
-bsd += bsd/sys/crypto/rijndael/rijndael-api-fst.o
-bsd += bsd/sys/crypto/sha2/sha2.o
-bsd += bsd/sys/libkern/arc4random.o
-bsd += bsd/sys/libkern/random.o
 ifeq ($(conf_networking_stack),1)
 bsd += bsd/sys/libkern/inet_ntoa.o
 bsd += bsd/sys/libkern/inet_aton.o
@@ -681,13 +673,6 @@ $(out)/bsd/sys/dev/ena/%.o: CXXFLAGS += -Ibsd/sys/contrib
 endif
 endif
 endif
-
-bsd += bsd/sys/dev/random/hash.o
-bsd += bsd/sys/dev/random/randomdev_soft.o
-bsd += bsd/sys/dev/random/yarrow.o
-bsd += bsd/sys/dev/random/random_harvestq.o
-bsd += bsd/sys/dev/random/harvest.o
-bsd += bsd/sys/dev/random/live_entropy_sources.o
 
 $(out)/bsd/sys/%.o: COMMON += -Wno-sign-compare -Wno-narrowing -Wno-write-strings -Wno-parentheses -Wno-unused-but-set-variable
 
