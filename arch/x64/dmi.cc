@@ -88,7 +88,7 @@ static void dmi_table(u32 base, u16 len, u16 num)
         p += header.length;
         do {
             auto left = start + len - p;
-            p = static_cast<char*>(memchr(p, '\0', left));
+            p = static_cast<const char*>(memchr(p, '\0', left));
             if (!p) {
                 debug_ll("DMI: error\n");
                 return;

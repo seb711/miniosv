@@ -14,32 +14,21 @@
 
 namespace osv {
 
-extern "C" int __gcclibcxx_demangle_callback (const char *,
-    void (*)(const char *, size_t, void *),
-    void *);
-
-struct demangle_callback_arg {
-    char *buf;
-    size_t len;
-};
-
-static void demangle_callback(const char *buf, size_t len, void *opaque)
-{
-    struct demangle_callback_arg *arg =
-        reinterpret_cast<struct demangle_callback_arg *>(opaque);
-    len = std::min(len, arg->len - 1);
-    strncpy(arg->buf, buf, len);
-    arg->buf[len] = '\0';
-    arg->buf += len;
-    arg->len -= len;
-}
-
 bool demangle(const char *name, char *buf, size_t len)
 {
-    struct demangle_callback_arg arg { buf, len };
-    int ret = __gcclibcxx_demangle_callback(name, demangle_callback,
-            &arg);
-    return (ret == 0);
+    // libc++abi provides __cxa_demangle (the Itanium ABI demangler) but not
+    // gcc's __gcclibcxx_demangle_callback, so demangle into the malloc'd buffer
+    // __cxa_demangle returns and copy it into the caller's fixed buffer.
+    int status;
+    char *demangled = abi::__cxa_demangle(name, nullptr, 0, &status);
+    if (status != 0 || !demangled) {
+        free(demangled);
+        return false;
+    }
+    strncpy(buf, demangled, len - 1);
+    buf[len - 1] = '\0';
+    free(demangled);
+    return true;
 }
 
 void lookup_name_demangled(void *addr, char *buf, size_t len)

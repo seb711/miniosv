@@ -5,8 +5,7 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
-#include <boost/date_time/gregorian/gregorian_types.hpp>
-#include <boost/date_time/posix_time/posix_time_types.hpp>
+#include <cstdint>
 #include "rtc.hh"
 #include "processor.hh"
 
@@ -46,20 +45,21 @@ uint64_t rtc::wallclock_ns()
     uint8_t secs = cmos_read_date(0);
 
     // FIXME: Get century from FADT.
-    auto gdate = boost::gregorian::date(2000 + year, month, day);
+    // Convert the broken-down RTC date/time to nanoseconds since the Unix
+    // epoch. Unix time ignores leap seconds, so the conversion is the standard
+    // days-from-civil computation (proleptic Gregorian; Howard Hinnant's
+    // algorithm) plus the time-of-day, scaled to nanoseconds.
+    int y = 2000 + year;
+    unsigned m = month, d = day;
+    y -= m <= 2;
+    const int64_t era = (y >= 0 ? y : y - 399) / 400;
+    const unsigned yoe = static_cast<unsigned>(y - era * 400);
+    const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const int64_t days = era * 146097 + static_cast<int64_t>(doe) - 719468;
 
-    // My understanding from boost's documentation is that this handles leap
-    // seconds correctly. They don't mention it explicitly, but they say that
-    // one of the motivations for writing the library is that: " most libraries
-    // do not correctly handle leap seconds, provide concepts such as infinity,
-    // or provide the ability to use high resolution or network time sources"
-    auto now = boost::posix_time::ptime(gdate,
-                                        boost::posix_time::hours(hours) +
-                                        boost::posix_time::minutes(mins) +
-                                        boost::posix_time::seconds(secs));
+    const int64_t secs_since_epoch =
+        days * 86400 + hours * 3600 + mins * 60 + secs;
 
-    auto base = boost::posix_time::ptime(boost::gregorian::date(1970, 1, 1));
-    auto dur = now - base;
-
-    return dur.total_nanoseconds();
+    return static_cast<uint64_t>(secs_since_epoch) * 1000000000ull;
 }
