@@ -1304,7 +1304,6 @@ musl += temp/mkstemp.o
 musl += temp/mktemp.o
 musl += temp/mkostemp.o
 musl += temp/mkostemps.o
-musl += time/__map_file.o
 musl += time/__month_to_secs.o
 musl += time/__secs_to_tm.o
 musl += time/__tm_to_secs.o
