@@ -27,10 +27,16 @@
 #include <osv/power.hh>
 #include <osv/rcu.hh>
 #include <osv/mempool.hh>
+#if CONF_networking_stack
 #include <bsd/porting/networking.hh>
+#endif
 #include <bsd/porting/shrinker.h>
+#if CONF_networking_stack
 #include <bsd/porting/route.h>
+#endif
+#if CONF_networking_dhcp
 #include <osv/dhcp.hh>
+#endif
 #include <osv/version.h>
 #include <osv/shutdown.hh>
 #include <osv/boot.hh>

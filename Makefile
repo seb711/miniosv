@@ -525,14 +525,6 @@ $(out)/zfs_builder.img: $(out)/preboot.bin $(out)/zfs_builder-stripped.elf
 
 endif # aarch64
 
-$(out)/bsd/sys/net/route.o: COMMON+=-fno-strict-aliasing
-$(out)/bsd/sys/net/rtsock.o: COMMON+=-fno-strict-aliasing
-$(out)/bsd/sys/net/in.o: COMMON+=-fno-strict-aliasing
-$(out)/bsd/sys/net/if.o: COMMON+=-fno-strict-aliasing
-$(out)/bsd/sys/netinet/in_rmx.o: COMMON+=-fno-strict-aliasing
-$(out)/bsd/sys/netinet/ip_input.o: COMMON+=-fno-strict-aliasing
-$(out)/bsd/sys/netinet/in.o: COMMON+=-fno-strict-aliasing
-
 $(out)/bsd/sys/cddl/contrib/opensolaris/uts/common/fs/zfs/metaslab.o: COMMON+=-Wno-tautological-compare
 
 # The FreeBSD-derived bsd/ tree (including the cddl/opensolaris ZFS code) is
@@ -549,36 +541,11 @@ wno-sometimes-uninitialized := $(call compiler-flag, -Wno-sometimes-uninitialize
 COMMON += $(wno-extern-c-compat) $(wno-ignored-attributes) $(wno-sometimes-uninitialized)
 
 bsd  = bsd/init.o
-ifeq ($(conf_networking_stack),1)
-bsd += bsd/net.o
-endif
-bsd += bsd/$(arch)/machine/in_cksum.o
-ifeq ($(conf_networking_stack),1)
-bsd += bsd/sys/libkern/inet_ntoa.o
-bsd += bsd/sys/libkern/inet_aton.o
-endif
 bsd += bsd/sys/kern/md5c.o
-ifeq ($(conf_networking_stack),1)
-bsd += bsd/sys/kern/kern_mbuf.o
-bsd += bsd/sys/kern/uipc_mbuf.o
-bsd += bsd/sys/kern/uipc_mbuf2.o
-bsd += bsd/sys/kern/uipc_domain.o
-bsd += bsd/sys/kern/uipc_sockbuf.o
-bsd += bsd/sys/kern/uipc_socket.o
-bsd += bsd/sys/kern/uipc_syscalls.o
-bsd += bsd/sys/kern/uipc_syscalls_wrap.o
-endif
 bsd += bsd/sys/kern/subr_bufring.o
 bsd += bsd/sys/kern/subr_sbuf.o
 bsd += bsd/sys/kern/subr_eventhandler.o
 bsd += bsd/sys/kern/subr_hash.o
-ifeq ($(conf_networking_stack),1)
-bsd += bsd/sys/kern/sys_socket.o
-endif
-ifeq ($(conf_networking_stack),1)
-bsd += bsd/porting/route.o
-bsd += bsd/porting/networking.o
-endif
 bsd += bsd/porting/netport.o
 bsd += bsd/porting/netport1.o
 bsd += bsd/porting/shrinker.o
@@ -590,58 +557,6 @@ bsd += bsd/porting/kthread.o
 bsd += bsd/porting/mmu.o
 bsd += bsd/porting/pcpu.o
 bsd += bsd/porting/bus_dma.o
-ifeq ($(conf_networking_stack),1)
-bsd += bsd/sys/netinet/if_ether.o
-bsd += bsd/sys/compat/linux/linux_socket.o
-bsd += bsd/sys/compat/linux/linux_ioctl.o
-bsd += bsd/sys/compat/linux/linux_netlink.o
-bsd += bsd/sys/net/if_ethersubr.o
-bsd += bsd/sys/net/if_llatbl.o
-bsd += bsd/sys/net/radix.o
-bsd += bsd/sys/net/route.o
-bsd += bsd/sys/net/raw_cb.o
-bsd += bsd/sys/net/raw_usrreq.o
-bsd += bsd/sys/net/rtsock.o
-bsd += bsd/sys/net/netisr.o
-bsd += bsd/sys/net/netisr1.o
-bsd += bsd/sys/net/if_dead.o
-bsd += bsd/sys/net/if_clone.o
-bsd += bsd/sys/net/if_loop.o
-bsd += bsd/sys/net/if.o
-bsd += bsd/sys/net/pfil.o
-bsd += bsd/sys/net/routecache.o
-bsd += bsd/sys/netinet/in.o
-bsd += bsd/sys/netinet/in_pcb.o
-bsd += bsd/sys/netinet/in_proto.o
-bsd += bsd/sys/netinet/in_mcast.o
-$(out)/bsd/sys/netinet/in_mcast.o: COMMON += $(wno-maybe-uninitialized)
-bsd += bsd/sys/netinet/in_rmx.o
-bsd += bsd/sys/netinet/ip_id.o
-bsd += bsd/sys/netinet/ip_icmp.o
-bsd += bsd/sys/netinet/ip_input.o
-bsd += bsd/sys/netinet/ip_output.o
-bsd += bsd/sys/netinet/ip_options.o
-bsd += bsd/sys/netinet/raw_ip.o
-bsd += bsd/sys/netinet/igmp.o
-bsd += bsd/sys/netinet/udp_usrreq.o
-bsd += bsd/sys/netinet/tcp_debug.o
-bsd += bsd/sys/netinet/tcp_hostcache.o
-bsd += bsd/sys/netinet/tcp_input.o
-bsd += bsd/sys/netinet/tcp_lro.o
-bsd += bsd/sys/netinet/tcp_output.o
-bsd += bsd/sys/netinet/tcp_reass.o
-bsd += bsd/sys/netinet/tcp_sack.o
-bsd += bsd/sys/netinet/tcp_subr.o
-bsd += bsd/sys/netinet/tcp_syncache.o
-bsd += bsd/sys/netinet/tcp_timer.o
-bsd += bsd/sys/netinet/tcp_timewait.o
-bsd += bsd/sys/netinet/tcp_usrreq.o
-bsd += bsd/sys/netinet/cc/cc.o
-bsd += bsd/sys/netinet/cc/cc_cubic.o
-bsd += bsd/sys/netinet/cc/cc_htcp.o
-bsd += bsd/sys/netinet/cc/cc_newreno.o
-bsd += bsd/sys/netinet/arpcache.o
-endif
 ifeq ($(conf_drivers_xen),1)
 bsd += bsd/sys/xen/evtchn.o
 $(out)/bsd/sys/xen/evtchn.o: COMMON += -Wno-array-bounds -Wno-stringop-overread -Wno-stringop-overflow
@@ -655,22 +570,10 @@ bsd += bsd/sys/xen/xenstore/xenstore.o
 bsd += bsd/sys/xen/xenbus/xenbus.o
 bsd += bsd/sys/xen/xenbus/xenbusb.o
 bsd += bsd/sys/xen/xenbus/xenbusb_front.o
-ifeq ($(conf_networking_stack),1)
-bsd += bsd/sys/dev/xen/netfront/netfront.o
-endif
 bsd += bsd/sys/dev/xen/blkfront/blkfront.o
 endif
 ifeq ($(conf_drivers_hyperv),1)
 bsd += bsd/sys/dev/hyperv/vmbus/hyperv.o
-endif
-ifeq ($(conf_networking_stack),1)
-ifeq ($(conf_drivers_ena),1)
-bsd += bsd/sys/contrib/ena_com/ena_eth_com.o
-bsd += bsd/sys/contrib/ena_com/ena_com.o
-bsd += bsd/sys/dev/ena/ena_datapath.o
-bsd += bsd/sys/dev/ena/ena.o
-$(out)/bsd/sys/dev/ena/%.o: CXXFLAGS += -Ibsd/sys/contrib
-endif
 endif
 endif
 
@@ -885,12 +788,6 @@ endif
 drivers += drivers/virtio-rng.o
 endif
 
-ifeq ($(conf_networking_stack),1)
-ifeq ($(conf_drivers_vmxnet3),1)
-drivers += drivers/vmxnet3.o
-drivers += drivers/vmxnet3-queues.o
-endif
-endif
 drivers += drivers/kvmclock.o
 ifeq ($(conf_drivers_hyperv),1)
 drivers += drivers/hypervclock.o
@@ -913,11 +810,6 @@ ifeq ($(conf_drivers_xen),1)
 drivers += drivers/xenclock.o
 drivers += drivers/xenfront.o drivers/xenfront-xenbus.o drivers/xenfront-blk.o
 drivers += drivers/xenplatform-pci.o
-endif
-ifeq ($(conf_networking_stack),1)
-ifeq ($(conf_drivers_ena),1)
-drivers += drivers/ena.o
-endif
 endif
 endif # x64
 
@@ -1081,19 +973,12 @@ objects += core/power.o
 objects += core/percpu.o
 objects += core/per-cpu-counter.o
 objects += core/percpu-worker.o
-ifeq ($(conf_networking_dhcp),1)
-objects += core/dhcp.o
-endif
 objects += core/shutdown.o
 objects += core/version.o
 objects += core/waitqueue.o
 objects += core/chart.o
-ifeq ($(conf_networking_stack),1)
-objects += core/net_channel.o
-endif
 objects += core/demangle.o
 objects += core/async.o
-objects += core/net_trace.o
 objects += core/libaio.o
 objects += core/options.o
 objects += core/string_utils.o
