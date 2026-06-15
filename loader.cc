@@ -39,9 +39,6 @@
 #if CONF_drivers_xen
 #include <osv/xen.hh>
 #endif
-#include <osv/mount.h>
-#include <dirent.h>
-#include <mntent.h>
 
 #include "drivers/random.hh"
 #include "drivers/console.hh"

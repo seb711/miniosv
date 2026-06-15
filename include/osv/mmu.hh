@@ -8,7 +8,6 @@
 #ifndef MMU_HH
 #define MMU_HH
 
-#include "fs/fs.hh"
 #include <stdint.h>
 #include <boost/intrusive/set.hpp>
 #include <osv/types.h>
