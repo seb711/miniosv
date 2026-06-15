@@ -370,6 +370,11 @@ CFLAGS += -I libc/stdio -I libc/internal -I libc/arch/$(arch) \
 # musl uses "str"+int idiom to skip first character conditionally
 $(out)/musl/%.o: CFLAGS += -Wno-string-plus-int
 $(out)/libc/%.o: CFLAGS += -Wno-string-plus-int
+# musl calls fabs() on a long double in a few spots; suppress Clang's narrowing
+# warning rather than patch the vendored musl source (probed; GCC lacks the flag)
+wno-absolute-value := $(call compiler-flag, -Wno-absolute-value, -Wno-absolute-value, compiler/empty.cc)
+$(out)/musl/%.o: CFLAGS += $(wno-absolute-value)
+$(out)/libc/%.o: CFLAGS += $(wno-absolute-value)
 
 ASFLAGS = -g $(autodepend) -D__ASSEMBLY__
 # Assembly files use COMMON (no -std=gnu++XX) so Clang does not apply C++
