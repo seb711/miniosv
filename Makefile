@@ -871,8 +871,6 @@ drivers += drivers/clock.o
 drivers += drivers/clock-common.o
 drivers += drivers/clockevent.o
 drivers += drivers/isa-serial-base.o
-drivers += core/elf.o
-$(out)/core/elf.o: CXXFLAGS += -DHIDE_SYMBOLS=$(conf_hide_symbols)
 drivers += drivers/random.o
 drivers += drivers/zfs.o
 drivers += drivers/null.o
@@ -1007,13 +1005,11 @@ objects += arch/$(arch)/signal.o
 objects += arch/$(arch)/arch-cpu.o
 objects += arch/$(arch)/backtrace.o
 objects += arch/$(arch)/smp.o
-objects += arch/$(arch)/elf-dl.o
 objects += arch/$(arch)/tlsdesc.o
 objects += arch/$(arch)/entry.o
 objects += arch/$(arch)/mmu.o
 objects += arch/$(arch)/exceptions.o
 objects += arch/$(arch)/dump.o
-objects += arch/$(arch)/arch-elf.o
 objects += arch/$(arch)/cpuid.o
 objects += arch/$(arch)/firmware.o
 objects += arch/$(arch)/hypervisor.o
@@ -1091,7 +1087,6 @@ objects += core/sampler.o
 endif
 
 objects += linux.o
-objects += core/commands.o
 objects += core/sched.o
 objects += core/mmio.o
 objects += core/kprintf.o
@@ -1118,7 +1113,6 @@ objects += core/percpu-worker.o
 ifeq ($(conf_networking_dhcp),1)
 objects += core/dhcp.o
 endif
-objects += core/run.o
 objects += core/shutdown.o
 objects += core/version.o
 objects += core/waitqueue.o
@@ -1129,14 +1123,7 @@ endif
 objects += core/demangle.o
 objects += core/async.o
 objects += core/net_trace.o
-objects += core/app.o
 objects += core/libaio.o
-ifeq ($(conf_core_namespaces),1)
-objects += core/osv_execve.o
-endif
-ifeq ($(conf_core_c_wrappers),1)
-objects += core/osv_c_wrappers.o
-endif
 objects += core/options.o
 objects += core/string_utils.o
 

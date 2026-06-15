@@ -178,8 +178,6 @@ start64_continue:
     mov %rbx, osv_multiboot_info
     lea init_stack_top, %rsp
     call premain
-    mov __loader_argc, %edi
-    mov __loader_argv, %rsi
     call main
     .cfi_endproc
 

@@ -7,7 +7,6 @@
 
 #include <unistd.h>
 
-#include <osv/app.hh>
 #include <osv/mount.h>
 #include <osv/prex.h>
 #include <osv/sched.hh>
@@ -142,13 +141,9 @@ static std::string procfs_hostname()
 
 static std::string procfs_exe()
 {
-    auto app = sched::thread::current_app();
-
-    if (app && app->lib()) {
-        return app->lib()->pathname();
-    } else {
-        return "";
-    }
+    // The application is statically linked into the kernel image; there is no
+    // separate executable path to report.
+    return "";
 }
 
 static int

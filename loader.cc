@@ -33,17 +33,13 @@
 #include <bsd/porting/route.h>
 #include <osv/dhcp.hh>
 #include <osv/version.h>
-#include <osv/run.hh>
 #include <osv/shutdown.hh>
-#include <osv/commands.hh>
 #include <osv/boot.hh>
 #include <osv/sampler.hh>
-#include <osv/app.hh>
 #include <osv/firmware.hh>
 #if CONF_drivers_xen
 #include <osv/xen.hh>
 #endif
-#include <osv/options.hh>
 #include <osv/mount.h>
 #include <dirent.h>
 #include <mntent.h>
@@ -112,8 +108,13 @@ void premain()
 
 #ifdef __aarch64__
     extern u64 kernel_vm_shift;
-    auto elf_header_virt_address = (void*)elf_header + kernel_vm_shift;
+    auto elf_header_virt_address = (char*)elf_header + kernel_vm_shift;
 #endif
+
+    // Publish the kernel ELF header address for the dynamic-linker
+    // introspection used by the C++ exception unwinder (see libc/dlfcn.cc).
+    extern void* __kernel_ehdr;
+    __kernel_ehdr = elf_header_virt_address;
 
     auto inittab = elf::get_init(reinterpret_cast<elf::Elf64_Ehdr*>(
         elf_header_virt_address));
@@ -131,11 +132,11 @@ void premain()
     boot_time.event(".init functions");
 }
 
-int main(int loader_argc, char **loader_argv)
+int main()
 {
     smp_initial_find_current_cpu()->init_on_cpu();
-    void main_cont(int loader_argc, char** loader_argv);
-    sched::init([=] { main_cont(loader_argc, loader_argv); });
+    void main_cont();
+    sched::init([] { main_cont(); });
 }
 
 static bool opt_preload_zfs_library = false;
@@ -157,9 +158,7 @@ static bool opt_mount = true;
 static bool opt_pivot = true;
 static std::string opt_rootfs;
 static bool opt_random = true;
-static bool opt_init = true;
 static std::string opt_console = "all";
-static bool opt_verbose = false;
 static std::string opt_chdir;
 static bool opt_bootchart = false;
 static std::vector<std::string> opt_ip;
@@ -177,274 +176,6 @@ static int sampler_frequency;
 static bool opt_enable_sampler = false;
 #endif
 
-static void usage()
-{
-    printf(
-        "OSv options:\n"
-        "  --help                show help text\n"
-#if CONF_tracepoints
-#if CONF_tracepoints_sampler
-        "  --sampler=arg         start stack sampling profiler\n"
-#endif
-        "  --trace=arg           tracepoints to enable\n"
-        "  --trace-backtrace     log backtraces in the tracepoint log\n"
-        "  --trace-list          list available tracepoints\n"
-#if CONF_tracepoints_strace
-        "  --strace              start a thread to print tracepoints to the console on the fly\n"
-#endif
-#endif
-#if CONF_memory_tracker
-        "  --leak                start leak detector after boot\n"
-#endif
-        "  --nomount             don't mount the root file system\n"
-        "  --nopivot             do not pivot the root from bootfs to the root fs\n"
-        "  --rootfs=arg          root filesystem to use (zfs, rofs, ramfs or virtiofs)\n"
-        "  --assign-net          assign virtio network to the application\n"
-        "  --maxnic=arg          maximum NIC number\n"
-        "  --norandom            don't initialize any random device\n"
-        "  --noshutdown          continue running after main() returns\n"
-        "  --power-off-on-abort  use poweroff instead of halt if it's aborted\n"
-        "  --noinit              don't run commands from /init\n"
-        "  --verbose             be verbose, print debug messages\n"
-        "  --console=arg         select console driver\n"
-        "  --env=arg             set Unix-like environment variable (putenv())\n"
-        "  --cwd=arg             set current working directory\n"
-        "  --bootchart           perform a test boot measuring a time distribution of\n"
-        "                        the various operations\n\n"
-#if CONF_networking_stack
-        "  --ip=arg              set static IP on NIC\n"
-        "  --defaultgw=arg       set default gateway address\n"
-        "  --nameserver=arg      set nameserver address\n"
-#endif
-        "  --delay=arg (=0)      delay in seconds before boot\n"
-        "  --redirect=arg        redirect stdout and stderr to file\n"
-        "  --disable_rofs_cache  disable ROFS memory cache\n"
-        "  --nopci               disable PCI enumeration\n"
-        "  --extra-zfs-pools     import extra ZFS pools\n"
-        "  --mount-fs=arg        mount extra filesystem, format:<fs_type,url,path>\n"
-        "  --preload-zfs-library preload ZFS library from /usr/lib/fs\n\n");
-}
-
-static void handle_parse_error(const std::string &message)
-{
-    printf("%s\n", message.c_str());
-    usage();
-    osv::poweroff();
-}
-
-static bool extract_option_flag(std::map<std::string,std::vector<std::string>> &options_values, const std::string &name)
-{
-    return options::extract_option_flag(options_values, name, handle_parse_error);
-}
-
-static void parse_options(int loader_argc, char** loader_argv)
-{
-    auto options_values = options::parse_options_values(loader_argc, loader_argv, handle_parse_error, false);
-
-    if (extract_option_flag(options_values, "help")) {
-        usage();
-    }
-
-#if CONF_memory_tracker
-    if (extract_option_flag(options_values, "leak")) {
-        opt_leak = true;
-    }
-#endif
-
-    if (extract_option_flag(options_values, "disable_rofs_cache")) {
-        opt_disable_rofs_cache = true;
-    }
-
-    if (extract_option_flag(options_values, "preload-zfs-library")) {
-        opt_preload_zfs_library = true;
-    }
-
-    if (extract_option_flag(options_values, "extra-zfs-pools")) {
-        opt_extra_zfs_pools = true;
-    }
-
-    if (extract_option_flag(options_values, "noshutdown")) {
-        opt_noshutdown = true;
-    }
-
-    if (extract_option_flag(options_values, "power-off-on-abort")) {
-        opt_power_off_on_abort = true;
-    }
-
-    if (options::option_value_exists(options_values, "maxnic")) {
-        opt_maxnic = true;
-        maxnic = options::extract_option_int_value(options_values, "maxnic", handle_parse_error);
-    }
-
-#if CONF_tracepoints
-    if (extract_option_flag(options_values, "trace-backtrace")) {
-        opt_log_backtrace = true;
-    }
-
-    if (extract_option_flag(options_values, "trace-list")) {
-        opt_list_tracepoints = true;
-    }
-#endif
-
-    if (extract_option_flag(options_values, "verbose")) {
-        opt_verbose = true;
-        enable_verbose();
-    }
-
-#if CONF_tracepoints_sampler
-    if (options::option_value_exists(options_values, "sampler")) {
-        sampler_frequency = options::extract_option_int_value(options_values, "sampler", handle_parse_error);
-        opt_enable_sampler = true;
-    }
-#endif
-
-    if (extract_option_flag(options_values, "bootchart")) {
-        opt_bootchart = true;
-    }
-
-#if CONF_tracepoints
-    if (options::option_value_exists(options_values, "trace")) {
-        auto tv = options::extract_option_values(options_values, "trace");
-        for (auto t : tv) {
-            std::vector<std::string> tmp;
-            osv::split(tmp, t, " ,", true);
-            for (auto t : tmp) {
-                enable_tracepoint(t);
-            }
-        }
-#if CONF_tracepoints_strace
-        if (extract_option_flag(options_values, "strace")) {
-            opt_strace = true;
-        }
-#endif
-    }
-#endif
-
-    opt_mount = !extract_option_flag(options_values, "nomount");
-    opt_pivot = !extract_option_flag(options_values, "nopivot");
-    opt_random = !extract_option_flag(options_values, "norandom");
-    opt_init = !extract_option_flag(options_values, "noinit");
-
-    if (options::option_value_exists(options_values, "console")) {
-        auto v = options::extract_option_values(options_values, "console");
-        if (v.size() > 1) {
-            printf("Ignoring '--console' options after the first.");
-        }
-        opt_console = v.front();
-        debugf("console=%s\n", opt_console.c_str());
-    }
-
-    if (options::option_value_exists(options_values, "rootfs")) {
-        auto v = options::extract_option_values(options_values, "rootfs");
-        if (v.size() > 1) {
-            printf("Ignoring '--rootfs' options after the first.");
-        }
-        opt_rootfs = v.front();
-    }
-
-    if (options::option_value_exists(options_values, "mount-fs")) {
-        auto mounts = options::extract_option_values(options_values, "mount-fs");
-        for (auto m : mounts) {
-            std::vector<std::string> tmp;
-            osv::split(tmp, m, ",", true);
-            if (tmp.size() != 3 || tmp[0].empty() || tmp[1].empty() || tmp[2].empty()) {
-                printf("Ignoring value: '%s' for option mount-fs, expected in format: <fs_type,url,path>\n", m.c_str());
-                continue;
-            }
-            mntent mount = {
-                .mnt_fsname = strdup(tmp[1].c_str()),
-                .mnt_dir = strdup(tmp[2].c_str()),
-                .mnt_type = strdup(tmp[0].c_str()),
-                .mnt_opts = nullptr
-            };
-            opt_mount_fs.push_back(mount);
-        }
-    }
-
-    if (options::option_value_exists(options_values, "env")) {
-        for (auto t : options::extract_option_values(options_values, "env")) {
-            debugf("Setting in environment: %s\n", t.c_str());
-            putenv(strdup(t.c_str()));
-        }
-    }
-
-    if (options::option_value_exists(options_values, "cwd")) {
-        auto v = options::extract_option_values(options_values, "cwd");
-        if (v.size() > 1) {
-            printf("Ignoring '--cwd' options after the first.");
-        }
-        opt_chdir = v.front();
-    }
-
-    if (options::option_value_exists(options_values, "ip")) {
-        opt_ip = options::extract_option_values(options_values, "ip");
-    }
-
-    if (options::option_value_exists(options_values, "defaultgw")) {
-        opt_defaultgw = options::extract_option_value(options_values, "defaultgw");
-    }
-
-    if (options::option_value_exists(options_values, "nameserver")) {
-        opt_nameserver = options::extract_option_value(options_values, "nameserver");
-    }
-
-    if (options::option_value_exists(options_values, "redirect")) {
-        opt_redirect = options::extract_option_value(options_values, "redirect");
-    }
-
-    if (options::option_value_exists(options_values, "delay")) {
-        boot_delay = std::chrono::duration_cast<std::chrono::nanoseconds>(1_s * options::extract_option_float_value(options_values, "delay", handle_parse_error));
-    } else {
-        boot_delay = std::chrono::duration_cast<std::chrono::nanoseconds>(1_s * 0.0f);
-    }
-
-    if (extract_option_flag(options_values, "nopci")) {
-        opt_pci_disabled = true;
-    }
-
-    if (!options_values.empty()) {
-        for (auto other_option : options_values) {
-            printf("unrecognized option: %s\n", other_option.first.c_str());
-        }
-
-        usage();
-        osv::poweroff();
-    }
-}
-
-// return the std::string and the commands_args poiting to them as a move
-#if HIDE_SYMBOLS < 1
-#include <iostream>
-#endif
-std::vector<std::vector<std::string> > prepare_commands(char* app_cmdline)
-{
-    std::vector<std::vector<std::string> > commands;
-    bool ok;
-
-//When the kernel is linked in with full standard C++ library
-//and all symbols exposed, the std::cout needs to be initialized
-//early before any C++ application is executed. This is not necessary
-//when the kernel is built with all symbols but glibc and standard C++
-//library hidden.
-//For details please read comments of this commit a5e83688f1aa30498c5e270a6cdc04222ede8cb6
-#if HIDE_SYMBOLS < 1
-    std::cout << "Cmdline: " << app_cmdline << "\n";
-#else
-    printf("Cmdline: %s\n", app_cmdline);
-#endif
-    commands = osv::parse_command_line(app_cmdline, ok);
-
-    if (!ok) {
-        puts("Failed to parse command line.");
-        osv::poweroff();
-    }
-    if (commands.size() == 0) {
-        puts("This image has an empty command line. Nothing to run.");
-        osv::poweroff();
-    }
-
-    return commands;
-}
 
 static int load_fs_library(const char* fs_library_path, std::function<int()> on_load_fun = nullptr)
 {
@@ -690,17 +421,11 @@ void* do_main_thread(void *_main_args)
     return nullptr;
 }
 
-void main_cont(int loader_argc, char** loader_argv)
+void main_cont()
 {
     osv::firmware_probe();
 
     debugf("Firmware vendor: %s\n", osv::firmware_vendor().c_str());
-
-    elf::create_main_program();
-
-    std::vector<std::vector<std::string> > cmds;
-
-    parse_options(loader_argc, loader_argv);
 
     setenv("OSV_VERSION", osv::version().c_str(), 1);
 
@@ -741,7 +466,6 @@ void main_cont(int loader_argc, char** loader_argv)
 #endif
 #endif
     sched::init_detached_threads_reaper();
-    elf::setup_missing_symbols_detector();
 
     bsd_init();
 
@@ -778,7 +502,7 @@ void main_cont(int loader_argc, char** loader_argv)
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setaffinity_np(&attr, sizeof(cpuset), &cpuset);
-    pthread_create(&pthread, &attr, do_main_thread, (void *) __app_cmdline);
+    pthread_create(&pthread, &attr, do_main_thread, nullptr);
     void* retval;
     pthread_join(pthread, &retval);
 
@@ -800,7 +524,3 @@ void main_cont(int loader_argc, char** loader_argv)
     }
 #endif
 }
-
-int __loader_argc = 0;
-char** __loader_argv = nullptr;
-char* __app_cmdline = nullptr;
