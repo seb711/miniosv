@@ -28,7 +28,6 @@ __finitef = finitef;
 __finitel = finitel;
 
 /* locale */
-__toupper_l = toupper_l;
 newlocale = __newlocale;
 
 /* multibyte */
