@@ -99,33 +99,14 @@ out = build/$(mode).$(arch)
 outlink = build/$(mode)
 outlink2 = build/last
 
-ifneq ($(MAKECMDGOALS),menuconfig)
-# Include the kernel configuration file if present, otherwise generate a default one
-ifeq (,$(wildcard $(out)/gen/config/kernel_conf.mk))
-    $(info Generating default kernel configuration file)
-    $(shell make -f conf/Makefile -j1 config 1>/dev/null)
-endif
-include $(out)/gen/config/kernel_conf.mk
-endif
-#
-# This parameter can be passed in to the build command to specify name of
-# a drivers profile. The drivers profile allows to build custom kernel with
-# a specific set of drivers enabled in the corresponding makefile include
-# file - conf/profiles/$(arch)/$(conf_drivers_profile).mk). The default profile is
-# 'all' which incorporates all drivers into kernel.
-# In general the profiles set variables named conf_drivers_*, which then in turn
-# are used in the rules below to decide which object files are linked into
-# kernel.
-conf_drivers_profile?=all
-ifeq (,$(wildcard conf/profiles/$(arch)/$(conf_drivers_profile).mk))
-    $(error unsupported drivers profile $(conf_drivers_profile))
-endif
-include conf/profiles/$(arch)/$(conf_drivers_profile).mk
-# The base profile disables all drivers unless they are explicitly enabled
-# by the profile file included in the line above. The base profile also enforces
-# certain dependencies between drivers, for example the ide driver needs pci support, etc.
-# For more details please read comments in the profile file.
-include conf/profiles/$(arch)/base.mk
+# The kernel configuration is frozen: a single configuration is checked in at
+# conf/config.mk (the conf_* options and the device-driver set, formerly the
+# kconfig output and the 'all' driver profile). The arch/mode value files
+# conf/base.mk, conf/$(mode).mk and conf/$(arch).mk were already included above.
+# There is no kconfig, no .config, and no generation step - to change the
+# configuration, edit conf/config.mk. The conf_drivers_* variables it defines
+# decide which driver objects are linked in the rules below.
+include conf/config.mk
 
 ifneq ($(MAKECMDGOALS),clean)
 $(info Building into $(out))
@@ -169,10 +150,6 @@ all: $(out)/zfs_builder.img
 endif
 endif
 .PHONY: all
-
-menuconfig:
-	$(call quiet, make -s -f conf/Makefile default_config -j1, GEN default $(out)/.config)
-	make -s -f conf/Makefile menuconfig -j1
 
 links:
 	$(call very-quiet, ln -nsf $(notdir $(out)) $(outlink))
@@ -398,19 +375,19 @@ build-so = $(CC) $(CFLAGS) -o $@ $^ $(EXTRA_LIBS)
 q-build-so = $(call quiet, $(build-so), LINK $@)
 
 
-$(out)/%.o: %.cc $(out)/gen/include/osv/kernel_config_hide_symbols.h | generated-headers
+$(out)/%.o: %.cc include/osv/kernel_config_hide_symbols.h | generated-headers
 	$(makedir)
 	$(call quiet, $(CXX) $(CXXFLAGS) -c -o $@ $<, CXX $*.cc)
 
-$(out)/%.o: %.c $(out)/gen/include/osv/kernel_config_hide_symbols.h | generated-headers
+$(out)/%.o: %.c include/osv/kernel_config_hide_symbols.h | generated-headers
 	$(makedir)
 	$(call quiet, $(CC) $(CFLAGS) -c -o $@ $<, CC $*.c)
 
-$(out)/%.o: %.S $(out)/gen/include/osv/kernel_config_hide_symbols.h
+$(out)/%.o: %.S include/osv/kernel_config_hide_symbols.h
 	$(makedir)
 	$(call quiet, $(CXX) $(CXXFLAGS) $(ASFLAGS) -c -o $@ $<, AS $*.S)
 
-$(out)/%.o: %.s $(out)/gen/include/osv/kernel_config_hide_symbols.h
+$(out)/%.o: %.s include/osv/kernel_config_hide_symbols.h
 	$(makedir)
 	$(call quiet, $(CXX) $(CXXFLAGS) $(ASFLAGS) -c -o $@ $<, AS $*.s)
 
@@ -2332,7 +2309,7 @@ $(out)/tools/cpiod/cpiod.so: $(out)/tools/cpiod/cpiod.o $(out)/tools/cpiod/cpio.
 # re-created on every compilation. "generated-headers" is used as an order-
 # only dependency on C compilation rules above, so we don't try to compile
 # C code before generating these headers.
-generated-headers: $(out)/gen/include/bits/alltypes.h perhaps-modify-version-h perhaps-modify-drivers-config-h perhaps-modify-syscalls-h
+generated-headers: $(out)/gen/include/bits/alltypes.h perhaps-modify-version-h perhaps-modify-syscalls-h
 .PHONY: generated-headers
 
 # While other generated headers only need to be generated once, version.h
@@ -2353,16 +2330,8 @@ perhaps-modify-syscalls-h:
 	$(call quiet, bash scripts/gen-syscalls $(out)/gen/include/osv/ $(conf_syscalls_list_file), GEN gen/include/osv/syscall_*)
 .PHONY: perhaps-modify-syscalls-h
 
-# Using 'if ($(conf_drivers_*),1)' in the rules below is enough to include whole object
-# files. Sometimes though we need to enable or disable portions of the code specific
-# to given driver (the arch-setup.cc is best example). To that end the rule below
-# generates drivers_config.h header file with the macros CONF_drivers_* which is
-# then included by relevant source files.
-# This allows for fairly rapid rebuilding of the kernel for specified profiles
-# as only few files need to be re-compiled.
-perhaps-modify-drivers-config-h:
-	$(call quiet, sh scripts/gen-drivers-config-header $(arch) $(out)/gen/include/osv/drivers_config.h, GEN gen/include/osv/drivers_config.h)
-.PHONY: perhaps-modify-drivers-config-h
+# The CONF_drivers_* macros used by source code (e.g. arch-setup.cc) are frozen
+# in the checked-in include/osv/drivers_config.h; nothing is generated here.
 
 $(out)/gen/include/bits/alltypes.h: include/api/$(arch)/bits/alltypes.h.sh
 	$(makedir)
