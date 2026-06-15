@@ -879,9 +879,9 @@ drivers += drivers/virtio-vring.o
 ifeq ($(conf_drivers_mmio),1)
 drivers += drivers/virtio-mmio.o
 endif
-# Block-device and filesystem virtio drivers (virtio-blk, virtio-scsi,
-# virtio-fs, nvme) are gone together with the filesystem; only virtio-rng
-# remains (virtio-net went with the networking stack).
+# Block-device and filesystem virtio drivers (virtio-blk, virtio-fs, nvme)
+# are gone together with the filesystem; only virtio-rng remains (virtio-net
+# went with the networking stack, virtio-scsi with the SCSI layer).
 drivers += drivers/virtio-rng.o
 endif
 
@@ -905,14 +905,8 @@ drivers += drivers/rtc.o
 ifeq ($(conf_drivers_ahci),1)
 drivers += drivers/ahci.o
 endif
-ifeq ($(conf_drivers_scsi),1)
-drivers += drivers/scsi-common.o
-endif
 ifeq ($(conf_drivers_ide),1)
 drivers += drivers/ide.o
-endif
-ifeq ($(conf_drivers_pvscsi),1)
-drivers += drivers/vmw-pvscsi.o
 endif
 
 ifeq ($(conf_drivers_xen),1)
