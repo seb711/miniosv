@@ -20,49 +20,6 @@
 extern "C" size_t __tlsdesc_static(size_t *);
 namespace elf {
 
-// This function is solely used to relocate symbols in OSv kernel ELF
-// and is indirectly called by loader premain() function
-bool arch_init_reloc_dyn(struct init_table *t, u32 type, u32 sym,
-                         void *addr, void *base, Elf64_Sxword addend)
-{
-    switch (type) {
-    case R_X86_64_NONE:
-        break;
-    case R_X86_64_COPY: {
-        const Elf64_Sym *st = t->dyn_tabs.lookup(sym);
-        memcpy(addr, (void *)st->st_value, st->st_size);
-        break;
-    }
-    case R_X86_64_64:
-        *static_cast<u64*>(addr) = t->dyn_tabs.lookup(sym)->st_value + addend;
-        break;
-    case R_X86_64_RELATIVE:
-        *static_cast<void**>(addr) = static_cast<char*>(base) + addend;
-        break;
-    case R_X86_64_JUMP_SLOT:
-    case R_X86_64_GLOB_DAT:
-        *static_cast<u64*>(addr) = t->dyn_tabs.lookup(sym)->st_value;
-        break;
-    case R_X86_64_DTPMOD64:
-        abort();
-        //*static_cast<u64*>(addr) = symbol_module(sym);
-        break;
-    case R_X86_64_DTPOFF64:
-        *static_cast<u64*>(addr) = t->dyn_tabs.lookup(sym)->st_value;
-        break;
-    case R_X86_64_TPOFF64:
-        // FIXME: assumes TLS segment comes before DYNAMIC segment
-        *static_cast<u64*>(addr) = t->dyn_tabs.lookup(sym)->st_value - t->tls.size;
-        break;
-    case R_X86_64_IRELATIVE:
-        *static_cast<void**>(addr) = reinterpret_cast<void *(*)()>(static_cast<char*>(base) + addend)();
-        break;
-    default:
-        return false;
-    }
-    return true;
-}
-
 //
 // This method is used when relocating symbols in all ELF objects
 // except for OSv kernel ELF itself which is relocated by
