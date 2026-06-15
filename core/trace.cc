@@ -11,7 +11,6 @@
 #include <osv/mutex.h>
 #include "arch.hh"
 #include <atomic>
-#include <regex.h>
 #include <unordered_map>
 #include <boost/range/algorithm/remove.hpp>
 #include <sys/types.h>
@@ -135,9 +134,49 @@ static bool global_backtrace_enabled;
 
 typeof(tracepoint_base::tp_list) tracepoint_base::tp_list __attribute__((init_priority((int)init_prio::tracepoint_base)));
 
+// Tracepoint patterns are wildcards: '*' matches any sequence, '?' any
+// one character, applied anywhere in the name - the same substring
+// semantics the regcomp/regexec implementation had. Hand-rolled so the
+// kernel needs no regex engine (and thus no wide-ctype family).
+//
+// The matcher itself is the classic two-pointer full-string glob with
+// star backtracking; the substring behavior comes from matching a
+// pattern pre-wrapped as "*<pattern>*" (wrap_wildcard).
+static bool wildcard_match(const std::string& wrapped, const char* name)
+{
+    const char* p = wrapped.c_str();
+    const char* s = name;
+    const char* star_p = nullptr;
+    const char* star_s = nullptr;
+
+    while (*s) {
+        if (*p == '?' || *p == *s) {
+            p++;
+            s++;
+        } else if (*p == '*') {
+            star_p = ++p;
+            star_s = s;
+        } else if (star_p) {
+            p = star_p;
+            s = ++star_s;
+        } else {
+            return false;
+        }
+    }
+    while (*p == '*') {
+        p++;
+    }
+    return *p == '\0';
+}
+
+static std::string wrap_wildcard(const std::string& pattern)
+{
+    return "*" + pattern + "*";
+}
+
 // Note: the definition of this list is: "expressions from command line",
 // and its only use is to deal with late initialization of tp:s
-std::vector<regex_t> enabled_tracepoint_regexs;
+std::vector<std::string> enabled_tracepoint_wildcards;
 
 void enable_trace()
 {
@@ -174,16 +213,8 @@ void ensure_log_initialized()
 
 void enable_tracepoint(std::string wildcard)
 {
-    std::string pattern(wildcard);
-    osv::replace_all(pattern, std::string("*"), std::string(".*"));
-    osv::replace_all(pattern, std::string("?"), std::string("."));
-    regex_t re;
-    if (regcomp(&re, pattern.c_str(), REG_NOSUB) == 0) {
-        trace::set_event_state(&re, true);
-        enabled_tracepoint_regexs.push_back(re);
-    } else {
-        throw std::runtime_error("Failed to compile regular expression '" + wildcard + "'");
-    }
+    trace::set_event_state_matching(wildcard, true);
+    enabled_tracepoint_wildcards.push_back(wrap_wildcard(wildcard));
 }
 
 void enable_backtraces(bool backtrace) {
@@ -315,8 +346,8 @@ void tracepoint_base::run_probes() {
 
 void tracepoint_base::try_enable()
 {
-    for (auto& re : enabled_tracepoint_regexs) {
-        if (regexec(&re, name, 0, nullptr, 0) == 0) {
+    for (auto& wrapped : enabled_tracepoint_wildcards) {
+        if (wildcard_match(wrapped, name)) {
             // keep the same semantics for command line enabled
             // tp:s as before individually controlled points.
             backtrace(global_backtrace_enabled);
@@ -454,13 +485,14 @@ trace::get_event_info()
 }
 
 std::vector<trace::event_info>
-trace::get_event_info(const regex_t * ex)
+trace::get_event_info_matching(const std::string & wildcard)
 {
     std::vector<event_info> res;
+    const auto wrapped = wrap_wildcard(wildcard);
 
     WITH_LOCK(trace_control_lock) {
         for (auto & tp : tracepoint_base::tp_list) {
-            if (regexec(ex, tp.name, 0, nullptr, 0) == 0) {
+            if (wildcard_match(wrapped, tp.name)) {
                 res.emplace_back(tp);
             }
         }
@@ -470,14 +502,15 @@ trace::get_event_info(const regex_t * ex)
 }
 
 std::vector<trace::event_info>
-trace::set_event_state(const regex_t * ex, bool enable, bool backtrace) {
+trace::set_event_state_matching(const std::string & wildcard, bool enable, bool backtrace) {
     std::vector<event_info> res;
+    const auto wrapped = wrap_wildcard(wildcard);
 
     // Note: expressions sent here are only treated as instantaneous requests.
     // unlike command line, which is "persisted" and queried on a late tp init.
     WITH_LOCK(trace_control_lock) {
         for (auto & tp : tracepoint_base::tp_list) {
-            if (regexec(ex, tp.name, 0, nullptr, 0) == 0) {
+            if (wildcard_match(wrapped, tp.name)) {
                 res.emplace_back(tp);
                 tp.enable(enable);
                 tp.backtrace(backtrace);
