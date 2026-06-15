@@ -21,12 +21,12 @@ mutex mtx;
 
 volatile u32* index_reg()
 {
-    return static_cast<volatile u32*>(base + index_reg_offset);
+    return reinterpret_cast<volatile u32*>(static_cast<volatile char*>(base) + index_reg_offset);
 }
 
 volatile u32* data_reg()
 {
-    return static_cast<volatile u32*>(base + data_reg_offset);
+    return reinterpret_cast<volatile u32*>(static_cast<volatile char*>(base) + data_reg_offset);
 }
 
 u32 read(unsigned reg)

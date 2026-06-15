@@ -105,7 +105,7 @@ void premain()
     arch_init_premain();
 
 #ifdef __x86_64__
-    auto elf_header_virt_address = (void*)elf_header + OSV_KERNEL_VM_SHIFT;
+    auto elf_header_virt_address = (char*)elf_header + OSV_KERNEL_VM_SHIFT;
 #endif
 
 #ifdef __aarch64__

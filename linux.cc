@@ -554,7 +554,7 @@ static int sys_clone3(struct clone_args *args, size_t size)
 {
     return sys_clone(
        args->flags,
-       reinterpret_cast<void*>(args->stack) + args->stack_size,
+       reinterpret_cast<char*>(args->stack) + args->stack_size,
        reinterpret_cast<int*>(args->parent_tid),
 #ifdef __x86_64__
        reinterpret_cast<int*>(args->child_tid),

@@ -11,8 +11,7 @@
 #include <osv/execinfo.hh>
 
 callstack_collector::callstack_collector(size_t nr_traces, unsigned skip_frames, unsigned nr_frames)
-    : _nr_traces(nr_traces)
-    , _skip_frames(skip_frames)
+    : _skip_frames(skip_frames)
     , _nr_frames(nr_frames)
     , _buffer(malloc(nr_traces * trace_object_size()))
     , _free_traces(reinterpret_cast<uintptr_t>(_buffer))

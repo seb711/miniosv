@@ -26,7 +26,7 @@
 // mechanism (e.g., see Event objects in Python and in Microsoft Windows),
 // except that waiter is limited to a single waiting thread.
 
-namespace lockfree { struct mutex; }
+namespace lockfree { class mutex; }
 
 class waiter {
 protected:

@@ -47,6 +47,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <vector>
 #include <errno.h>
 #include <fcntl.h>
 
@@ -268,10 +269,10 @@ sys_read(struct file *fp, const struct iovec *iov, size_t niov,
     // Unfortunately, the current implementation of fp->read zeros the
     // iov_len fields when it reads from disk, so we have to copy iov.
     assert(niov <= UIO_MAXIOV);
-    struct iovec copy_iov[niov];
-    memcpy(copy_iov, iov, sizeof(copy_iov));
+    std::vector<struct iovec> copy_iov(niov);
+    memcpy(copy_iov.data(), iov, niov * sizeof(struct iovec));
 
-    uio.uio_iov = copy_iov;
+    uio.uio_iov = copy_iov.data();
     uio.uio_iovcnt = niov;
     uio.uio_offset = offset;
     uio.uio_resid = bytes;
@@ -307,10 +308,10 @@ sys_write(struct file *fp, const struct iovec *iov, size_t niov,
     // Unfortunately, the current implementation of fp->write zeros the
     // iov_len fields when it writes to disk, so we have to copy iov.
     assert(niov <= UIO_MAXIOV);
-    struct iovec copy_iov[niov];
-    memcpy(copy_iov, iov, sizeof(copy_iov));
+    std::vector<struct iovec> copy_iov(niov);
+    memcpy(copy_iov.data(), iov, niov * sizeof(struct iovec));
 
-    uio.uio_iov = copy_iov;
+    uio.uio_iov = copy_iov.data();
     uio.uio_iovcnt = niov;
     uio.uio_offset = offset;
     uio.uio_resid = bytes;
@@ -892,7 +893,7 @@ out:
 int
 sys_link(char *oldpath, char *newpath)
 {
-	struct dentry *olddp, *newdp, *newdirdp;
+	struct dentry *olddp, *newdp = nullptr, *newdirdp;
 	struct vnode *vp;
 	char *name;
 	int error;

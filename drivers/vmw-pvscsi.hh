@@ -127,7 +127,7 @@ public:
     pvscsi(pci::device& dev);
     ~pvscsi();
 
-    virtual std::string get_name() const { return _driver_name; }
+    virtual std::string get_name() const override { return _driver_name; }
     static struct pvscsi_priv *get_priv(struct bio *bio) {
         return reinterpret_cast<struct pvscsi_priv*>(bio->bio_dev->private_data);
     }
@@ -141,7 +141,7 @@ public:
 
     void req_done();
     bool ack_irq();
-    void dump_config();
+    void dump_config() override;
     bool parse_pci_config();
 
     static hw_driver* probe(hw_device* dev);

@@ -507,7 +507,7 @@ void net::receiver()
                 nbufs = mhdr->num_buffers;
             }
 
-            packet.push_back({buffer + _hdr_size, len - _hdr_size});
+            packet.push_back({(char*)buffer + _hdr_size, len - _hdr_size});
 
             // Read the fragments - only applies if _mergeable_bufs is ON
             while (--nbufs > 0) {

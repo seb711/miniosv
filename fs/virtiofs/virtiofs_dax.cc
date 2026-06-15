@@ -6,6 +6,7 @@
  */
 
 #include <algorithm>
+#include <osv/mmio.hh>
 #include <mutex>
 
 #include <api/assert.h>
@@ -65,7 +66,7 @@ int dax_manager<W>::read(virtiofs_inode& inode, uint64_t file_handle,
     }
 
 out:
-    auto req_data = _window.data() + (mp.mstart * _chunk_size) + coffset;
+    auto req_data = mmio_a(mmio_a(_window.data(), mp.mstart * _chunk_size), coffset);
     auto read_amt_act = std::min<size_t>(read_amt,
         (mp.nchunks * _chunk_size) - coffset);
     // NOTE: It shouldn't be necessary to use the mmio* interface (i.e. volatile

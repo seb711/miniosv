@@ -57,7 +57,7 @@ void __syslog_chk(int priority, int flag, const char *message, ...)
 
     pid = (log_opt & LOG_PID) ? getpid() : 0;
     l = snprintf(buf, sizeof buf, "<%d>%s %s%s%.0d%s: ",
-        priority, timebuf, log_ident, "["+!pid, pid, "]"+!pid);
+        priority, timebuf, log_ident, pid ? "[" : "", pid, pid ? "]" : "");
     l2 = vsnprintf(buf+l, sizeof buf - l, message, ap);
     if (l2 >= 0) {
         if (l2 >= sizeof buf - l) l = sizeof buf - 1;

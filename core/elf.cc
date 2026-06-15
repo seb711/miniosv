@@ -86,9 +86,9 @@ symbol_module::symbol_module(Elf64_Sym* _sym, object* _obj)
 
 void* symbol_module::relocated_addr() const
 {
-    void* base = obj->base();
+    char* base = obj->base();
     if (symbol->st_shndx == SHN_UNDEF || symbol->st_shndx == SHN_ABS) {
-        base = 0;
+        base = nullptr;
     }
     switch (symbol_type(*symbol)) {
     case STT_NOTYPE:
@@ -99,7 +99,7 @@ void* symbol_module::relocated_addr() const
     case STT_IFUNC:
         return reinterpret_cast<void *(*)()>(base + symbol->st_value)();
     case STT_TLS:
-        return obj->tls_addr() + symbol->st_value;
+        return static_cast<char*>(obj->tls_addr()) + symbol->st_value;
     default:
         abort("Unknown symbol type %d\n", symbol_type(*symbol));
     }
@@ -269,7 +269,7 @@ memory_image::memory_image(program& prog, void* base)
     : object(prog, "")
 {
     _ehdr = *static_cast<Elf64_Ehdr*>(base);
-    auto p = static_cast<Elf64_Phdr*>(base + _ehdr.e_phoff);
+    auto p = reinterpret_cast<Elf64_Phdr*>(static_cast<char*>(base) + _ehdr.e_phoff);
     assert(_ehdr.e_phentsize == sizeof(*p));
     _phdrs.assign(p, p + _ehdr.e_phnum);
 }
@@ -335,9 +335,9 @@ void file::read(Elf64_Off offset, void* data, size_t size)
 
 namespace {
 
-void* align(void* addr, ulong align, ulong offset)
+char* align(void* addr, ulong align, ulong offset)
 {
-    return align_up(addr - offset, align) + offset;
+    return static_cast<char*>(align_up(static_cast<char*>(addr) - offset, align)) + offset;
 }
 
 }
@@ -345,7 +345,7 @@ void* align(void* addr, ulong align, ulong offset)
 static bool intersects_with_kernel(Elf64_Addr elf_addr)
 {
     void *addr = reinterpret_cast<void*>(elf_addr);
-    return addr >= elf_start && addr < elf_start + elf_size;
+    return addr >= elf_start && addr < static_cast<char*>(elf_start) + elf_size;
 }
 
 void object::set_base(void* base)
@@ -372,8 +372,8 @@ void object::set_base(void* base)
         }
         // Override the passed in value as the base for non-PICs (Position Dependant Executables)
         // needs to be set to 0 because all the addresses in it are absolute
-        _base = 0x0;
-        _headers_start = reinterpret_cast<void*>(p->p_vaddr) + _ehdr.e_phoff;
+        _base = nullptr;
+        _headers_start = reinterpret_cast<char*>(p->p_vaddr) + _ehdr.e_phoff;
     } else {
         // Otherwise for kernel, PIEs and shared libraries set the base as requested by caller
         _base = align(base, p->p_align, p->p_vaddr & (p->p_align - 1)) - p->p_vaddr;
@@ -384,12 +384,12 @@ void object::set_base(void* base)
     elf_debug("The base set to: %018p and end: %018p\n", _base, _end);
 }
 
-void* object::base() const
+char* object::base() const
 {
     return _base;
 }
 
-void* object::end() const
+char* object::end() const
 {
     return _end;
 }
@@ -497,7 +497,7 @@ void object::process_headers()
             }
             void *start = _base + phdr.p_vaddr;
             char *str = align_up((char *)start + 3 * sizeof(Elf64_Word), 4);
-            struct Elf64_Note header(start, str);
+            Elf64_Note header(start, str);
 
             if (header.n_type != NT_VERSION) {
                 break;
@@ -533,7 +533,7 @@ void object::process_headers()
             elf_debug("Found TLS segment at %018p of aligned size: 0x%x\n", _tls_segment, get_aligned_tls_size());
             break;
         default:
-            abort("Unknown p_type in executable %s: %d\n", pathname(), phdr.p_type);
+            abort("Unknown p_type in executable %s: %d\n", pathname().c_str(), phdr.p_type);
         }
     }
     if (_is_dynamically_linked_executable && _tls_segment) {
@@ -627,7 +627,7 @@ void object::make_text_writable(bool flag)
 template <typename T>
 T* object::dynamic_ptr(unsigned tag)
 {
-    return static_cast<T*>(_base + dynamic_tag(tag).d_un.d_ptr);
+    return reinterpret_cast<T*>(_base + dynamic_tag(tag).d_un.d_ptr);
 }
 
 template <typename T>
@@ -635,7 +635,7 @@ T* object::opt_dynamic_ptr(unsigned tag)
 {
     auto r = _dynamic_tag(tag);
     if (r) {
-        return static_cast<T*>(_base + r->d_un.d_ptr);
+        return reinterpret_cast<T*>(_base + r->d_un.d_ptr);
     }
     return nullptr;
 }
@@ -791,7 +791,7 @@ void object::relocate_relr()
         // - Odd entries can be chained.
         auto entry = *p;
         if ((entry & 1) == 0) {
-            reloc_addr = static_cast<void**>(_base + entry);
+            reloc_addr = reinterpret_cast<void**>(_base + entry);
             u64 val = *reinterpret_cast<u64*>(reloc_addr);
             *reloc_addr++ = _base + val;
         } else {
@@ -857,7 +857,7 @@ void object::relocate_pltgot()
                 // Restore the link to the original plt.
                 // We know the JUMP_SLOT entries are in plt order, and that
                 // each plt entry is 16 bytes.
-                *static_cast<void**>(addr) = original_plt + (p-rel)*16;
+                *static_cast<void**>(addr) = static_cast<char*>(original_plt) + (p-rel)*16;
             } else {
                 // The JUMP_SLOT entry already points back to the PLT, just
                 // make sure it is relocated relative to the object base.
@@ -1093,7 +1093,7 @@ dladdr_info object::lookup_addr(const void* addr)
             best = sm;
         }
     }
-    if (!best.symbol || addr > best.relocated_addr() + best.size()) {
+    if (!best.symbol || addr > static_cast<char*>(best.relocated_addr()) + best.size()) {
         return ret;
     }
     ret.sym = strtab + best.symbol->st_name;
@@ -1786,9 +1786,9 @@ const Elf64_Sym *init_dyn_tabs::lookup(u32 sym)
 
 init_table get_init(Elf64_Ehdr* header)
 {
-    void* pbase = static_cast<void*>(header);
-    void* base = pbase;
-    auto phdr = static_cast<Elf64_Phdr*>(pbase + header->e_phoff);
+    char* pbase = reinterpret_cast<char*>(header);
+    char* base = pbase;
+    auto phdr = reinterpret_cast<Elf64_Phdr*>(pbase + header->e_phoff);
     auto n = header->e_phnum;
     bool base_adjusted = false;
     init_table ret = { 0 };
@@ -1851,7 +1851,7 @@ init_table get_init(Elf64_Ehdr* header)
                     auto info = r->r_info;
                     u32 sym = info >> 32;
                     u32 type = info & 0xffffffff;
-                    void *addr = base + r->r_offset;
+                    void *addr = base + (size_t)r->r_offset;
                     auto addend = r->r_addend;
 
                     if (!arch_init_reloc_dyn(t, type, sym,
@@ -2008,12 +2008,12 @@ void* __tls_get_addr(module_and_offset* mao)
 
     auto tls = sched::thread::current()->get_tls(mao->module);
     if (tls) {
-        return tls + mao->offset;
+        return static_cast<char*>(tls) + mao->offset;
     } else {
         // This module's TLS block hasn't yet been allocated for this thread:
         object *obj = get_program()->tls_object(mao->module);
         assert(mao->module == obj->module_index());
-        return obj->setup_tls() + mao->offset;
+        return static_cast<char*>(obj->setup_tls()) + mao->offset;
     }
 }
 

@@ -37,7 +37,7 @@ bool arch_init_reloc_dyn(struct init_table *t, u32 type, u32 sym,
         *static_cast<u64*>(addr) = t->dyn_tabs.lookup(sym)->st_value + addend;
         break;
     case R_X86_64_RELATIVE:
-        *static_cast<void**>(addr) = base + addend;
+        *static_cast<void**>(addr) = static_cast<char*>(base) + addend;
         break;
     case R_X86_64_JUMP_SLOT:
     case R_X86_64_GLOB_DAT:
@@ -55,7 +55,7 @@ bool arch_init_reloc_dyn(struct init_table *t, u32 type, u32 sym,
         *static_cast<u64*>(addr) = t->dyn_tabs.lookup(sym)->st_value - t->tls.size;
         break;
     case R_X86_64_IRELATIVE:
-        *static_cast<void**>(addr) = reinterpret_cast<void *(*)()>(base + addend)();
+        *static_cast<void**>(addr) = reinterpret_cast<void *(*)()>(static_cast<char*>(base) + addend)();
         break;
     default:
         return false;
@@ -81,17 +81,17 @@ bool object::arch_relocate_rela(u32 type, u32 sym, void *addr,
     case R_X86_64_64: {
         auto _sym = symbol(sym, true);
         if (_sym.symbol) {
-            *static_cast<void**>(addr) = _sym.relocated_addr() + addend;
+            *static_cast<void**>(addr) = static_cast<char*>(_sym.relocated_addr()) + addend;
         } else {
             *static_cast<void**>(addr) = missing_symbols_page_addr;
         }
         break;
     }
     case R_X86_64_RELATIVE:
-        *static_cast<void**>(addr) = _base + addend;
+        *static_cast<void**>(addr) = static_cast<char*>(_base) + addend;
         break;
     case R_X86_64_IRELATIVE:
-        *static_cast<void**>(addr) = reinterpret_cast<void *(*)()>(_base + addend)();
+        *static_cast<void**>(addr) = reinterpret_cast<void *(*)()>(static_cast<char*>(_base) + addend)();
         break;
     case R_X86_64_JUMP_SLOT:
     case R_X86_64_GLOB_DAT: {
@@ -250,7 +250,7 @@ void object::prepare_local_tls(std::vector<ptrdiff_t>& offsets)
 void object::copy_local_tls(void* to_addr)
 {
     memcpy(to_addr, _tls_segment, _tls_init_size); //file size - 48 (0x30) for example and 80 (0x50) for httpserver
-    memset(to_addr + _tls_init_size, 0, _tls_uninit_size);
+    memset(static_cast<char*>(to_addr) + _tls_init_size, 0, _tls_uninit_size);
 }
 
 }

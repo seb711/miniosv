@@ -47,7 +47,7 @@ public:
         } else {
             time >>= -sys->tsc_shift;
         }
-        asm("mul %1; shrd $32, %%rdx, %0"
+        asm("mulq %1; shrd $32, %%rdx, %0"
                 : "+a"(time)
                 : "rm"(u64(sys->tsc_to_system_mul))
                 : "rdx");

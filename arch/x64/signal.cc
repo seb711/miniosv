@@ -30,18 +30,18 @@ void build_signal_frame(exception_frame* ef,
     // sigaltstack() and the SA_ONSTACK flag was specified, we should run
     // the signal handler on that stack. Otherwise, we need to run further
     // down the same stack the thread was using when it received the signal:
-    void *rsp = nullptr;
+    char *rsp = nullptr;
     if (sa.sa_flags & SA_ONSTACK) {
         stack_t sigstack;
         sigaltstack(nullptr, &sigstack);
         if (!(sigstack.ss_flags & SS_DISABLE)) {
             // ss_sp points to the beginning of the stack region, but x86
             // stacks grow downward, from the end of the region
-            rsp = sigstack.ss_sp + sigstack.ss_size;
+            rsp = static_cast<char*>(sigstack.ss_sp) + sigstack.ss_size;
         }
     }
     if (!rsp) {
-        rsp = reinterpret_cast<void*>(ef->rsp);
+        rsp = reinterpret_cast<char*>(ef->rsp);
         rsp -= 128;                 // skip red zone
     }
     rsp -= sizeof(signal_frame);
@@ -49,7 +49,7 @@ void build_signal_frame(exception_frame* ef,
     // signal_frame may want even stricter alignment (but probably won't).
     rsp = align_down(rsp, std::max(16UL, alignof(signal_frame)));
     // signal_frame has no constructors/destructors, so cast is enough
-    auto frame = static_cast<signal_frame*>(rsp);
+    auto frame = reinterpret_cast<signal_frame*>(rsp);
     frame->state = *ef;
     frame->si = si;
     frame->sa = sa;

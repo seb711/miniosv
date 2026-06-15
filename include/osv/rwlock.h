@@ -30,7 +30,7 @@ static_assert(sizeof(lockfree::queue_mpsc<lockfree::linked_item<sched::thread*>>
 static_assert(alignof(lockfree::queue_mpsc<lockfree::linked_item<sched::thread*>>) == alignof(LOCKFREE_QUEUE_MPSC_ALIGN),
          "LOCKFREE_QUEUE_MPSC_ALIGN should match alignment of lockfree::queue_mpsc");
 
-class rwlock;
+struct rwlock;
 
 // an rwlock pretending it is an ordinary lock for
 // WITH_LOCK() and friends.  Taking the lock acquires
@@ -43,7 +43,7 @@ private:
 public:
     void lock();
     void unlock();
-    friend class rwlock;
+    friend struct rwlock;
 };
 
 // an rwlock pretending it is an ordinary lock for
@@ -57,7 +57,7 @@ private:
 public:
     void lock();
     void unlock();
-    friend class rwlock;
+    friend struct rwlock;
 };
 
 struct rwlock : private rwlock_for_read, rwlock_for_write {
