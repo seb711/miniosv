@@ -9,17 +9,8 @@
 #include <sys/time.h>
 #include <osv/mempool.hh>
 
-#include <bsd/porting/callout.h>
-
 #include <bsd/sys/sys/libkern.h>
 #include <bsd/sys/sys/eventhandler.h>
-
-extern "C" {
-    // taskqueue
-    #include <bsd/sys/sys/taskqueue.h>
-    #include <bsd/sys/sys/priority.h>
-    TASKQUEUE_DEFINE_THREAD(thread);
-}
 
 static void physmem_init()
 {
@@ -31,12 +22,6 @@ void bsd_init(void)
     debug("bsd: initializing");
 
     physmem_init();
-
-    // main taskqueue
-    taskqueue_define_thread(NULL);
-
-    // Initialize callouts
-    init_callouts();
 
     /* Random */
     struct timeval tv;

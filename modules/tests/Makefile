@@ -116,7 +116,7 @@ ext-only-tests := tst-readdir.so tst-concurrent-read.so tst-fs-link.so
 specific-fs-tests := $($(fs_type)-only-tests)
 
 tests := tst-pthread.so misc-ramdisk.so tst-vblk.so tst-bsd-evh.so \
-	misc-bsd-callout.so tst-bsd-kthread.so tst-bsd-taskqueue.so \
+	tst-bsd-kthread.so \
 	tst-fpu.so tst-preempt.so tst-tracepoint.so tst-hub.so \
 	misc-console.so misc-leak.so misc-readbench.so misc-mmap-anon-perf.so \
 	tst-mmap-file.so misc-mmap-big-file.so tst-mmap.so tst-huge.so \
@@ -166,7 +166,7 @@ tests := tst-pthread.so misc-ramdisk.so tst-vblk.so tst-bsd-evh.so \
 #api which is unavailable when kernel is built with all but glibc symbols
 #hidden.
 internal-api-tests := tst-app.so tst-async.so tst-bsd-evh.so \
-	tst-bsd-kthread.so tst-bsd-taskqueue.so tst-bsd-tcp1-zrcv.so \
+	tst-bsd-kthread.so tst-bsd-tcp1-zrcv.so \
 	tst-bsd-tcp1-zsnd.so tst-bsd-tcp1-zsndrcv.so tst-clock.so \
 	tst-condvar.so tst-dax.so tst-fpu.so tst-fs-link.so tst-hub.so \
 	tst-huge.so tst-mmap.so tst-namespace.so tst-pin.so tst-preempt.so \
