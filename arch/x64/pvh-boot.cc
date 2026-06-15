@@ -10,7 +10,7 @@ extern "C"
 void hvm_xen_extract_boot_params()
 {
     // Set location of multiboot info struct at arbitrary place in lower memory
-    // to copy to (happens to be the same as in boot16.S)
+    // to copy to (a fixed low-memory address shared by all x64 boot paths)
     osv_multiboot_info_type* mb_info = reinterpret_cast<osv_multiboot_info_type*>(OSV_MULTI_BOOT_INFO_ADDR);
 
     // Copy command line pointer from boot params
