@@ -1086,13 +1086,12 @@ linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --
 endif
 
 # LLVM libc (LLVM_LIBC_PLAN.md): llvm-libc is the generic libc, linked trailing
-# so it supplies any symbol the kernel and the remaining musl/OSv objects do not
-# define. The archive is a no-syscall baremetal libc built automatically by
-# scripts/build-llvm-libc.sh (x86/arm only, no manual step). Migrating a family
-# is just deleting its `musl += ...` lines; the few functions llvm-libc lacks at
-# 22.1.7 (wide ctype, the locale _l family, iconv, the stdio FILE glue, regex,
-# x87 long double) stay as a small set of musl objects, kept below. The musl
-# submodule is removed once nothing references it.
+# so it supplies any symbol the kernel and the OSv libc objects do not define.
+# The archive is a no-syscall baremetal libc built automatically by
+# scripts/build-llvm-libc.sh (x86/arm only, no manual step). The functions
+# llvm-libc 22.1.7 lacks (the stdio FILE glue, x87 long-double helpers, a few
+# env/time/string/multibyte leaves) are now OSv-owned, musl-derived sources
+# under libc/ - the musl submodule was deleted in Phase 8.13.
 llvm_libc_libdir = build/llvm-libc/$(arch)/libc/lib
 llvm_libc_archives = $(llvm_libc_libdir)/libc.a $(llvm_libc_libdir)/libm.a
 $(out)/.llvm-libc-built: scripts/build-llvm-libc.sh tools/llvm-libc/entrypoints.txt tools/llvm-libc/config.json tools/llvm-libc/headers.txt
