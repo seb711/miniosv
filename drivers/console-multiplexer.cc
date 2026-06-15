@@ -9,10 +9,6 @@
 #include <signal.h>
 #include "console-multiplexer.hh"
 
-// Set with set_fp(), each console is only open on one "file" object (which
-// might, in turn, be referred by multiple file descriptors).
-static file *single_fp;
-
 namespace console {
 
 console_multiplexer::console_multiplexer(const termios *tio, console_driver *early_driver)
@@ -29,7 +25,6 @@ void console_multiplexer::driver_add(console_driver *driver)
 void console_multiplexer::start()
 {
     _ldisc = new LineDiscipline(_tio);
-    _ldisc->set_fp(single_fp);
     for (auto driver : _drivers) {
         driver->start([=, this] { _ldisc->read_poll(driver); });
     }
@@ -113,14 +108,6 @@ void console_multiplexer::discard_pending_input()
     if (!_started)
         return;
     _ldisc->discard_pending_input();
-}
-
-void console_multiplexer::set_fp(file *fp)
-{
-    single_fp = fp;
-    if (_started) {
-        _ldisc->set_fp(fp);
-    }
 }
 
 }

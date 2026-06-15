@@ -11,7 +11,6 @@
 #include "mmu.h"  // Port
 #include <osv/mmio.hh>
 #include <osv/mempool.hh>
-#include <osv/pagecache.hh>
 #include <osv/export.h>
 #include <osv/kernel_config_memory_jvm_balloon.h>
 
@@ -50,14 +49,14 @@ int vm_throttling_needed(void)
     return memory::throttling_needed();
 }
 
+// The ZFS arc page-cache integration is gone together with the filesystem and
+// page cache; these hooks are unused no-ops.
 OSV_LIBSOLARIS_API
 void mmu_unmap(void* ab)
 {
-    pagecache::unmap_arc_buf((arc_buf_t*)ab);
 }
 
 OSV_LIBSOLARIS_API
 void mmu_map(void* key, void* ab, void* page)
 {
-    pagecache::map_arc_buf((pagecache::hashkey*)key, (arc_buf_t*)ab, page);
 }

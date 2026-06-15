@@ -191,7 +191,9 @@ sbuf_uionew(struct sbuf *s, struct uio *uio, int *error)
 		*error = ENOMEM;
 		return (NULL);
 	}
-	*error = uiomove(s->s_buf, uio->uio_resid, uio);
+	/* uiomove() went with the filesystem; sbuf-from-uio has no reachable
+	 * caller in the slim kernel (the bsd/ tree is removed in a later phase). */
+	*error = ENOSYS;
 	if (*error != 0) {
 		sbuf_delete(s);
 		return (NULL);

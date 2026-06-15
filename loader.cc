@@ -7,7 +7,6 @@
 
 #include <osv/drivers_config.h>
 #include <osv/kernel_config.h>
-#include "fs/fs.hh"
 #include <bsd/init.hh>
 #include <bsd/net.hh>
 #include <cctype>
@@ -40,14 +39,9 @@
 #if CONF_drivers_xen
 #include <osv/xen.hh>
 #endif
-#include <osv/mount.h>
-#include <dirent.h>
-#include <mntent.h>
 
-#include "drivers/zfs.hh"
 #include "drivers/random.hh"
 #include "drivers/console.hh"
-#include "drivers/null.hh"
 
 #include "libc/network/__dns.hh"
 #include <processor.hh>
@@ -81,12 +75,6 @@ static void setup_tls(elf::init_table& inittab)
 
 extern "C" {
     void premain();
-    void vfs_init(void);
-    void pivot_rootfs(const char*);
-    void unmount_devfs();
-    int mount_rootfs(const char*, const char*, const char*, int, const void*, bool);
-    void import_extra_zfs_pools();
-    void rofs_disable_cache();
     // The statically linked-in application entry point (see app.cc).
     void osv_app_main();
 }
@@ -139,9 +127,6 @@ int main()
     sched::init([] { main_cont(); });
 }
 
-static bool opt_preload_zfs_library = false;
-static bool opt_extra_zfs_pools = false;
-static bool opt_disable_rofs_cache = false;
 #if CONF_memory_tracker
 static bool opt_leak = false;
 #endif
@@ -154,19 +139,10 @@ static bool opt_list_tracepoints = false;
 static bool opt_strace = false;
 #endif
 #endif
-static bool opt_mount = true;
-static bool opt_pivot = true;
-static std::string opt_rootfs;
 static bool opt_random = true;
 static std::string opt_console = "all";
-static std::string opt_chdir;
 static bool opt_bootchart = false;
-static std::vector<std::string> opt_ip;
-static std::string opt_defaultgw;
-static std::string opt_nameserver;
-static std::string opt_redirect;
 static std::chrono::nanoseconds boot_delay;
-std::vector<mntent> opt_mount_fs;
 bool opt_maxnic = false;
 int maxnic;
 bool opt_pci_disabled = false;
@@ -177,64 +153,6 @@ static bool opt_enable_sampler = false;
 #endif
 
 
-static int load_fs_library(const char* fs_library_path, std::function<int()> on_load_fun = nullptr)
-{
-    // Load and initialize filesystem driver
-    if (dlopen(fs_library_path, RTLD_LAZY)) {
-        if (on_load_fun) {
-           return on_load_fun();
-        } else {
-           return 0;
-        }
-    } else {
-        debugf("Could not load and/or initialize %s.\n", fs_library_path);
-        return 1;
-    }
-}
-
-const auto libsolaris_path = "/usr/lib/fs/libsolaris.so";
-static int load_zfs_library_and_mount_zfs_root(bool pivot_when_error = false)
-{
-    // Load and initialize ZFS filesystem driver implemented in libsolaris.so
-    return load_fs_library(libsolaris_path, [pivot_when_error]() {
-        zfsdev::zfsdev_init();
-
-        auto error = mount_rootfs("/zfs", "/dev/vblk0.1", "zfs", 0, (void *)"osv/zfs", opt_pivot);
-        if (!error && opt_pivot && opt_extra_zfs_pools) {
-            import_extra_zfs_pools();
-        }
-        if (error) {
-            debug("Could not mount zfs root filesystem.\n");
-            if (pivot_when_error) {
-                // Continue with ramfs (already mounted)
-                pivot_rootfs("/");
-            }
-        } else {
-            bsd_shrinker_init();
-            boot_time.event("ZFS mounted");
-        }
-        return error;
-    });
-}
-
-
-static int load_ext_library_and_mount_ext_root(bool pivot_when_error = false)
-{
-    // Load and initialize EXT filesystem driver implemented in libext.so
-    return load_fs_library("/usr/lib/fs/libext.so", [pivot_when_error]() {
-        auto error = mount_rootfs("/ext", "/dev/vblk0.1", "ext", 0, nullptr, opt_pivot);
-        if (error) {
-            debug("Could not mount ext root filesystem.\n");
-            if (pivot_when_error) {
-                // Continue with ramfs (already mounted)
-                pivot_rootfs("/");
-            }
-        } else {
-            boot_time.event("EXT mounted");
-        }
-        return error;
-    });
-}
 
 void* do_main_thread(void *_main_args)
 {
@@ -243,72 +161,12 @@ void* do_main_thread(void *_main_args)
     }
     arch_init_drivers();
     console::console_init();
-    nulldev::nulldev_init();
     if (opt_random) {
         randomdev::randomdev_init();
     }
     boot_time.event("drivers loaded");
 
-    if (opt_mount) {
-        unmount_devfs();
-
-        if (opt_rootfs.compare("rofs") == 0) {
-            auto error = mount_rootfs("/rofs", "/dev/vblk0.1", "rofs", MNT_RDONLY, nullptr, opt_pivot);
-            if (error) {
-                debug("Could not mount rofs root filesystem.\n");
-            }
-
-            if (opt_disable_rofs_cache) {
-                debug("Disabling ROFS memory cache.\n");
-                rofs_disable_cache();
-            }
-            boot_time.event("ROFS mounted");
-        } else if (opt_rootfs.compare("ext") == 0) {
-            load_ext_library_and_mount_ext_root();
-        } else if (opt_rootfs.compare("zfs") == 0) {
-            load_zfs_library_and_mount_zfs_root();
-        } else if (opt_rootfs.compare("ramfs") == 0) {
-            // NOTE: The ramfs is already mounted, we just need to mount fstab
-            // entries. That's the only difference between this and --nomount.
-
-            // TODO: Avoid the hack of using pivot_rootfs() just for mounting
-            // the fstab entries.
-            pivot_rootfs("/");
-        } else if (opt_rootfs.compare("virtiofs") == 0) {
-            auto error = mount_rootfs("/virtiofs", "/dev/virtiofs0", "virtiofs", MNT_RDONLY, nullptr, opt_pivot);
-            if (error) {
-                debug("Could not mount virtiofs root filesystem.\n");
-            }
-
-            boot_time.event("Virtio-fs mounted");
-        } else {
-            // Auto-discovery: try rofs -> virtio-fs -> ext -> ZFS
-            debug("Auto-discovering the root filesystem...\n");
-            if (mount_rootfs("/rofs", "/dev/vblk0.1", "rofs", MNT_RDONLY, nullptr, opt_pivot) == 0) {
-                if (opt_disable_rofs_cache) {
-                    debug("Disabling ROFS memory cache.\n");
-                    rofs_disable_cache();
-                }
-                boot_time.event("ROFS mounted");
-            } else if (mount_rootfs("/virtiofs", "/dev/virtiofs0", "virtiofs", MNT_RDONLY, nullptr, opt_pivot) == 0) {
-                boot_time.event("Virtio-fs mounted");
-            } else if (load_ext_library_and_mount_ext_root(true) == 0) {
-                boot_time.event("Extfs mounted");
-            } else {
-                if (load_zfs_library_and_mount_zfs_root(true)) {
-                    debug("Failed to discover the rootfs filesystem. Staying on bootfs.\n");
-                }
-            }
-        }
-    }
-
-    //This option is only used by ZFS builder
-    if (opt_preload_zfs_library) {
-        if (load_fs_library(libsolaris_path)) {
-            fprintf(stderr, "Failed to preload ZFS library. Powering off.\n");
-            osv::poweroff();
-        }
-    }
+    // There is no filesystem: nothing to mount.
 
 #if CONF_networking_stack
     bool has_if = false;
@@ -367,15 +225,6 @@ void* do_main_thread(void *_main_args)
     }
 #endif
 
-    if (!opt_chdir.empty()) {
-        debugf("Chdir to: '%s'\n", opt_chdir.c_str());
-
-        if (chdir(opt_chdir.c_str()) != 0) {
-            perror("chdir");
-        }
-        debug("chdir done\n");
-    }
-
 #if CONF_memory_tracker
     if (opt_leak) {
         debug("Enabling leak detector.\n");
@@ -395,24 +244,6 @@ void* do_main_thread(void *_main_args)
         boot_time.print_chart();
     } else {
         boot_time.print_total_time();
-    }
-
-    if (!opt_redirect.empty()) {
-        // redirect stdout and stdin to the given file, instead of the console
-        // use ">>filename" to append, instead of replace, to a file.
-        bool append = (opt_redirect.substr(0, 2) == ">>");
-        auto fn = opt_redirect.substr(append ? 2 : 0);
-        int fd = open(fn.c_str(),
-                O_WRONLY | O_CREAT | (append ? O_APPEND: O_TRUNC), 777);
-        if (fd < 0) {
-            perror("output redirection failed");
-        } else {
-            printf("%s stdout and stderr to %s\n", (append ? "Appending" : "Writing"), fn.c_str());
-            close(1);
-            close(2);
-            dup(fd);
-            dup(fd);
-        }
     }
 
     // Enter the statically linked-in application.
@@ -468,10 +299,6 @@ void main_cont()
     sched::init_detached_threads_reaper();
 
     bsd_init();
-
-    vfs_init();
-    boot_time.event("VFS initialized");
-    //ramdisk_init();
 
 #if CONF_networking_stack
     net_init();

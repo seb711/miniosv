@@ -10,7 +10,7 @@
 #include <osv/mempool.hh>
 #include "bsd/sys/cddl/compat/opensolaris/sys/kcondvar.h"
 #include "bsd/cddl/compat/opensolaris/include/mnttab.h"
-#include <osv/mount.h>
+#include <osv/uio.h> // pull in (C++-linkage) uio template before extern "C"
 #include <osv/export.h>
 
 extern "C" {

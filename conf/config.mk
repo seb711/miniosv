@@ -18,8 +18,8 @@ conf_tracepoints_sampler=1
 conf_tracepoints_strace=1
 
 # --- networking ------------------------------------------------------------
-conf_networking_stack=1
-conf_networking_dhcp=1
+conf_networking_stack=0
+conf_networking_dhcp=0
 
 # --- core ------------------------------------------------------------------
 conf_core_c_wrappers=1
@@ -53,19 +53,19 @@ conf_drivers_acpi=1
 conf_drivers_pci=1
 conf_drivers_hpet=1
 conf_drivers_vga=1
-conf_drivers_ide=1
-conf_drivers_ahci=1
-conf_drivers_scsi=1
-conf_drivers_pvscsi=1
+conf_drivers_ide=0
+conf_drivers_ahci=0
+conf_drivers_scsi=0
+conf_drivers_pvscsi=0
 conf_drivers_virtio=1
-conf_drivers_virtio_blk=1
-conf_drivers_virtio_scsi=1
-conf_drivers_virtio_fs=1
+conf_drivers_virtio_blk=0
+conf_drivers_virtio_scsi=0
+conf_drivers_virtio_fs=0
 conf_drivers_virtio_net=1
 conf_drivers_virtio_rng=1
 conf_drivers_mmio=1
-conf_drivers_nvme=1
-conf_drivers_xen=1
+conf_drivers_nvme=0
+conf_drivers_xen=0
 conf_drivers_hyperv=1
 conf_drivers_ena=1
 conf_drivers_vmxnet3=1

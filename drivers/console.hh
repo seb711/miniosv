@@ -16,7 +16,6 @@ void write(const char *msg, size_t len);
 void write_ll(const char *msg, size_t len);
 void console_init();
 void console_driver_add(console_driver *driver);
-int open(void);
 
 }
 

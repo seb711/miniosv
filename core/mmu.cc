@@ -17,12 +17,9 @@
 #include <osv/ilog2.hh>
 #include <osv/prio.hh>
 #include <safe-ptr.hh>
-#include "fs/vfs/vfs.h"
 #include <osv/error.h>
 #include <osv/trace.hh>
 #include <stack>
-#include <fs/fs.hh>
-#include <osv/file.h>
 #include "dump.hh"
 #include <osv/rcu.hh>
 #include <osv/rwlock.h>
@@ -756,37 +753,6 @@ public:
     }
 };
 
-class dirty_page_sync {
-    friend dirty_cleaner<dirty_page_sync, account_opt::yes>;
-    friend file_vma;
-private:
-    file *_file;
-    f_offset _offset;
-    uint64_t _size;
-    struct elm {
-        iovec iov;
-        off_t offset;
-    };
-    std::stack<elm> queue;
-    dirty_page_sync(file *file, f_offset offset, uint64_t size) : _file(file), _offset(offset), _size(size) {}
-    void operator()(phys addr, uintptr_t offset, size_t size) {
-        off_t off = _offset + offset;
-        size_t len = std::min(size, _size - off);
-        queue.push(elm{{phys_to_virt(addr), len}, off});
-    }
-    void finalize() {
-        while(!queue.empty()) {
-            elm w = queue.top();
-            uio data{&w.iov, 1, w.offset, ssize_t(w.iov.iov_len), UIO_WRITE};
-            int error = _file->write(&data, FOF_OFFSET);
-            if (error) {
-                throw make_error(error);
-            }
-            queue.pop();
-        }
-    }
-};
-
 class virt_to_phys_map :
         public page_table_operation<allocate_intermediate_opt::no, skip_empty_opt::yes,
         descend_opt::yes, once_opt::yes, split_opt::no> {
@@ -1154,54 +1120,6 @@ private:
     }
 };
 
-class map_file_page_read : public uninitialized_anonymous_page_provider {
-private:
-    file *_file;
-    f_offset foffset;
-
-    virtual void* fill(void* addr, uint64_t offset, uintptr_t size) override {
-        if (addr) {
-            iovec iovec {addr, size};
-            uio data {&iovec, 1, off_t(foffset + offset), ssize_t(size), UIO_READ};
-            _file->read(&data, FOF_OFFSET);
-            /* zero buffer tail on a short read */
-            if (data.uio_resid) {
-                size_t tail = std::min(size, size_t(data.uio_resid));
-                memset((char*)addr + size - tail, 0, tail);
-            }
-        }
-        return addr;
-    }
-public:
-    map_file_page_read(file *file, f_offset foffset) :
-        _file(file), foffset(foffset) {}
-    virtual ~map_file_page_read() {};
-};
-
-class map_file_page_mmap : public page_allocator {
-private:
-    file* _file;
-    off_t _foffset;
-    bool _shared;
-
-public:
-    map_file_page_mmap(file *file, off_t off, bool shared) : _file(file), _foffset(off), _shared(shared) {}
-    virtual ~map_file_page_mmap() {};
-
-    virtual bool map(uintptr_t offset, hw_ptep<0> ptep,  pt_element<0> pte, bool write) override {
-        return _file->map_page(offset + _foffset, ptep, pte, write, _shared);
-    }
-    virtual bool map(uintptr_t offset, hw_ptep<1> ptep, pt_element<1> pte, bool write) override {
-        return _file->map_page(offset + _foffset, ptep, pte, write, _shared);
-    }
-    virtual bool unmap(void *addr, uintptr_t offset, hw_ptep<0> ptep) override {
-        return _file->put_page(addr, offset + _foffset, ptep);
-    }
-    virtual bool unmap(void *addr, uintptr_t offset, hw_ptep<1> ptep) override {
-        return _file->put_page(addr, offset + _foffset, ptep);
-    }
-};
-
 uintptr_t allocate(vma *v, uintptr_t start, size_t size, bool search)
 {
     if (search) {
@@ -1334,34 +1252,6 @@ void* map_anon(const void* addr, size_t size, unsigned flags, unsigned perm)
     return v;
 }
 
-std::unique_ptr<file_vma> default_file_mmap(file* file, addr_range range, unsigned flags, unsigned perm, off_t offset)
-{
-    return std::unique_ptr<file_vma>(new file_vma(range, perm, flags, file, offset, new map_file_page_read(file, offset)));
-}
-
-std::unique_ptr<file_vma> map_file_mmap(file* file, addr_range range, unsigned flags, unsigned perm, off_t offset)
-{
-    return std::unique_ptr<file_vma>(new file_vma(range, perm, flags, file, offset, new map_file_page_mmap(file, offset, flags & mmap_shared)));
-}
-
-void* map_file(const void* addr, size_t size, unsigned flags, unsigned perm,
-              fileref f, f_offset offset)
-{
-    bool search = !(flags & mmu::mmap_fixed);
-    size = align_up(size, mmu::page_size);
-    auto start = reinterpret_cast<uintptr_t>(addr);
-    auto *vma = f->mmap(addr_range(start, start + size), flags | mmap_file, perm, offset).release();
-    void *v;
-    PREVENT_STACK_PAGE_FAULT
-    WITH_LOCK(vma_list_mutex.for_write()) {
-        v = (void*) allocate(vma, start, size, search);
-        if (flags & mmap_populate) {
-            populate_vma(vma, v, std::min(size, align_up(::size(f), page_size)));
-        }
-    }
-    return v;
-}
-
 bool is_linear_mapped(const void *addr, size_t size)
 {
     if ((addr >= elf_start) && (static_cast<const char*>(addr) + size <= static_cast<char*>(elf_start) + elf_size)) {
@@ -1429,11 +1319,6 @@ static void vm_sigsegv(uintptr_t addr, exception_frame* ef)
         abort();
     }
     osv::handle_mmap_fault(addr, SIGSEGV, ef);
-}
-
-static void vm_sigbus(uintptr_t addr, exception_frame* ef)
-{
-    osv::handle_mmap_fault(addr, SIGBUS, ef);
 }
 
 void vm_fault(uintptr_t addr, exception_frame* ef)
@@ -1821,179 +1706,8 @@ ulong map_jvm(unsigned char* jvm_addr, size_t size, size_t align, balloon_ptr b)
 }
 #endif
 
-file_vma::file_vma(addr_range range, unsigned perm, unsigned flags, fileref file, f_offset offset, page_allocator* page_ops)
-    : vma(range, perm, flags | mmap_small, !(flags & mmap_shared), page_ops)
-    , _file(file)
-    , _offset(offset)
-{
-    int err = validate_perm(perm);
-
-    if (err != 0) {
-        throw make_error(err);
-    }
-
-    struct stat st;
-    err = _file->stat(&st);
-    if (err != 0) {
-        throw make_error(err);
-    }
-
-    _file_inode = st.st_ino;
-    _file_dev_id = st.st_dev;
-}
-
-void file_vma::fault(uintptr_t addr, exception_frame *ef)
-{
-    auto hp_start = align_up(_range.start(), huge_page_size);
-    auto hp_end = align_down(_range.end(), huge_page_size);
-    auto fsize = ::size(_file);
-    if (offset(addr) >= fsize) {
-        vm_sigbus(addr, ef);
-        return;
-    }
-    size_t size;
-    if (!has_flags(mmap_small) && (hp_start <= addr && addr < hp_end) && offset(hp_end) < fsize) {
-        addr = align_down(addr, huge_page_size);
-        size = huge_page_size;
-    } else {
-        size = page_size;
-    }
-
-    populate_vma<account_opt::no>(this, (void*)addr, size,
-            mmu::is_page_fault_write(ef->get_error()));
-}
-
-file_vma::~file_vma()
-{
-    delete _page_ops;
-}
-
-void file_vma::split(uintptr_t edge)
-{
-    if (edge <= _range.start() || edge >= _range.end()) {
-        return;
-    }
-    auto off = offset(edge);
-    vma *n = _file->mmap(addr_range(edge, _range.end()), _flags, _perm, off).release();
-    set(_range.start(), edge);
-    vma_list.insert(*n);
-    WITH_LOCK(vma_range_set_mutex.for_write()) {
-        vma_range_set.insert(vma_range(n));
-    }
-}
-
-error file_vma::sync(uintptr_t start, uintptr_t end)
-{
-    if (!has_flags(mmap_shared))
-        return make_error(ENOMEM);
-
-    // Called when ZFS arc cache is not present.
-    if (_page_ops && dynamic_cast<map_file_page_read *>(_page_ops)) {
-        start = std::max(start, _range.start());
-        end = std::min(end, _range.end());
-        uintptr_t size = end - start;
-
-        dirty_page_sync sync(_file.get(), _offset, ::size(_file));
-        error err = no_error();
-        try {
-            if (operate_range(dirty_cleaner<dirty_page_sync, account_opt::yes>(sync), (void*)start, size) != 0) {
-                err = make_error(sys_fsync(_file.get()));
-            }
-        } catch (error e) {
-            err = e;
-        }
-        return err;
-    }
-
-    try {
-        _file->sync(_offset + start - _range.start(), _offset + end - _range.start());
-    } catch (error& err) {
-        return err;
-    }
-
-    return make_error(sys_fsync(_file.get()));
-}
-
-int file_vma::validate_perm(unsigned perm)
-{
-    // fail if mapping a file that is not opened for reading.
-    if (!(_file->f_flags & FREAD)) {
-        return EACCES;
-    }
-    if (perm & perm_write) {
-        if (has_flags(mmap_shared) && !(_file->f_flags & FWRITE)) {
-            return EACCES;
-        }
-    }
-    // fail if prot asks for PROT_EXEC and the underlying FS was
-    // mounted no-exec.
-    if (perm & perm_exec && (_file->f_dentry->d_mount->m_flags & MNT_NOEXEC)) {
-        return EPERM;
-    }
-    return 0;
-}
-
-f_offset file_vma::offset(uintptr_t addr)
-{
-    return _offset + (addr - _range.start());
-}
-
-std::unique_ptr<file_vma> shm_file::mmap(addr_range range, unsigned flags, unsigned perm, off_t offset)
-{
-    return map_file_mmap(this, range, flags, perm, offset);
-}
-
-void* shm_file::page(uintptr_t hp_off)
-{
-    void *addr;
-
-    auto p = _pages.find(hp_off);
-    if (p == _pages.end()) {
-        addr = memory::alloc_huge_page(huge_page_size);
-        memset(addr, 0, huge_page_size);
-        _pages.emplace(hp_off, addr);
-    } else {
-        addr = p->second;
-    }
-
-    return addr;
-}
-
-bool shm_file::map_page(uintptr_t offset, hw_ptep<0> ptep, pt_element<0> pte, bool write, bool shared)
-{
-    uintptr_t hp_off = align_down(offset, huge_page_size);
-
-    return write_pte(static_cast<char*>(page(hp_off)) + offset - hp_off, ptep, pte);
-}
-
-bool shm_file::map_page(uintptr_t offset, hw_ptep<1> ptep, pt_element<1> pte, bool write, bool shared)
-{
-    uintptr_t hp_off = align_down(offset, huge_page_size);
-
-    assert(hp_off == offset);
-
-    return write_pte(static_cast<char*>(page(hp_off)) + offset - hp_off, ptep, pte);
-}
-
-bool shm_file::put_page(void *addr, uintptr_t offset, hw_ptep<0> ptep) {return false;}
-bool shm_file::put_page(void *addr, uintptr_t offset, hw_ptep<1> ptep) {return false;}
-
-shm_file::shm_file(size_t size, int flags) : special_file(flags, DTYPE_UNSPEC), _size(size) {}
-
-int shm_file::stat(struct stat* buf)
-{
-    buf->st_size = _size;
-    return 0;
-}
-
-int shm_file::close()
-{
-    for (auto& i : _pages) {
-        memory::free_huge_page(i.second, huge_page_size);
-    }
-    _pages.clear();
-    return 0;
-}
+// There is no filesystem: file-backed mappings (file_vma) and the POSIX shared
+// memory file (shm_file) have been removed; only anonymous mappings remain.
 
 linear_vma::linear_vma(void* virt, phys phys, size_t size, mattr mem_attr, const char* name) {
     _virt_addr = virt;
@@ -2116,14 +1830,8 @@ std::string procfs_maps()
             char execute = vma.perm() & perm_exec  ? 'x' : '-';
             char priv    = 'p';
             output += osv::sprintf("%lx-%lx %c%c%c%c ", vma.start(), vma.end(), read, write, execute, priv);
-            if (vma.flags() & mmap_file) {
-                const file_vma &f_vma = static_cast<file_vma&>(vma);
-                unsigned dev_id_major = major(f_vma.file_dev_id());
-                unsigned dev_id_minor = minor(f_vma.file_dev_id());
-                output += osv::sprintf("%08x %02x:%02x %ld %s\n", f_vma.offset(), dev_id_major, dev_id_minor, f_vma.file_inode(), f_vma.file()->f_dentry->d_path);
-            } else {
-                output += osv::sprintf("00000000 00:00 0\n");
-            }
+            // All mappings are anonymous now (no file-backed mappings).
+            output += osv::sprintf("00000000 00:00 0\n");
         }
     }
     return output;
