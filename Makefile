@@ -580,8 +580,6 @@ bsd += bsd/sys/kern/subr_bufring.o
 bsd += bsd/sys/kern/subr_sbuf.o
 bsd += bsd/sys/kern/subr_eventhandler.o
 bsd += bsd/sys/kern/subr_hash.o
-bsd += bsd/sys/kern/subr_taskqueue.o
-$(out)/bsd/sys/kern/subr_taskqueue.o: COMMON += $(wno-dangling-pointer)
 ifeq ($(conf_networking_stack),1)
 bsd += bsd/sys/kern/sys_socket.o
 endif
@@ -595,7 +593,6 @@ bsd += bsd/porting/shrinker.o
 bsd += bsd/porting/cpu.o
 bsd += bsd/porting/uma_stub.o
 bsd += bsd/porting/sync_stub.o
-bsd += bsd/porting/callout.o
 bsd += bsd/porting/synch.o
 bsd += bsd/porting/kthread.o
 bsd += bsd/porting/mmu.o

@@ -11,7 +11,6 @@
 #include "sync_stub.h"
 #include <xen/interface/io/xenbus.h>
 #include <osv/device.h>
-#include <sys/_task.h>
 
 /* typedefs needed for bus_dma.h. Have to come before it */
 /*
