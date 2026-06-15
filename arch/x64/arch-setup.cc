@@ -249,9 +249,6 @@ void arch_init_premain()
 #if CONF_drivers_virtio_blk
 #include "drivers/virtio-blk.hh"
 #endif
-#if CONF_drivers_virtio_scsi
-#include "drivers/virtio-scsi.hh"
-#endif
 #if CONF_networking_stack
 #if CONF_drivers_virtio_net
 #include "drivers/virtio-net.hh"
@@ -268,9 +265,6 @@ void arch_init_premain()
 #endif
 #if CONF_drivers_ahci
 #include "drivers/ahci.hh"
-#endif
-#if CONF_drivers_pvscsi
-#include "drivers/vmw-pvscsi.hh"
 #endif
 #if CONF_networking_stack
 #if CONF_drivers_vmxnet3
@@ -310,9 +304,6 @@ void arch_init_drivers()
 #if CONF_drivers_virtio_blk
     drvman->register_driver(virtio::blk::probe);
 #endif
-#if CONF_drivers_virtio_scsi
-    drvman->register_driver(virtio::scsi::probe);
-#endif
 #if CONF_networking_stack
 #if CONF_drivers_virtio_net
     drvman->register_driver(virtio::net::probe);
@@ -329,9 +320,6 @@ void arch_init_drivers()
 #endif
 #if CONF_drivers_ahci
     drvman->register_driver(ahci::hba::probe);
-#endif
-#if CONF_drivers_pvscsi
-    drvman->register_driver(vmw::pvscsi::probe);
 #endif
 #if CONF_networking_stack
 #if CONF_drivers_vmxnet3
