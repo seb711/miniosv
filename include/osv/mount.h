@@ -35,7 +35,7 @@
 #include <sys/cdefs.h>
 #include <sys/statfs.h>
 #include <osv/vnode.h>
-#include <bsd/sys/sys/queue.h>
+#include <osv/bsd-queue.h>
 
 __BEGIN_DECLS
 

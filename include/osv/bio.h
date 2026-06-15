@@ -42,7 +42,7 @@
 #include <stdint.h>
 #include <pthread.h>
 #include <stdbool.h>
-#include <bsd/sys/sys/queue.h>
+#include <osv/bsd-queue.h>
 #include <osv/device.h>
 #include <osv/mutex.h>
 #include <osv/waitqueue.hh>

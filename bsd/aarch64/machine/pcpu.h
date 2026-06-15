@@ -1,3 +1,0 @@
-#ifndef _OSV_BSD_MACHINE_PCPU_H
-#define _OSV_BSD_MACHINE_PCPU_H
-#endif

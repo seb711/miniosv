@@ -34,7 +34,7 @@
 #include <sys/cdefs.h>
 #include <osv/mutex.h>
 
-#include <bsd/sys/sys/queue.h>
+#include <osv/bsd-queue.h>
 #include <boost/intrusive/list.hpp>
 
 /*
