@@ -991,6 +991,9 @@ endif # aarch64
 ifeq ($(conf_tracepoints),1)
 objects += arch/$(arch)/arch-trace.o
 endif
+# The application is statically linked into the kernel image and entered via
+# osv_app_main() (see app.cc). There is no separate app .so or filesystem image.
+objects += app.o
 objects += arch/$(arch)/arch-setup.o
 objects += arch/$(arch)/signal.o
 objects += arch/$(arch)/arch-cpu.o
