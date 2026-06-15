@@ -91,6 +91,8 @@ extern "C" {
     int mount_rootfs(const char*, const char*, const char*, int, const void*, bool);
     void import_extra_zfs_pools();
     void rofs_disable_cache();
+    // The statically linked-in application entry point (see app.cc).
+    void osv_app_main();
 }
 
 void premain()
@@ -444,33 +446,6 @@ std::vector<std::vector<std::string> > prepare_commands(char* app_cmdline)
     return commands;
 }
 
-static std::string read_file(std::string fn)
-{
-    FILE *fp = fopen(fn.c_str(), "r");
-    if (!fp) {
-        return "";
-    }
-
-    size_t line_length = 0;
-    char *line_buffer = nullptr;
-    ssize_t read;
-    std::string content;
-    while ((read = getline(&line_buffer, &line_length, fp)) != -1) {
-        content += line_buffer;
-    }
-    free(line_buffer);
-    fclose(fp);
-
-    return content;
-}
-
-static void stop_all_remaining_app_threads()
-{
-    while(!application::unsafe_stop_and_abandon_other_threads()) {
-        usleep(100000);
-    }
-}
-
 static int load_fs_library(const char* fs_library_path, std::function<int()> on_load_fun = nullptr)
 {
     // Load and initialize filesystem driver
@@ -532,8 +507,6 @@ static int load_ext_library_and_mount_ext_root(bool pivot_when_error = false)
 
 void* do_main_thread(void *_main_args)
 {
-    auto app_cmdline = static_cast<char*>(_main_args);
-
     if (!arch_setup_console(opt_console)) {
         abort("Unknown console:%s\n", opt_console.c_str());
     }
@@ -711,79 +684,9 @@ void* do_main_thread(void *_main_args)
         }
     }
 
-    auto commands = prepare_commands(app_cmdline);
+    // Enter the statically linked-in application.
+    osv_app_main();
 
-    // Run command lines in /init/* before the manual command line
-    if (opt_init) {
-        std::vector<std::vector<std::string>> init_commands;
-        struct dirent **namelist = nullptr;
-        int count = scandir("/init", &namelist, NULL, alphasort);
-        for (int i = 0; i < count; i++) {
-            if (!strcmp(".", namelist[i]->d_name) ||
-                    !strcmp("..", namelist[i]->d_name)) {
-                free(namelist[i]);
-                continue;
-            }
-            std::string fn("/init/");
-            fn += namelist[i]->d_name;
-            auto cmdline = read_file(fn);
-            debugf("Running from %s: %s\n", fn.c_str(), cmdline.c_str());
-            bool ok;
-            auto new_commands = osv::parse_command_line(cmdline, ok);
-            free(namelist[i]);
-            if (ok) {
-                init_commands.insert(init_commands.end(),
-                        new_commands.begin(), new_commands.end());
-            }
-        }
-        free(namelist);
-        commands.insert(commands.begin(),
-                 init_commands.begin(), init_commands.end());
-    }
-
-    // run each payload in order
-    // Our parse_command_line() leaves at the end of each command a delimiter,
-    // can be '&' if we need to run this command in a new thread, or ';' or
-    // empty otherwise, to run in this thread. '&!' is the same as '&', but
-    // doesn't wait for the thread to finish before exiting OSv.
-    std::vector<shared_app_t> detached;
-    std::vector<shared_app_t> bg;
-    for (auto &it : commands) {
-        std::vector<std::string> newvec(it.begin(), std::prev(it.end()));
-        auto suffix = it.back();
-        try {
-            bool background = (suffix == "&") || (suffix == "&!");
-
-            shared_app_t app;
-            if (suffix == "!") {
-                app = application::run(newvec[0], newvec, false, nullptr, "main", stop_all_remaining_app_threads);
-            } else {
-                app = application::run(newvec);
-            }
-
-            if (suffix == "&!") {
-                detached.push_back(app);
-            } else if (!background) {
-                app->join();
-            } else {
-                bg.push_back(app);
-            }
-        } catch (const launch_error& e) {
-            fprintf(stderr, "%s. Powering off.\n", e.what());
-            osv::poweroff();
-        }
-    }
-
-    for (auto app : bg) {
-        app->join();
-    }
-
-    for (auto app : detached) {
-        app->request_termination();
-        debugf("Requested termination of %s, waiting...\n", app->get_command().c_str());
-    }
-
-    application::join_all();
     return nullptr;
 }
 
