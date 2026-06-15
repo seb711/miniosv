@@ -13,7 +13,6 @@
 #include "cpuid.hh"
 #include "osv/pagealloc.hh"
 #include <xmmintrin.h>
-#include "syscall.hh"
 #include "msr.hh"
 #include <osv/kernel_config_interrupt_stack_size.h>
 
@@ -49,18 +48,13 @@ struct arch_cpu {
     u32 apic_id;
     u32 acpi_id;
     u64 gdt[nr_gdt];
-    // This field holds a syscall stack descriptor of a current thread
+    // This field holds the address of a current thread TCB
     // which is updated on every context switch (see arch-switch.hh).
     // We keep this field in this per-cpu structure and initialize GS register
     // of the corresponding cpu to point to it (see init_on_cpu() down below),
     // in order to make it possible to access it in assembly code through
-    // a known offset at %gs:0.
-    syscall_stack_descriptor _current_syscall_stack_descriptor;
-    // This field holds the address of a current thread TCB
-    // which is updated on every context switch (see arch-switch.hh).
-    // This makes it possible to fetch address of kernel TCB if we need
-    // to switch to from the app TCB which is different when running
-    // statically linked executables
+    // a known offset at %gs:0. This makes it possible to fetch the address
+    // of the kernel TCB if we need to switch to it from the app TCB.
     u64 _current_thread_kernel_tcb;
     void init_on_cpu();
     void set_ist_entry(unsigned ist, char* base, size_t size);
@@ -196,9 +190,7 @@ inline void arch_cpu::init_on_cpu()
     // In at least one particular version of Xen it is not, leading to SIMD exceptions.
     processor::init_fpu();
 
-    processor::init_syscall();
-
-    processor::wrmsr(msr::IA32_GS_BASE, reinterpret_cast<u64>(&_current_syscall_stack_descriptor.stack_top));
+    processor::wrmsr(msr::IA32_GS_BASE, reinterpret_cast<u64>(&_current_thread_kernel_tcb));
 }
 
 struct exception_guard {

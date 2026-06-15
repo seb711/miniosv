@@ -168,10 +168,6 @@ void thread::free_tcb()
     free(_tcb);
 }
 
-void thread::free_syscall_stack()
-{
-}
-
 void thread::update_dtv()
 {
     _arch._dtv.last_index = _tls.size() - 1;

@@ -1192,7 +1192,6 @@ thread::~thread()
     // _tls holds only the core (module 0) TLS, whose storage is the TCB freed
     // by free_tcb(); there are no dynamically loaded modules to clean up.
     free_tcb();
-    free_syscall_stack();
     rcu_dispose(_detached_state.release());
 }
 

@@ -698,11 +698,6 @@ public:
       * which could cause the whole system to block. So use at your own peril.
       */
     bool unsafe_stop();
-    void setup_large_syscall_stack();
-    void free_tiny_syscall_stack();
-#ifdef __x86_64__
-    char* get_syscall_stack_top();
-#endif
     void* get_exception_stack_top() { return _arch.exception_stack + sizeof(_arch.exception_stack); }
 private:
     static void wake_impl(detached_state* st,
@@ -719,7 +714,6 @@ private:
     void init_stack();
     void setup_tcb();
     void free_tcb();
-    void free_syscall_stack();
     void update_dtv();
     void complete() __attribute__((__noreturn__));
     template <class Action>
