@@ -36,8 +36,6 @@
 #include "drivers/random.hh"
 #include <assert.h>
 
-#include <osv/device.h>
-#include <osv/uio.h>
 #include <osv/debug.hh>
 
 #include <dev/random/randomdev.h>
@@ -47,68 +45,8 @@
 
 namespace randomdev {
 
-struct random_device_priv {
-    random_device* drv;
-};
-
-static random_device_priv *to_priv(device *dev)
-{
-    return reinterpret_cast<random_device_priv*>(dev->private_data);
-}
-
-static int
-random_read(struct device *dev, struct uio *uio, int ioflags)
-{
-    int c, error = 0;
-    char random_buf[PAGE_SIZE];
-
-    // Blocking logic
-    if (!random_adaptor->seeded) {
-        error = (*random_adaptor->block)(ioflags);
-    }
-
-    if (!error) {
-        while (uio->uio_resid > 0 && !error) {
-            c = std::min(uio->uio_resid, static_cast<long int>(PAGE_SIZE));
-            c = (*random_adaptor->read)(static_cast<void *>(random_buf), c);
-            error = uiomove(random_buf, c, uio);
-        }
-
-        // Finished reading; let the source know so it can do some
-        // optional housekeeping */
-        (*random_adaptor->read)(nullptr, 0);
-    }
-
-    return error;
-}
-
-static int
-random_write(struct device *dev, struct uio *uio, int ioflags)
-{
-    // We used to allow this to insert userland entropy.
-    // We don't any more because (1) this so-called entropy
-    // is usually lousy and (b) its vaguely possible to
-    // mess with entropy harvesting by overdoing a write.
-    // Now we just ignore input like /dev/null does.
-    uio->uio_resid = 0;
-
-    return 0;
-}
-
-static struct devops random_device_devops {
-    no_open,
-    no_close,
-    random_read,
-    random_write,
-    no_ioctl,
-    no_devctl,
-};
-
-struct driver random_device_driver = {
-    "random",
-    &random_device_devops,
-    sizeof(struct random_device_priv),
-};
+// There is no filesystem, so the /dev/random and /dev/urandom device files are
+// gone. The kernel CSPRNG (read_random/arc4random/getrandom) is unaffected.
 
 //
 // Intel DRNG, RDRAND: hardware source of entropy.
@@ -164,8 +102,6 @@ drng_read(void *buf, int size)
 
 random_device::random_device()
 {
-    struct random_device_priv *prv;
-
 #ifdef __x86_64__
     if (processor::features().rdrand) {
         live_entropy_source_register(&drng);
@@ -177,16 +113,6 @@ random_device::random_device()
             "provide high-quality randomness.\n");
     }
     (random_adaptor->init)();
-
-    // Create random
-    _random_dev = device_create(&random_device_driver, "random", D_CHR);
-    prv = to_priv(_random_dev);
-    prv->drv = this;
-
-    // Create urandom as a sort of alias to random
-    _urandom_dev = device_create(&random_device_driver, "urandom", D_CHR);
-    prv = to_priv(_urandom_dev);
-    prv->drv = this;
 }
 
 random_device::~random_device()
@@ -197,9 +123,6 @@ random_device::~random_device()
     }
 #endif
     (random_adaptor->deinit)();
-
-    device_destroy(_random_dev);
-    device_destroy(_urandom_dev);
 }
 
 void randomdev_init()

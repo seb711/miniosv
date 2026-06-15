@@ -585,7 +585,6 @@ $(out)/bsd/sys/kern/subr_taskqueue.o: COMMON += $(wno-dangling-pointer)
 ifeq ($(conf_networking_stack),1)
 bsd += bsd/sys/kern/sys_socket.o
 endif
-bsd += bsd/sys/kern/subr_disk.o
 ifeq ($(conf_networking_stack),1)
 bsd += bsd/porting/route.o
 bsd += bsd/porting/networking.o
@@ -862,7 +861,6 @@ libtsm += drivers/libtsm/tsm_vte_charsets.o
 drivers := $(bsd)
 drivers += core/mmu.o
 drivers += arch/$(arch)/early-console.o
-drivers += drivers/blk-common.o
 drivers += drivers/console.o
 drivers += drivers/console-multiplexer.o
 drivers += drivers/console-driver.o
@@ -872,8 +870,6 @@ drivers += drivers/clock-common.o
 drivers += drivers/clockevent.o
 drivers += drivers/isa-serial-base.o
 drivers += drivers/random.o
-drivers += drivers/zfs.o
-drivers += drivers/null.o
 drivers += drivers/device.o
 ifeq ($(conf_drivers_pci),1)
 drivers += drivers/pci-generic.o
@@ -901,17 +897,10 @@ drivers += drivers/virtio-vring.o
 ifeq ($(conf_drivers_mmio),1)
 drivers += drivers/virtio-mmio.o
 endif
-ifeq ($(conf_drivers_nvme),1)
-drivers += drivers/nvme.o
-drivers += drivers/nvme-queue.o
-endif
-ifeq ($(conf_networking_stack),1)
-drivers += drivers/virtio-net.o
-endif
-drivers += drivers/virtio-blk.o
-drivers += drivers/virtio-scsi.o
+# Block-device and filesystem virtio drivers (virtio-blk, virtio-scsi,
+# virtio-fs, nvme) are gone together with the filesystem; only virtio-rng
+# remains (virtio-net went with the networking stack).
 drivers += drivers/virtio-rng.o
-drivers += drivers/virtio-fs.o
 endif
 
 ifeq ($(conf_networking_stack),1)
@@ -975,19 +964,9 @@ endif
 ifeq ($(conf_drivers_mmio),1)
 drivers += drivers/virtio-mmio.o
 endif
-ifeq ($(conf_drivers_nvme),1)
-drivers += drivers/nvme.o
-drivers += drivers/nvme-queue.o
-endif
 drivers += drivers/virtio-vring.o
+# Block-device and filesystem drivers are gone with the filesystem.
 drivers += drivers/virtio-rng.o
-drivers += drivers/virtio-blk.o
-drivers += drivers/virtio-scsi.o
-drivers += drivers/virtio-net.o
-drivers += drivers/virtio-fs.o
-endif
-ifeq ($(conf_drivers_scsi),1)
-drivers += drivers/scsi-common.o
 endif
 endif # aarch64
 
@@ -1097,7 +1076,6 @@ objects += core/semaphore.o
 objects += core/condvar.o
 objects += core/debug.o
 objects += core/rcu.o
-objects += core/pagecache.o
 objects += core/mempool.o
 ifeq ($(conf_memory_tracker),1)
 objects += core/alloctracker.o
@@ -1119,11 +1097,7 @@ objects += core/strace.o
 endif
 objects += core/callstack.o
 endif
-objects += core/poll.o
-objects += core/select.o
-ifeq ($(conf_core_epoll),1)
-objects += core/epoll.o
-endif
+# poll/select/epoll operate on the (removed) file-descriptor table.
 ifeq ($(conf_core_newpoll),1)
 objects += core/newpoll.o
 endif
@@ -1529,8 +1503,6 @@ libc += misc/realpath.o
 libc += misc/backtrace.o
 libc += misc/uname.o
 libc += misc/lockf.o
-libc += misc/mntent.o
-libc_to_hide += misc/mntent.o
 musl += misc/nftw.o
 libc += misc/__longjmp_chk.o
 
@@ -1974,6 +1946,7 @@ libc_to_hide += pthread.o
 libc += pthread_barrier.o
 libc += libc.o
 libc += dlfcn.o
+libc += io.o
 libc += time.o
 libc_to_hide += time.o
 libc += signal.o
@@ -1982,23 +1955,10 @@ libc += mman.o
 libc_to_hide += mman.o
 libc += sem.o
 libc_to_hide += sem.o
-libc += pipe_buffer.o
-libc_to_hide += pipe_buffer.o
-libc += pipe.o
-libc_to_hide += pipe.o
-libc += af_local.o
-libc_to_hide += af_local.o
+# pipe, af_local (unix sockets), mount, eventfd, timerfd, shm and inotify all
+# depend on the (removed) file-descriptor table and filesystem.
 libc += user.o
 libc += resource.o
-libc += mount.o
-libc += eventfd.o
-libc_to_hide += eventfd.o
-libc += timerfd.o
-libc_to_hide += timerfd.o
-libc += shm.o
-libc += inotify.o
-libc += __pread64_chk.o
-libc += __read_chk.o
 libc += syslog.o
 libc += cxa_thread_atexit.o
 libc += cpu_set.o
@@ -2022,55 +1982,8 @@ musl += crypt/crypt_sha256.o
 musl += crypt/crypt_sha512.o
 musl += crypt/encrypt.o
 
-#include $(src)/fs/build.mk:
-
-fs_objs :=
-
-fs_objs += fs.o \
-	unsupported.o
-
-fs_objs += vfs/main.o \
-	vfs/kern_descrip.o \
-	vfs/kern_physio.o \
-	vfs/subr_uio.o \
-	vfs/vfs_bdev.o \
-	vfs/vfs_bio.o \
-	vfs/vfs_conf.o \
-	vfs/vfs_lookup.o \
-	vfs/vfs_mount.o \
-	vfs/vfs_vnode.o \
-	vfs/vfs_task.o \
-	vfs/vfs_syscalls.o \
-	vfs/vfs_fops.o \
-	vfs/vfs_dentry.o
-
-fs_objs += ramfs/ramfs_vfsops.o \
-	ramfs/ramfs_vnops.o
-
-fs_objs += devfs/devfs_vnops.o \
-	devfs/device.o
-
-fs_objs += rofs/rofs_vfsops.o \
-	rofs/rofs_vnops.o \
-	rofs/rofs_cache.o \
-	rofs/rofs_common.o
-
-ifeq ($(conf_drivers_virtio),1)
-fs_objs += virtiofs/virtiofs_vfsops.o \
-	virtiofs/virtiofs_vnops.o \
-	virtiofs/virtiofs_dax.o
-endif
-
-fs_objs += pseudofs/pseudofs.o
-ifeq ($(conf_fs_procfs),1)
-fs_objs += procfs/procfs_vnops.o
-endif
-ifeq ($(conf_fs_sysfs),1)
-fs_objs += sysfs/sysfs_vnops.o
-endif
-fs_objs += zfs/zfs_null_vfsops.o
-
-objects += $(addprefix fs/, $(fs_objs))
+# There is no filesystem: the kernel has no VFS, no fd table and no on-disk or
+# in-memory file systems. Minimal console-backed stdio lives in libc/io.cc.
 objects += $(addprefix libc/, $(libc))
 objects += $(addprefix musl/src/, $(musl))
 
@@ -2121,8 +2034,7 @@ endif
 boost-includes = -isystem external/boost
 boost-libs :=
 
-objects += fs/nfs/nfs_null_vfsops.o
-objects += fs/ext/ext_null_vfsops.o
+# nfs/ext null vfsops went with the filesystem.
 
 $(out)/loader.o: CXXFLAGS += -DHIDE_SYMBOLS=$(conf_hide_symbols)
 $(out)/core/trace.o: CXXFLAGS += -DHIDE_SYMBOLS=$(conf_hide_symbols)

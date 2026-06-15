@@ -7,9 +7,7 @@
 
 #include <unistd.h>
 
-#include <fs/vfs/vfs.h>
-
+// There is no filesystem, so there is nothing to flush.
 void sync()
 {
-    sys_sync();
 }
