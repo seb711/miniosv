@@ -41,7 +41,7 @@ musl in. Record the symbol count here at each phase so the shrink is tracked:
 
 | Phase | externally required symbols | needed musl objects |
 |-------|-----------------------------|---------------------|
-| 0 (master baseline) | _run the script_ | _run the script_ |
+| 0 (master baseline) | 161 | 205 of 582 |
 
 v2_osv's slim end state reached **87** referenced symbols once the app was
 in-kernel — that number is only that small *because* the earlier phases deleted
