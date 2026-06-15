@@ -42,7 +42,23 @@ fi
 
 # 2. configure + build (static, no localization, exceptions+RTTI on, llvm unwinder)
 # Codegen must match the kernel (see COMMON in the top-level Makefile).
-KERNEL_FLAGS="-fno-pie -fno-stack-protector -ftls-model=local-exec -fno-omit-frame-pointer"
+#
+# Header environment must also match the kernel: put OSv's own libc headers
+# (include/api, musl-derived) ahead of the host's so the standard C headers
+# resolve to ours, exactly as the kernel compiles its C++. Without this the
+# build picks up the host glibc <stdlib.h>, whose C23 mode (_GNU_SOURCE ->
+# _ISOC23_SOURCE) redirects strtol/strtoul/strtoll/strtoull to __isoc23_* and
+# leaves those undefined references in libc++.a (the last glibc dependency).
+# include/api also supplies unistd/pthread/dlfcn/link/elf/sys headers that
+# libc++abi and libunwind need; the host headers stay only as a fallback.
+# include/api/stdint.h et al. pull the generated bits/alltypes.h; generate it
+# into a private dir (same recipe as the kernel Makefile) so this script stays
+# self-contained and independent of the kernel out-dir.
+GEN_INC="$BUILD_DIR/gen/include"
+mkdir -p "$GEN_INC/bits"
+sh "$OSV_ROOT/include/api/$osv_arch/bits/alltypes.h.sh" > "$GEN_INC/bits/alltypes.h"
+OSV_HEADERS="-isystem $OSV_ROOT/include/api -isystem $OSV_ROOT/include/api/$osv_arch -isystem $GEN_INC"
+KERNEL_FLAGS="-fno-pie -fno-stack-protector -ftls-model=local-exec -fno-omit-frame-pointer $OSV_HEADERS"
 
 mkdir -p "$BUILD_DIR"
 cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
