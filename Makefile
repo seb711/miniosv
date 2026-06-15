@@ -361,8 +361,13 @@ gc-flags = $(gc-flags-$(conf_hide_symbols))
 
 gcc-opt-Og := $(call compiler-flag, -Og, -Og, compiler/empty.cc)
 
-CXXFLAGS = -std=$(conf_cxx_level) $(COMMON) $(cxx-hide-flags)
-CFLAGS = -std=gnu99 $(COMMON)
+# The kernel (with the app statically linked in) is a single fixed-address
+# executable, so use the local-exec TLS model: thread-local accesses become
+# immediate offsets resolved at link time rather than GOT-based TPOFF64 dynamic
+# relocations that would need processing at boot.
+tls-model = -ftls-model=local-exec
+CXXFLAGS = -std=$(conf_cxx_level) $(COMMON) $(cxx-hide-flags) $(tls-model)
+CFLAGS = -std=gnu99 $(COMMON) $(tls-model)
 
 # should be limited to files under libc/ eventually
 CFLAGS += -I libc/stdio -I libc/internal -I libc/arch/$(arch) \
@@ -866,8 +871,6 @@ drivers += drivers/clock.o
 drivers += drivers/clock-common.o
 drivers += drivers/clockevent.o
 drivers += drivers/isa-serial-base.o
-drivers += core/elf.o
-$(out)/core/elf.o: CXXFLAGS += -DHIDE_SYMBOLS=$(conf_hide_symbols)
 drivers += drivers/random.o
 drivers += drivers/zfs.o
 drivers += drivers/null.o
@@ -991,18 +994,45 @@ endif # aarch64
 ifeq ($(conf_tracepoints),1)
 objects += arch/$(arch)/arch-trace.o
 endif
+# The application is statically linked into the kernel image and entered via
+# osv_app_main(). There is no separate app .so or filesystem image.
+#
+# Two build modes select which application is linked in. Each application lives
+# in its own directory with a Makefile fragment that lists its objects in
+# $(app-objects); the kernel compiles and links them with its own flags.
+#   make            -> the user application   (app/)
+#   make app=tests  -> the test application   (test/)
+app ?= default
+ifeq ($(app),tests)
+include test/Makefile
+else
+include app/Makefile
+endif
+objects += $(app-objects)
+
+# Record the selected app mode so that switching between `make` and
+# `make app=tests` forces the kernel to relink (the set of linked-in app
+# objects changes, which plain timestamp checking would not notice).
+app_mode_dep = $(out)/app_mode.last
+.PHONY: app_mode_phony
+$(app_mode_dep): app_mode_phony
+	$(call very-quiet, $(makedir))
+	@if [ "$$(cat $(app_mode_dep) 2>/dev/null)" != "$(app)" ]; then \
+		echo -n "$(app)" > $(app_mode_dep); \
+	fi
+# Minimal boot-time self-relocator (replaces the relocation half of the old
+# ELF loader).
+objects += arch/x64/relocate.o
 objects += arch/$(arch)/arch-setup.o
 objects += arch/$(arch)/signal.o
 objects += arch/$(arch)/arch-cpu.o
 objects += arch/$(arch)/backtrace.o
 objects += arch/$(arch)/smp.o
-objects += arch/$(arch)/elf-dl.o
 objects += arch/$(arch)/tlsdesc.o
 objects += arch/$(arch)/entry.o
 objects += arch/$(arch)/mmu.o
 objects += arch/$(arch)/exceptions.o
 objects += arch/$(arch)/dump.o
-objects += arch/$(arch)/arch-elf.o
 objects += arch/$(arch)/cpuid.o
 objects += arch/$(arch)/firmware.o
 objects += arch/$(arch)/hypervisor.o
@@ -1080,7 +1110,6 @@ objects += core/sampler.o
 endif
 
 objects += linux.o
-objects += core/commands.o
 objects += core/sched.o
 objects += core/mmio.o
 objects += core/kprintf.o
@@ -1107,7 +1136,6 @@ objects += core/percpu-worker.o
 ifeq ($(conf_networking_dhcp),1)
 objects += core/dhcp.o
 endif
-objects += core/run.o
 objects += core/shutdown.o
 objects += core/version.o
 objects += core/waitqueue.o
@@ -1118,14 +1146,7 @@ endif
 objects += core/demangle.o
 objects += core/async.o
 objects += core/net_trace.o
-objects += core/app.o
 objects += core/libaio.o
-ifeq ($(conf_core_namespaces),1)
-objects += core/osv_execve.o
-endif
-ifeq ($(conf_core_c_wrappers),1)
-objects += core/osv_c_wrappers.o
-endif
 objects += core/options.o
 objects += core/string_utils.o
 
@@ -2170,10 +2191,10 @@ def_symbols = --defsym=OSV_KERNEL_BASE=$(kernel_base) \
               --defsym=OSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 endif
 
-$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(version_script_file)
+$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
 		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -L$(out)/arch/$(arch) \
-            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$^)) \
+            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep),$^))) \
 	    $(linker_archives_options) $(conf_linker_extra_options), \
 		LINK loader.elf)
 	@# Build libosv.so matching this loader.elf. This is not a separate

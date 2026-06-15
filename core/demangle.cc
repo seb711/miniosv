@@ -6,8 +6,8 @@
  */
 
 #include <string.h>
+#include <stdio.h>
 #include <algorithm>
-#include <osv/elf.hh>
 #include <cxxabi.h>
 
 #include <osv/demangle.hh>
@@ -44,17 +44,10 @@ bool demangle(const char *name, char *buf, size_t len)
 
 void lookup_name_demangled(void *addr, char *buf, size_t len)
 {
-    auto ei = elf::get_program()->lookup_addr(addr);
-    int funclen;
-
-    if (!ei.sym)
-        strncpy(buf, "???", len);
-    else if (!demangle(ei.sym, buf, len))
-        strncpy(buf, ei.sym, len);
-    funclen = strlen(buf);
-    snprintf(buf + funclen, len - funclen, "+%d",
-        reinterpret_cast<uintptr_t>(addr)
-        - reinterpret_cast<uintptr_t>(ei.addr));
+    // The ELF symbol table is no longer kept in the kernel (the application is
+    // statically linked in), so backtraces report raw addresses rather than
+    // resolved, demangled symbol names.
+    snprintf(buf, len, "%p", addr);
 }
 
 std::unique_ptr<char> demangle(const char *name)
