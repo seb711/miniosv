@@ -999,6 +999,9 @@ endif
 # The application is statically linked into the kernel image and entered via
 # osv_app_main() (see app.cc). There is no separate app .so or filesystem image.
 objects += app.o
+# Minimal boot-time self-relocator (replaces the relocation half of the old
+# ELF loader).
+objects += arch/x64/relocate.o
 objects += arch/$(arch)/arch-setup.o
 objects += arch/$(arch)/signal.o
 objects += arch/$(arch)/arch-cpu.o
