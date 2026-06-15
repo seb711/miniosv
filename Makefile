@@ -1738,6 +1738,10 @@ llvm_libc_replaces += string/wmemchr.o string/wmemcmp.o string/wmemcpy.o
 llvm_libc_replaces += string/wmemmove.o string/wmemset.o
 llvm_libc_replaces += stdlib/qsort.o stdlib/bsearch.o
 llvm_libc_replaces += prng/rand.o
+llvm_libc_replaces += ctype/isalnum.o ctype/isalpha.o ctype/isblank.o
+llvm_libc_replaces += ctype/iscntrl.o ctype/islower.o ctype/isprint.o
+llvm_libc_replaces += ctype/ispunct.o ctype/isspace.o ctype/isupper.o
+llvm_libc_replaces += ctype/isxdigit.o ctype/tolower.o ctype/toupper.o
 
 # OSv-owned libc/ objects (not musl/) superseded by llvm-libc's strtod/strtol
 # engine and qsort_r.
