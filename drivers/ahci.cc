@@ -442,10 +442,10 @@ void hba::enable_irq()
     hba_writel(HOST_GHC, ghc);
 
     if (_pci_dev.is_msix() || _pci_dev.is_msi() ) {
-        _msi.easy_register({ { 0, [=] { ack_irq(); }, nullptr} });
+        _msi.easy_register({ { 0, [this] { ack_irq(); }, nullptr} });
     } else {
         _gsi.reset(new gsi_level_interrupt(_pci_dev.get_interrupt_line(),
-                                           [=] { return ack_irq(); }, [] {}));
+                                           [this] { return ack_irq(); }, [] {}));
     }
 }
 

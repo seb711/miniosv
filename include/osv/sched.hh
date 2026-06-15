@@ -715,7 +715,7 @@ public:
     void setup_large_syscall_stack();
     void free_tiny_syscall_stack();
 #ifdef __x86_64__
-    void* get_syscall_stack_top();
+    char* get_syscall_stack_top();
 #endif
     void* get_exception_stack_top() { return _arch.exception_stack + sizeof(_arch.exception_stack); }
 private:
@@ -772,7 +772,6 @@ public:
     }
 private:
     virtual void timer_fired() override;
-    struct detached_state;
     friend struct detached_state;
 private:
     std::function<void ()> _func;
@@ -901,7 +900,7 @@ public:
             _counter.store(_counter.load(std::memory_order_relaxed) + delta,
                     std::memory_order_relaxed);
         }
-        friend class cpu;
+        friend struct cpu;
         friend class thread;
     };
     stat_counter stat_switches;

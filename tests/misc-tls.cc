@@ -27,7 +27,7 @@ int main()
 {
     constexpr int N = 100000000;
     auto start = std::chrono::system_clock::now();
-    for (register int i = 0; i < N; i++) {
+    for (int i = 0; i < N; i++) {
         // To force gcc to not optimize this loop away
         asm volatile("" : : : "memory");
         ++var_global;
@@ -37,7 +37,7 @@ int main()
     std::cout << "var_global iteration (ns): " << (sec.count() / N / 1e-9) << "\n";
 
     start = std::chrono::system_clock::now();
-    for (register int i = 0; i < N; i++) {
+    for (int i = 0; i < N; i++) {
         // To force gcc to not optimize this loop away
         asm volatile("" : : : "memory");
         ++var_tls;

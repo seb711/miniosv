@@ -76,7 +76,6 @@ private:
                                             boost::intrusive::constant_time_size<false>> table_type;
     std::atomic<bool> _running = { false };
     std::atomic<bool> _overflow = { false };
-    size_t _nr_traces;
     unsigned _skip_frames;
     unsigned _nr_frames;
     // memory buffer for trace objects; since they're variable sized, we can't just

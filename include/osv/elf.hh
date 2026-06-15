@@ -367,8 +367,8 @@ public:
     void relocate();
     void set_base(void* base);
     void set_dynamic_table(Elf64_Dyn* dynamic_table);
-    void* base() const;
-    void* end() const;
+    char* base() const;
+    char* end() const;
     Elf64_Sym* lookup_symbol(const char* name, bool self_lookup);
     symbol_module lookup_symbol_deep(const char* name);
     void load_segments();
@@ -470,8 +470,8 @@ protected:
     std::string _pathname;
     Elf64_Ehdr _ehdr;
     std::vector<Elf64_Phdr> _phdrs;
-    void* _base;
-    void* _end;
+    char* _base;
+    char* _end;
     void* _tls_segment;
     ulong _tls_init_size, _tls_uninit_size, _tls_alignment;
     bool _static_tls;
@@ -536,8 +536,8 @@ public:
     void load_program_headers();
     void load_elf_header();
 protected:
-    virtual void load_segment(const Elf64_Phdr& phdr);
-    virtual void unload_segment(const Elf64_Phdr& phdr);
+    virtual void load_segment(const Elf64_Phdr& phdr) override;
+    virtual void unload_segment(const Elf64_Phdr& phdr) override;
     virtual void read(Elf64_Off offset, void* data, size_t size) override;
 private:
     ::fileref _f;
@@ -547,8 +547,8 @@ class memory_image : public object {
 public:
     explicit memory_image(program& prog, void* base);
 protected:
-    virtual void load_segment(const Elf64_Phdr& phdr);
-    virtual void unload_segment(const Elf64_Phdr& phdr);
+    virtual void load_segment(const Elf64_Phdr& phdr) override;
+    virtual void unload_segment(const Elf64_Phdr& phdr) override;
     virtual void read(Elf64_Off offset, void* data, size_t size) override;
 };
 

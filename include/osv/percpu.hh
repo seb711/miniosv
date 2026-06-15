@@ -22,13 +22,13 @@ public:
     // argument to the constructor. The type percpu<T> still needs to be
     // used to declare the variable separately from its definition (which
     // is needed for class static variables).
-    static constexpr struct
-        please_use_PERCPU_macro {} please_use_PERCPU_macro {};
+    struct percpu_tag {};
+    static constexpr percpu_tag please_use_PERCPU_macro {};
     // percpu<T>'s constructor needs to be constexpr so that the .percpu
     // section can be constructed at compile time, and then at early run time
     // be copied to per-cpu copies of this section, without risking that the
     // constructor hasn't run yet.
-    explicit constexpr percpu(struct please_use_PERCPU_macro) { }
+    explicit constexpr percpu(percpu_tag) { }
     // You can't copy a per-cpu variable and get a new per-cpu variable.
     // Neither can one be moved (its address is important).
     percpu(const percpu&) = delete;

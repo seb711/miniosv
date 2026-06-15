@@ -142,7 +142,7 @@ static long to_nanoseconds(Duration duration)
     return std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
 }
 
-void start_sampler(config new_config) throw()
+void start_sampler(config new_config) noexcept
 {
     SCOPE_LOCK(_control_lock);
 
@@ -175,7 +175,7 @@ void start_sampler(config new_config) throw()
     debug("Sampler started.\n");
 }
 
-void stop_sampler() throw()
+void stop_sampler() noexcept
 {
     SCOPE_LOCK(_control_lock);
 

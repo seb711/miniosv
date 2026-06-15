@@ -102,7 +102,7 @@ struct mmio_device_info {
 class mmio_device : public virtio_device {
 public:
     mmio_device(mmio_device_info dev_info) :
-        _dev_info(dev_info), _vendor_id(0), _device_id(0), _addr_mmio(0) {}
+        _dev_info(dev_info), _vendor_id(0), _device_id(0), _addr_mmio(nullptr) {}
 
     virtual ~mmio_device() {}
 
@@ -145,7 +145,7 @@ private:
     u16 _vendor_id;
     u16 _device_id;
 
-    mmioaddr_t _addr_mmio;
+    volatile char* _addr_mmio;
 #ifdef __aarch64__
     std::unique_ptr<spi_interrupt> _irq;
 #else

@@ -123,7 +123,7 @@ bus_dmamap_load(bus_dma_tag_t dmat, bus_dmamap_t map, void *buf,
 
         dmat->segments[nsegs].ds_addr = virt_to_phys(buf);
         dmat->segments[nsegs++].ds_len = segsize;
-        buf += segsize;
+        buf = (char*)buf + segsize;
         buflen -= segsize;
     }
     assert(nsegs <= dmat->nsegments);

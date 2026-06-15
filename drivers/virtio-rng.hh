@@ -25,7 +25,7 @@ public:
     explicit rng(virtio_device& dev);
     virtual ~rng();
 
-    virtual std::string get_name() const { return "virtio-rng"; }
+    virtual std::string get_name() const override { return "virtio-rng"; }
 
     virtual size_t get_random_bytes(char* buf, size_t size) override;
 

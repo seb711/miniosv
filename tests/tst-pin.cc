@@ -89,7 +89,7 @@ int main(int argc, char **argv)
         // a runnable thread
         auto now = osv::clock::uptime::now();
         while (osv::clock::uptime::now() < now + std::chrono::milliseconds(100)) {
-            for (register int i = 0; i < 100000; i++) {
+            for (int i = 0; i < 100000; i++) {
                 // To force gcc to not optimize this loop away
                 asm volatile("" : : : "memory");
             }

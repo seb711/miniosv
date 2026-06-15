@@ -862,7 +862,7 @@ ssize_t sys_getdents64(int fd, void *dirp, size_t count)
         while ((error = sys_readdir(fp, &entry)) == 0) {
             auto rec_len = offsetof(linux_dirent64, d_name) + strlen(entry.d_name) + 1;
             if (rec_len <= count) {
-                auto *ldirent = static_cast<linux_dirent64*>(dirp + bytes_read);
+                auto *ldirent = reinterpret_cast<linux_dirent64*>(static_cast<char*>(dirp) + bytes_read);
                 ldirent->d_ino = entry.d_ino;
                 ldirent->d_off = entry.d_off;
                 ldirent->d_type = entry.d_type;

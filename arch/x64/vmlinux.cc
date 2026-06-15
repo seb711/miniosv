@@ -22,7 +22,7 @@
 
 #define SETUP_HEADER_OFFSET  0x1f1   // look at bootparam.h in linux
 #define SETUP_HEADER_FIELD_VAL(boot_params, offset, field_type) \
-    (*static_cast<field_type*>(boot_params + SETUP_HEADER_OFFSET + offset))
+    (*reinterpret_cast<field_type*>(boot_params + SETUP_HEADER_OFFSET + offset))
 
 #define BOOT_FLAG_OFFSET     sizeof(u8) + 4 * sizeof(u16) + sizeof(u32)
 #define HDR_MAGIC_OFFSET     sizeof(u8) + 6 * sizeof(u16) + sizeof(u32)
@@ -49,7 +49,7 @@ struct linux_e820ent {
 // Please see https://www.kernel.org/doc/Documentation/x86/boot.txt for details
 // of Linux boot protocol. Bear in mind that OSv implements very narrow specific
 // subset of the protocol as assumed by firecracker.
-extern "C" void extract_linux_boot_params(void *boot_params)
+extern "C" void extract_linux_boot_params(char *boot_params)
 {   //
     // Verify we are being booted as Linux 64-bit ELF kernel
     assert( SETUP_HEADER_FIELD_VAL(boot_params, BOOT_FLAG_OFFSET, u16) == LINUX_KERNEL_BOOT_FLAG_MAGIC);
@@ -66,10 +66,10 @@ extern "C" void extract_linux_boot_params(void *boot_params)
     mb_info->mb.mmap_length = 0;
     mb_info->mb.mmap_addr = OSV_E820_TABLE_ADDR;
 
-    struct linux_e820ent *source_e820_table = static_cast<struct linux_e820ent *>(boot_params + E820_TABLE_OFFSET);
+    struct linux_e820ent *source_e820_table = reinterpret_cast<struct linux_e820ent *>(boot_params + E820_TABLE_OFFSET);
     struct e820ent *dest_e820_table = reinterpret_cast<struct e820ent *>(mb_info->mb.mmap_addr);
 
-    u8 en820_entries = *static_cast<u8*>(boot_params + E820_ENTRIES_OFFSET);
+    u8 en820_entries = *reinterpret_cast<u8*>(boot_params + E820_ENTRIES_OFFSET);
     for (int e820_index = 0; e820_index < en820_entries; e820_index++) {
         dest_e820_table[e820_index].ent_size = 20;
         dest_e820_table[e820_index].type = source_e820_table[e820_index].type;

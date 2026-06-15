@@ -16,7 +16,7 @@ class pv_based_clock : public clock
 {
 public:
     pv_based_clock();
-    virtual s64 time() __attribute__((no_instrument_function));
+    virtual s64 time() override __attribute__((no_instrument_function));
     virtual s64 uptime() override __attribute__((no_instrument_function));
     virtual s64 boot_time() override __attribute__((no_instrument_function));
 private:

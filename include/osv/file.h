@@ -108,7 +108,7 @@ struct hash<epoll_key> : private hash<int>, hash<file*> {
 
 }
 
-struct epoll_file;
+class epoll_file;
 
 struct epoll_ptr {
     epoll_file* epoll;

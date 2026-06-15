@@ -127,7 +127,7 @@ exception_noerror_entry ex_ud, invalid_opcode
 exception_noerror_entry ex_nm, device_not_available
 exception_error_entry ex_df, double_fault
 exception_error_entry ex_ts, invalid_tss
-exception_error_entry ex_np, segment_not_present,
+exception_error_entry ex_np, segment_not_present
 exception_error_entry ex_ss, stack_fault
 exception_error_entry ex_gp, general_protection
 exception_error_entry ex_pf, page_fault

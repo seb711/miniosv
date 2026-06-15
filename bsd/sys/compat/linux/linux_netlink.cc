@@ -167,7 +167,7 @@ struct nlmsghdr * nlmsg_put(struct mbuf *m, uint32_t pid, uint32_t seq, int type
 	nlh->nlmsg_pid = pid;
 	nlh->nlmsg_seq = seq;
 	if (align_size != size) {
-		memset(nlmsg_data(nlh) + len, 0, align_size - size);
+		memset((char*)nlmsg_data(nlh) + len, 0, align_size - size);
 	}
 	return nlh;
 }
@@ -198,7 +198,7 @@ int nla_put(struct mbuf *m, int attrtype, int len, const void *src)
 	void *dest = nla_data(nla);
 	memcpy(dest, src, len);
 	if (size != align_size)
-		memset(dest + size, 0, (align_size - size));
+		memset((char*)dest + size, 0, (align_size - size));
 	return 0;
 }
 

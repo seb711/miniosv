@@ -113,13 +113,13 @@ namespace pthread_private {
 
     pthread::pthread(void *(*start)(void *arg), void *arg, sigset_t sigset,
                      const thread_attr* attr)
-            : _thread(sched::thread::make([=] {
+            : _thread(sched::thread::make([=, this] {
                 current_pthread = to_libc();
                 sigprocmask(SIG_SETMASK, &sigset, nullptr);
                 _retval = start(arg);
             }, attributes(attr ? *attr : thread_attr()), false, true))
     {
-        _thread->set_cleanup([=] { delete this; });
+        _thread->set_cleanup([this] { delete this; });
     }
 
     void pthread::start()

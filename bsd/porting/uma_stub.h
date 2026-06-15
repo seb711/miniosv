@@ -49,7 +49,7 @@ struct uma_item_header {
 
 typedef struct uma_item_header* uma_item_header_t;
 
-#define UMA_ITEM_HDR(zone, item)        ((uma_item_header_t)((void*)item+zone->uz_size))
+#define UMA_ITEM_HDR(zone, item)        ((uma_item_header_t)((char*)item+zone->uz_size))
 #define UMA_ITEM_HDR_LEN                (sizeof(struct uma_item_header))
 
 

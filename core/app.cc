@@ -558,7 +558,7 @@ void application::new_program()
             // limit on the amount of memory this program can allocate -
             // just a limit on the code size.
             void *addr =
-	        reinterpret_cast<void *>(elf::program_base) + ((i + 1) << 33);
+	        reinterpret_cast<char*>(elf::program_base) + ((i + 1) << 33);
            _program.reset(new elf::program(addr));
            return;
         }

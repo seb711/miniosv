@@ -851,7 +851,7 @@ void  __attribute__((constructor(init_prio::dtb))) dtb_setup()
     dtb_parse_mmio_virtio_devices();
 #endif
 
-    register u64 edata;
+    u64 edata;
     asm volatile ("adrp %0, .edata" : "=r"(edata));
 
     /* import from loader.cc and core/mmu.cc */

@@ -122,15 +122,15 @@ rofs_mount(struct mount *mp, const char *dev, int flags, const void *data)
     rofs->sb = sb;
     rofs->dir_entries = (struct rofs_dir_entry *) malloc(sizeof(struct rofs_dir_entry) * sb->directory_entries_count);
 
-    void *data_ptr = buf.get();
+    char *data_ptr = static_cast<char*>(buf.get());
     //
     // Read directory entries
     for (unsigned int idx = 0; idx < sb->directory_entries_count; idx++) {
         struct rofs_dir_entry *dir_entry = &(rofs->dir_entries[idx]);
-        dir_entry->inode_no = *((uint64_t *) data_ptr);
+        dir_entry->inode_no = *(reinterpret_cast<uint64_t *>(data_ptr));
         data_ptr += sizeof(uint64_t);
 
-        unsigned short *filename_size = (unsigned short *) data_ptr;
+        unsigned short *filename_size = reinterpret_cast<unsigned short *>(data_ptr);
         data_ptr += sizeof(unsigned short);
 
         dir_entry->filename = (char *) malloc(*filename_size + 1);
@@ -144,7 +144,7 @@ rofs_mount(struct mount *mp, const char *dev, int flags, const void *data)
     rofs->symlinks = (char **) malloc(sizeof(char *) * sb->symlinks_count);
 
     for (unsigned int idx = 0; idx < sb->symlinks_count; idx++) {
-        unsigned short *symlink_path_size = (unsigned short *) data_ptr;
+        unsigned short *symlink_path_size = reinterpret_cast<unsigned short *>(data_ptr);
         data_ptr += sizeof(unsigned short);
 
         rofs->symlinks[idx] = (char *) malloc(*symlink_path_size + 1);

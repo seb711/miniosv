@@ -67,7 +67,7 @@ sched::cpu::notifier cpu_notifier([] {
 });
 
 cpu_quiescent_state_thread::cpu_quiescent_state_thread(sched::cpu* cpu)
-    : _t(sched::thread::make([=] { work(); }, sched::thread::attr().pin(cpu).name(std::string("rcu") + std::to_string(cpu->id))))
+    : _t(sched::thread::make([=, this] { work(); }, sched::thread::attr().pin(cpu).name(std::string("rcu") + std::to_string(cpu->id))))
 {
     (*percpu_quiescent_state_thread).reset(*_t);
     _t->start();
@@ -181,7 +181,7 @@ void cpu_quiescent_state_thread::do_work()
         } else {
             // Wait until we have a generation request from another CPU who
             // wants to clean up, or we are woken to clean up our callbacks
-            sched::thread::wait_until([=] {
+            sched::thread::wait_until([this] {
                 return (_generation.load(std::memory_order_relaxed) <
                         _request.load(std::memory_order_acquire)) ||
                         percpu_callbacks->ncallbacks[percpu_callbacks->buf]; });

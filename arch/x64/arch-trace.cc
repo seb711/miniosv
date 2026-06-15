@@ -11,16 +11,17 @@
 #include <stdlib.h>
 
 static void patch_fence(void * dst, size_t size) {
+    char* cdst = static_cast<char*>(dst);
     if (processor::features().clflush) {
         asm volatile (
                 "mfence \n"
                 "clflush (%0) \n"
                 "mfence \n"
                 : /*no output*/
-                :"r"(dst));
+                :"r"(cdst));
     }
-    if (align_down(dst, sizeof(void*)) != align_down(dst + size - 1, sizeof(void*))) {
-        patch_fence(dst + size - 1, 1);
+    if (align_down(cdst, sizeof(void*)) != align_down(cdst + size - 1, sizeof(void*))) {
+        patch_fence(cdst + size - 1, 1);
     }
 }
 
@@ -37,8 +38,11 @@ static void patch_fence(void * dst, size_t size) {
  * It then follows that at the very least the instruction to be patched need to be aligned on
  * 2, so we can at least CAS the jmp.
  */
-static void patch_trace_site(void * dst, const void * src, size_t size)
+static void patch_trace_site(void * dst_v, const void * src_v, size_t size)
 {
+    char* dst = static_cast<char*>(dst_v);
+    const char* src = static_cast<const char*>(src_v);
+
     assert((uintptr_t(dst) & 1) == 0 && "We're assuming at least alignment on 2");
 
     if ((uintptr_t(dst) & 1) != 0) {
@@ -52,7 +56,7 @@ static void patch_trace_site(void * dst, const void * src, size_t size)
         uintptr_t qword;
     } replace;
 
-    void * const aligned = align_down(dst, ws);
+    char * const aligned = align_down(dst, ws);
     const auto off = uintptr_t(dst) - uintptr_t(aligned);
 
     memcpy(replace.buf, aligned, ws);
@@ -74,7 +78,7 @@ static void patch_trace_site(void * dst, const void * src, size_t size)
     // on x86. But using a locked swap has the benefit of acting as am acquire barrier.
     // Need to use gcc intrinsic, since its not a std::atomic type
 
-    __sync_lock_test_and_set(static_cast<volatile uintptr_t *>(aligned), replace.qword);
+    __sync_lock_test_and_set(reinterpret_cast<volatile uintptr_t *>(aligned), replace.qword);
 
     if (twostage) {
         // Ensure the change is visible
@@ -90,7 +94,7 @@ static void patch_trace_site(void * dst, const void * src, size_t size)
         assert(size >= ws - off);
         memcpy(replace.buf + off, src, ws - off);
 
-        __sync_lock_test_and_set(static_cast<volatile uintptr_t *>(aligned), replace.qword);
+        __sync_lock_test_and_set(reinterpret_cast<volatile uintptr_t *>(aligned), replace.qword);
     }
 }
 

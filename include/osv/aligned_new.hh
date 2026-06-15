@@ -59,10 +59,10 @@ template<typename T>
 T* aligned_array_new(size_t len) {
     // Allocate one extra item in the beginning, for length.
     static_assert(sizeof(T) > sizeof(size_t), "small T in aligned_array_new");
-    void *p = aligned_alloc(alignof(T), sizeof(T) * (len+1));
+    char *p = static_cast<char*>(aligned_alloc(alignof(T), sizeof(T) * (len+1)));
     assert(p);
     *(size_t *)p = len;
-    T* ret = (T*) (p + sizeof(T));
+    T* ret = reinterpret_cast<T*>(p + sizeof(T));
     for (unsigned i = 0; i < len; i++) {
         p += sizeof(T);
         new(p) T();
@@ -70,14 +70,4 @@ T* aligned_array_new(size_t len) {
     return ret;
 } 
 
-template<typename T>
-void aligned_array_delete(T* p) {
-    static_assert(sizeof(T) > sizeof(size_t), "small T in aligned_array_new");
-    size_t len = *(size_t*)p;
-    for (unsigned i = 0; i < len ; i++) {
-        ++p;
-        *p->~T();
-    }
-    free(p);
-} 
 #endif /* ALIGNED_NEW_HH */

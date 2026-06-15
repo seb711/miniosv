@@ -69,8 +69,8 @@
 
 void _loop(int iterations)
 {
-    for (register int i=0; i<iterations; i++) {
-        for (register int j=0; j<10000; j++) {
+    for (int i=0; i<iterations; i++) {
+        for (int j=0; j<10000; j++) {
             // To force gcc to not optimize this loop away
             asm volatile("" : : : "memory");
         }
@@ -142,7 +142,7 @@ public:
             stop();
         }
         _stop = false;
-        _t = new std::thread([=]() {
+        _t = new std::thread([=, this]() {
             while(!_stop) {
                 _loop(looplen);
                 std::this_thread::sleep_for(

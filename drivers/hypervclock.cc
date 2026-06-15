@@ -23,7 +23,7 @@
 class hypervclock : public clock {
 public:
     hypervclock();
-    virtual s64 time() __attribute__((no_instrument_function));
+    virtual s64 time() override __attribute__((no_instrument_function));
     virtual s64 uptime() override __attribute__((no_instrument_function));
     virtual s64 boot_time() override __attribute__((no_instrument_function));
 private:
