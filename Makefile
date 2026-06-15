@@ -1720,7 +1720,30 @@ endif
 conf_llvm_libc ?= 0
 llvm_libc_libdir = build/llvm-libc/$(arch)/libc/lib
 llvm_libc_archives = $(llvm_libc_libdir)/libc.a $(llvm_libc_libdir)/libm.a
-llvm_libc_replaces = string/bcmp.o
+
+# musl objects superseded by llvm-libc, grown one family at a time. Stays musl
+# for now: string/strchrnul.o (musl env/* needs __strchrnul until the env step),
+# string/strsignal.o (no llvm-libc equivalent - long tail).
+llvm_libc_replaces  = string/bcmp.o
+llvm_libc_replaces += string/memchr.o string/memcmp.o string/memrchr.o
+llvm_libc_replaces += string/stpcpy.o string/stpncpy.o string/strcasecmp.o
+llvm_libc_replaces += string/strcat.o string/strchr.o string/strcmp.o
+llvm_libc_replaces += string/strcpy.o string/strdup.o string/strlcat.o
+llvm_libc_replaces += string/strlcpy.o string/strlen.o string/strncat.o
+llvm_libc_replaces += string/strncmp.o string/strncpy.o string/strnlen.o
+llvm_libc_replaces += string/strrchr.o string/strspn.o string/strstr.o
+llvm_libc_replaces += string/wcschr.o string/wcscmp.o string/wcscpy.o
+llvm_libc_replaces += string/wcslen.o string/wcsncpy.o string/wcsnlen.o
+llvm_libc_replaces += string/wmemchr.o string/wmemcmp.o string/wmemcpy.o
+llvm_libc_replaces += string/wmemmove.o string/wmemset.o
+llvm_libc_replaces += stdlib/qsort.o stdlib/bsearch.o
+llvm_libc_replaces += prng/rand.o
+
+# OSv-owned libc/ objects (not musl/) superseded by llvm-libc's strtod/strtol
+# engine and qsort_r.
+llvm_libc_replaces_libc  = stdlib/strtol.o stdlib/strtod.o stdlib/wcstol.o
+llvm_libc_replaces_libc += stdlib/qsort_r.o
+
 llvm_libc_dep =
 ifeq ($(conf_llvm_libc),1)
 $(out)/.llvm-libc-built: scripts/build-llvm-libc.sh tools/llvm-libc/entrypoints.txt tools/llvm-libc/config.json tools/llvm-libc/headers.txt
@@ -1729,6 +1752,7 @@ $(out)/.llvm-libc-built: scripts/build-llvm-libc.sh tools/llvm-libc/entrypoints.
 $(llvm_libc_archives): $(out)/.llvm-libc-built
 llvm_libc_dep = $(llvm_libc_archives)
 musl := $(filter-out $(llvm_libc_replaces),$(musl))
+libc := $(filter-out $(llvm_libc_replaces_libc),$(libc))
 linker_archives_options += $(llvm_libc_archives)
 endif
 
@@ -1740,10 +1764,10 @@ def_symbols = --defsym=OSV_KERNEL_BASE=$(kernel_base) \
               --defsym=OSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 endif
 
-$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file)
+$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file) $(llvm_libc_dep)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
 		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -L$(out)/arch/$(arch) \
-            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep),$^))) \
+            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep),$^))) \
 	    $(linker_archives_options) $(conf_linker_extra_options), \
 		LINK loader.elf)
 	@# Build libosv.so matching this loader.elf. This is not a separate
