@@ -33,7 +33,7 @@
 #include <osv/mutex.h>
 #include <osv/sched.hh>
 
-#include <sys/sys/random.h>
+#include <osv/random.h>
 
 #include <string.h>
 #include <stdint.h>
