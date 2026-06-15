@@ -123,7 +123,7 @@ void read_partition_table(struct device *dev)
 		char dev_name[MAXDEVNAME];
 		struct device *new_dev;
 
-		auto* entry = static_cast<struct partition_table_entry*>(bp->b_data + offset);
+		auto* entry = reinterpret_cast<struct partition_table_entry*>(static_cast<char*>(bp->b_data) + offset);
 
 		if (entry->system_id == 0) {
 			continue;

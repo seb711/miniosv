@@ -130,7 +130,7 @@ static int rofs_read_without_cache(struct vnode *vnode, struct file *fp, struct 
     if ((offset + read_amt) % sb->block_size > 0)
         block_count++;
 
-    void *buf = malloc(BSIZE * block_count);
+    char *buf = static_cast<char*>(malloc(BSIZE * block_count));
 
     print("[rofs] rofs_read [%d], inode: %d, [%d -> %d] at %d of %d bytes\n",
           sched::thread::current()->id(), inode->inode_no, block, block_count, uio->uio_offset, read_amt);

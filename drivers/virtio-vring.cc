@@ -52,7 +52,7 @@ namespace virtio {
         assert(is_power_of_two(num));
         _num = num;
         _desc = (vring_desc*)_vring_ptr;
-        _avail = (vring_avail*)(_vring_ptr + num * sizeof(vring_desc));
+        _avail = (vring_avail*)(static_cast<char*>(_vring_ptr) + num * sizeof(vring_desc));
         _used = (vring_used*)(((unsigned long)&_avail->_ring[num] +
                 sizeof(u16) + alignment - 1) & ~(alignment - 1));
 

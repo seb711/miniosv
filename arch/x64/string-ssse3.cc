@@ -237,8 +237,10 @@ struct init_short_copier {
 initialized_array<short_copy_fn, 16,
     make_index_list<16>, init_short_copier> short_copiers;
 
-void ssse3_unaligned_copy(void* dest, const void* src, size_t n)
+void ssse3_unaligned_copy(void* dest_v, const void* src_v, size_t n)
 {
+    char* dest = static_cast<char*>(dest_v);
+    const char* src = static_cast<const char*>(src_v);
     auto o_dest = reinterpret_cast<uintptr_t>(dest) & 15;
     auto o_src = reinterpret_cast<uintptr_t>(src) & 15;
 

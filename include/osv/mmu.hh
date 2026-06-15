@@ -40,7 +40,7 @@ inline phys virt_to_phys_dynamic_phys(void* virt)
     return static_cast<char*>(virt) - phys_mem;
 }
 
-constexpr inline unsigned pt_index(void *virt, unsigned level)
+inline unsigned pt_index(void *virt, unsigned level)
 {
     return (reinterpret_cast<ulong>(virt) >> (page_size_shift + level * pte_per_page_shift)) & (pte_per_page - 1);
 }
@@ -58,7 +58,7 @@ struct linear_vma {
     ~linear_vma();
 
     uintptr_t v_start() const { return reinterpret_cast<uintptr_t>(_virt_addr); }
-    uintptr_t v_end() const { return reinterpret_cast<uintptr_t>(_virt_addr + _size); }
+    uintptr_t v_end() const { return reinterpret_cast<uintptr_t>(static_cast<char*>(_virt_addr) + _size); }
 };
 
 class vma {
@@ -138,7 +138,7 @@ public:
     ~file_vma();
     virtual void split(uintptr_t edge) override;
     virtual error sync(uintptr_t start, uintptr_t end) override;
-    virtual int validate_perm(unsigned perm);
+    virtual int validate_perm(unsigned perm) override;
     virtual void fault(uintptr_t addr, exception_frame *ef) override;
     fileref file() const { return _file; }
     f_offset offset() const { return _offset; }
@@ -313,7 +313,7 @@ void virt_to_phys(void* vaddr, size_t len, OutputFunc out)
 {
     if (CONF_memory_debug && vaddr >= debug_base) {
         while (len) {
-            auto next = std::min(align_down(vaddr + page_size, page_size), vaddr + len);
+            auto next = std::min(align_down(static_cast<char*>(vaddr) + page_size, page_size), static_cast<char*>(vaddr) + len);
             size_t delta = static_cast<char*>(next) - static_cast<char*>(vaddr);
             out(virt_to_phys(vaddr), delta);
             vaddr = next;

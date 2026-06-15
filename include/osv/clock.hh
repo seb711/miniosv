@@ -108,19 +108,19 @@ public:
  */
 namespace literals {
 /** Nanoseconds */
-constexpr std::chrono::nanoseconds operator "" _ns(unsigned long long c) {
+constexpr std::chrono::nanoseconds operator""_ns(unsigned long long c) {
     return std::chrono::nanoseconds(c);
 }
 /** Microseconds */
-constexpr std::chrono::microseconds operator "" _us(unsigned long long c) {
+constexpr std::chrono::microseconds operator""_us(unsigned long long c) {
     return std::chrono::microseconds(c);
 }
 /** Milliseconds */
-constexpr std::chrono::milliseconds operator "" _ms(unsigned long long c) {
+constexpr std::chrono::milliseconds operator""_ms(unsigned long long c) {
     return std::chrono::milliseconds(c);
 }
 /** Seconds */
-constexpr std::chrono::seconds operator "" _s(unsigned long long c) {
+constexpr std::chrono::seconds operator""_s(unsigned long long c) {
     return std::chrono::seconds(c);
 }
 }

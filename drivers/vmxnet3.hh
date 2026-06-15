@@ -125,7 +125,7 @@ template<class T> void slice_memory(void *&va, T &holder)
 {
     for (auto &e : holder) {
         e.attach(va);
-        va += e.size();
+        va = (char*)va + e.size();
     }
 }
 

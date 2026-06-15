@@ -54,7 +54,7 @@ inline void run_entry_point(void* ep, int argc, char** argv, int argv_size)
     int argc_plus_argv_stack_size = argv_size + 1;
 
     //Capture current stack pointer
-    void *stack;
+    char *stack;
     asm volatile ("movq %%rsp, %0" : "=r"(stack));
 
     //The code below puts argv and auxv vector onto the stack but it may

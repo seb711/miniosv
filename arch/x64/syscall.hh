@@ -19,11 +19,11 @@ struct syscall_stack_descriptor {
     // is tiny (0) or large (1). Therefore the size of the syscall stack is
     // in reality smaller by 16 bytes from what was originally allocated because we need
     // to make it 16-bytes aligned.
-    void* stack_top;
+    char* stack_top;
     //
     // This field is used to store the syscall caller stack pointer (value of RSP when
     // SYSCALL was called) so that it can be restored when syscall completes.
-    void* caller_stack_pointer;
+    char* caller_stack_pointer;
 };
 
 

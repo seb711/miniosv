@@ -946,7 +946,7 @@ thread::stack_info::stack_info()
 thread::stack_info::stack_info(void* _begin, size_t _size)
     : begin(_begin), size(_size), deleter(nullptr)
 {
-    auto end = align_down(begin + size, 16);
+    auto end = align_down(static_cast<char*>(begin) + size, 16);
     size = static_cast<char*>(end) - static_cast<char*>(begin);
 }
 
@@ -2074,7 +2074,7 @@ thread_runtime::time_until(runtime_t target_local_runtime) const
     }
     auto ret = taulog(runtime_t(1) +
             (target_local_runtime - _Rtt) / _priority / cpu::current()->c);
-    if (ret > thread_runtime::duration::max().count())
+    if (ret > static_cast<runtime_t>(thread_runtime::duration::max().count()))
         return thread_runtime::duration(-1);
     return thread_runtime::duration((thread_runtime::duration::rep) ret);
 }

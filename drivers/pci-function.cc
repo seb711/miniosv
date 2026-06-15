@@ -57,7 +57,7 @@ namespace pci {
     u64 bar::readq(u64 offset)
     {
         if (_is_mmio) {
-            return mmio_getq(_addr_mmio + offset);
+            return mmio_getq(static_cast<volatile char*>(_addr_mmio) + offset);
         } else {
             abort("64 bit read attempt from PIO area");
         }
@@ -66,7 +66,7 @@ namespace pci {
     u32 bar::readl(u64 offset)
     {
         if (_is_mmio) {
-            return mmio_getl(_addr_mmio + offset);
+            return mmio_getl(static_cast<volatile char*>(_addr_mmio) + offset);
         } else {
             return inl(_addr_lo + offset);
         }
@@ -75,7 +75,7 @@ namespace pci {
     u16 bar::readw(u64 offset)
     {
         if (_is_mmio) {
-            return mmio_getw(_addr_mmio + offset);
+            return mmio_getw(static_cast<volatile char*>(_addr_mmio) + offset);
         } else {
             return inw(_addr_lo + offset);
         }
@@ -84,7 +84,7 @@ namespace pci {
     u8 bar::readb(u64 offset)
     {
         if (_is_mmio) {
-            return mmio_getb(_addr_mmio + offset);
+            return mmio_getb(static_cast<volatile char*>(_addr_mmio) + offset);
         } else {
             return inb(_addr_lo + offset);
         }
@@ -93,7 +93,7 @@ namespace pci {
     void bar::writeq(u64 offset, u64 val)
     {
         if (_is_mmio) {
-            mmio_setq(_addr_mmio + offset, val);
+            mmio_setq(static_cast<volatile char*>(_addr_mmio) + offset, val);
         } else {
             abort("64 bit write attempt to PIO area");
         }
@@ -102,7 +102,7 @@ namespace pci {
     void bar::writel(u64 offset, u32 val)
     {
         if (_is_mmio) {
-            mmio_setl(_addr_mmio + offset, val);
+            mmio_setl(static_cast<volatile char*>(_addr_mmio) + offset, val);
         } else {
             outl(val, _addr_lo + offset);
         }
@@ -111,7 +111,7 @@ namespace pci {
     void bar::writew(u64 offset, u16 val)
     {
         if (_is_mmio) {
-            mmio_setw(_addr_mmio + offset, val);
+            mmio_setw(static_cast<volatile char*>(_addr_mmio) + offset, val);
         } else {
             outw(val, _addr_lo + offset);
         }
@@ -120,7 +120,7 @@ namespace pci {
     void bar::writeb(u64 offset, u8 val)
     {
         if (_is_mmio) {
-            mmio_setb(_addr_mmio + offset, val);
+            mmio_setb(static_cast<volatile char*>(_addr_mmio) + offset, val);
         } else {
             outb(val, _addr_lo + offset);
         }
@@ -492,8 +492,8 @@ namespace pci {
             return false;
         }
 
-        mmioaddr_t entryaddr = msix_get_table() + (entry_id * MSIX_ENTRY_SIZE);
-        mmioaddr_t ctrl = entryaddr + (u8)MSIX_ENTRY_CONTROL;
+        mmioaddr_t entryaddr = mmio_a(msix_get_table(), entry_id * MSIX_ENTRY_SIZE);
+        mmioaddr_t ctrl = mmio_a(entryaddr, (u8)MSIX_ENTRY_CONTROL);
 
         u32 ctrl_data = mmio_getl(ctrl);
         ctrl_data |= (1 << MSIX_ENTRY_CONTROL_MASK_BIT);
@@ -541,8 +541,8 @@ namespace pci {
             return false;
         }
 
-        mmioaddr_t entryaddr = msix_get_table() + (entry_id * MSIX_ENTRY_SIZE);
-        mmioaddr_t ctrl = entryaddr + (u8)MSIX_ENTRY_CONTROL;
+        mmioaddr_t entryaddr = mmio_a(msix_get_table(), entry_id * MSIX_ENTRY_SIZE);
+        mmioaddr_t ctrl = mmio_a(entryaddr, (u8)MSIX_ENTRY_CONTROL);
 
         u32 ctrl_data = mmio_getl(ctrl);
         ctrl_data &= ~(1 << MSIX_ENTRY_CONTROL_MASK_BIT);
@@ -590,10 +590,10 @@ namespace pci {
             return false;
         }
 
-        mmioaddr_t entryaddr = msix_get_table() + (entry_id * MSIX_ENTRY_SIZE);
+        mmioaddr_t entryaddr = mmio_a(msix_get_table(), entry_id * MSIX_ENTRY_SIZE);
 
-        mmio_setq(entryaddr + (u8)MSIX_ENTRY_ADDR, address);
-        mmio_setl(entryaddr + (u8)MSIX_ENTRY_DATA, data);
+        mmio_setq(mmio_a(entryaddr, (u8)MSIX_ENTRY_ADDR), address);
+        mmio_setl(mmio_a(entryaddr, (u8)MSIX_ENTRY_DATA), data);
 
         return true;
     }
@@ -734,8 +734,7 @@ namespace pci {
             return mmio_nullptr;
         }
 
-        return reinterpret_cast<mmioaddr_t>(msix_bar->get_mmio() +
-                                              _msix.msix_table_offset);
+        return mmio_a(msix_bar->get_mmio(), _msix.msix_table_offset);
     }
 
     u8 function::pci_readb(u8 offset)

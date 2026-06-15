@@ -96,8 +96,8 @@ int pipe2(int pipefd[2], int flags) {
     std::unique_ptr<pipe_reader> s1{new pipe_reader(b)};
     std::unique_ptr<pipe_writer> s2{new pipe_writer(b)};
     try {
-        fileref f1 = make_file<pipe_file>(move(s1));
-        fileref f2 = make_file<pipe_file>(move(s2));
+        fileref f1 = make_file<pipe_file>(std::move(s1));
+        fileref f2 = make_file<pipe_file>(std::move(s2));
         fdesc fd1(f1);
         fdesc fd2(f2);
 

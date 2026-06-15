@@ -55,11 +55,11 @@ include conf/$(mode).mk
 # But also allow the user to specify a cross-compiled target architecture
 # by setting either "ARCH" or "arch" in the make command line, or the "ARCH"
 # environment variable.
-HOST_CXX := g++
+HOST_CXX := clang++
 
 detect_arch = $(word 1, $(shell { echo "x64        __x86_64__";  \
                                   echo "aarch64    __aarch64__"; \
-                       } | $1 -E -xc - | grep ' 1$$'))
+                       } | $1 -E -xc - | grep -v '^#' | grep ' 1$$'))
 
 host_arch := $(call detect_arch, $(HOST_CXX))
 
@@ -83,11 +83,11 @@ endif
 include conf/$(arch).mk
 
 CROSS_PREFIX ?= $(if $(filter-out $(arch),$(host_arch)),$(arch)-linux-gnu-)
-CXX=$(CROSS_PREFIX)g++
-CC=$(CROSS_PREFIX)gcc
+CXX=clang++
+CC=clang
 LD=$(CROSS_PREFIX)ld.bfd
-export STRIP=$(CROSS_PREFIX)strip
-OBJCOPY=$(CROSS_PREFIX)objcopy
+export STRIP=$(shell which llvm-strip 2>/dev/null || which llvm-strip-20 2>/dev/null || echo strip)
+OBJCOPY=$(shell which llvm-objcopy 2>/dev/null || which llvm-objcopy-20 2>/dev/null || echo objcopy)
 
 # Our makefile puts all compilation results in a single directory, $(out),
 # instead of mixing them with the source code. This allows us to compile
@@ -210,7 +210,7 @@ INCLUDES = $(local-includes) -Iarch/$(arch) -I. -Iinclude  -Iarch/common
 INCLUDES += -isystem include/glibc-compat
 #
 # Let us detect presence of standard C++ headers
-CXX_INCLUDES = $(shell $(CXX) -E -xc++ - -v </dev/null 2>&1 | awk '/^End/ {exit} /^ .*c\+\+/ {print "-isystem" $$0}')
+CXX_INCLUDES = $(shell $(CXX) -E -xc++ - -v </dev/null 2>&1 | awk '/^End/ {exit} /^ \// && /c\+\+/ {print "-isystem" $$0}')
 ifeq ($(CXX_INCLUDES),)
   ifeq ($(CROSS_PREFIX),aarch64-linux-gnu-)
     # We are on distribution where the aarch64-linux-gnu package does not come with C++ headers
@@ -283,6 +283,18 @@ endif
 compiler-flag = $(shell $(CXX) $(CFLAGS_WERROR) $1 -o /dev/null -c $3  > /dev/null 2>&1 && echo $2)
 
 compiler-specific := $(call compiler-flag, -std=$(conf_cxx_level), -DHAVE_ATTR_COLD_LABEL, compiler/attr/cold-label.cc)
+fno-instrument-functions := $(call compiler-flag, -fno-instrument-functions, -fno-instrument-functions, compiler/empty.cc)
+
+# Flags that exist in GCC but not Clang - probed so the build works with either compiler.
+wno-class-memaccess       := $(call compiler-flag, -Wno-class-memaccess,       -Wno-class-memaccess,       compiler/empty.cc)
+wno-stringop-truncation   := $(call compiler-flag, -Wno-stringop-truncation,   -Wno-stringop-truncation,   compiler/empty.cc)
+wno-dangling-pointer      := $(call compiler-flag, -Wno-dangling-pointer,      -Wno-dangling-pointer,      compiler/empty.cc)
+wno-unused-private-field  := $(call compiler-flag, -Wno-unused-private-field,  -Wno-unused-private-field,  compiler/empty.cc)
+# GCC: $(wno-maybe-uninitialized); Clang equivalent: -Wno-uninitialized
+wno-maybe-uninitialized := $(call compiler-flag, -Wno-maybe-uninitialized, -Wno-maybe-uninitialized, compiler/empty.cc)
+ifeq ($(wno-maybe-uninitialized),)
+wno-maybe-uninitialized := $(call compiler-flag, -Wno-uninitialized, -Wno-uninitialized, compiler/empty.cc)
+endif
 
 source-dialects = -D_GNU_SOURCE
 
@@ -327,9 +339,12 @@ COMMON = $(autodepend) -g -Wall -Wno-pointer-arith $(CFLAGS_WERROR) -Wformat=0 -
 	$(conf_compiler_cflags) $(conf_compiler_opt) $(tracing-flags) $(gcc-sysroot) \
 	-D__OSV__ -D__XEN_INTERFACE_VERSION__="0x00030207" -DARCH_STRING=$(ARCH_STR) $(EXTRA_FLAGS)
 COMMON += $(standard-includes-flag)
+COMMON += $(wno-unused-private-field)
 
 tracing-flags-0 =
-tracing-flags-1 = -finstrument-functions -finstrument-functions-exclude-file-list=c++,trace.cc,trace.hh,align.hh,mmintrin.h
+tracing-excl := $(shell $(CXX) $(CFLAGS_WERROR) -finstrument-functions-exclude-file-list=x -o /dev/null -c compiler/empty.cc > /dev/null 2>&1 && \
+    echo '-finstrument-functions-exclude-file-list=c++,trace.cc,trace.hh,align.hh,mmintrin.h')
+tracing-flags-1 = -finstrument-functions $(tracing-excl)
 tracing-flags = $(tracing-flags-$(conf_tracing))
 
 cc-hide-flags-0 =
@@ -352,8 +367,17 @@ CFLAGS = -std=gnu99 $(COMMON)
 # should be limited to files under libc/ eventually
 CFLAGS += -I libc/stdio -I libc/internal -I libc/arch/$(arch) \
 	-Wno-missing-braces -Wno-parentheses -Wno-unused-but-set-variable
+# musl uses "str"+int idiom to skip first character conditionally
+$(out)/musl/%.o: CFLAGS += -Wno-string-plus-int
+$(out)/libc/%.o: CFLAGS += -Wno-string-plus-int
 
 ASFLAGS = -g $(autodepend) -D__ASSEMBLY__
+# Assembly files use COMMON (no -std=gnu++XX) so Clang does not apply C++
+# lexing to assembly comments (which breaks on apostrophes like "let's").
+# Many COMMON flags (optimization, -isystem, defines) don't apply to assembly;
+# Clang flags them under -Wunused-command-line-argument, so silence that.
+wno-unused-cli-arg := $(call compiler-flag, -Wno-unused-command-line-argument, -Wno-unused-command-line-argument, compiler/empty.cc)
+ASCOMPILE = $(CXX) $(COMMON) $(wno-unused-cli-arg)
 
 $(out)/fs/vfs/main.o: CXXFLAGS += -Wno-sign-compare -Wno-write-strings
 
@@ -363,7 +387,8 @@ $(out)/bsd/%.o: INCLUDES += -isystem bsd/
 $(out)/bsd/%.o: INCLUDES += -isystem bsd/$(arch)
 
 makedir = $(call very-quiet, mkdir -p $(dir $@))
-build-so = $(CC) $(CFLAGS) -o $@ $^ $(EXTRA_LIBS)
+EXTRA_LDFLAGS =
+build-so = $(CC) $(CFLAGS) -o $@ $^ $(EXTRA_LDFLAGS) $(EXTRA_LIBS)
 q-build-so = $(call quiet, $(build-so), LINK $@)
 
 
@@ -377,13 +402,14 @@ $(out)/%.o: %.c include/osv/kernel_config_hide_symbols.h | generated-headers
 
 $(out)/%.o: %.S include/osv/kernel_config_hide_symbols.h
 	$(makedir)
-	$(call quiet, $(CXX) $(CXXFLAGS) $(ASFLAGS) -c -o $@ $<, AS $*.S)
+	$(call quiet, $(ASCOMPILE) $(ASFLAGS) -c -o $@ $<, AS $*.S)
 
 $(out)/%.o: %.s include/osv/kernel_config_hide_symbols.h
 	$(makedir)
-	$(call quiet, $(CXX) $(CXXFLAGS) $(ASFLAGS) -c -o $@ $<, AS $*.s)
+	$(call quiet, $(ASCOMPILE) $(ASFLAGS) -c -o $@ $<, AS $*.s)
 
-%.so: EXTRA_FLAGS = -fPIC -shared -z relro -z lazy
+%.so: EXTRA_FLAGS = -fPIC
+%.so: EXTRA_LDFLAGS = -shared -Wl,-z,relro -Wl,-z,lazy
 %.so: %.o
 	$(makedir)
 	$(q-build-so)
@@ -501,12 +527,18 @@ $(out)/bsd/sys/netinet/in.o: COMMON+=-fno-strict-aliasing
 
 $(out)/bsd/sys/cddl/contrib/opensolaris/uts/common/fs/zfs/metaslab.o: COMMON+=-Wno-tautological-compare
 
-# A lot of the BSD code used to be C code, which commonly bzero()ed or
-# memcpy()ed objects. In C++, this should not be done (objects have
-# constructors and assignments), and gcc 8 starts to warn about it.
-# Instead of fixing all these occurances, let's ask gcc to ignore this
-# warning. At least for now.
-$(out)/bsd/%.o: CXXFLAGS += -Wno-class-memaccess
+# The FreeBSD-derived bsd/ tree (including the cddl/opensolaris ZFS code) is
+# legacy C ported to C++ and throws a long tail of warnings under Clang's
+# -Werror (K&R prototypes, class-memaccess, switch-default "uninitialized",
+# extern-C mismatches, ...). This whole tree is removed in a later phase, so
+# rather than chase each warning we just disable warnings for it wholesale.
+$(out)/bsd/%.o: COMMON += -w
+# bsd headers are also included from non-bsd code; suppress the attribute/
+# extern-C mismatches those pull in (probed, since GCC lacks the flag names).
+wno-extern-c-compat    := $(call compiler-flag, -Wno-extern-c-compat,   -Wno-extern-c-compat,   compiler/empty.cc)
+wno-ignored-attributes := $(call compiler-flag, -Wno-ignored-attributes, -Wno-ignored-attributes, compiler/empty.cc)
+wno-sometimes-uninitialized := $(call compiler-flag, -Wno-sometimes-uninitialized, -Wno-sometimes-uninitialized, compiler/empty.cc)
+COMMON += $(wno-extern-c-compat) $(wno-ignored-attributes) $(wno-sometimes-uninitialized)
 
 bsd  = bsd/init.o
 ifeq ($(conf_networking_stack),1)
@@ -539,7 +571,7 @@ bsd += bsd/sys/kern/subr_sbuf.o
 bsd += bsd/sys/kern/subr_eventhandler.o
 bsd += bsd/sys/kern/subr_hash.o
 bsd += bsd/sys/kern/subr_taskqueue.o
-$(out)/bsd/sys/kern/subr_taskqueue.o: COMMON += -Wno-dangling-pointer
+$(out)/bsd/sys/kern/subr_taskqueue.o: COMMON += $(wno-dangling-pointer)
 ifeq ($(conf_networking_stack),1)
 bsd += bsd/sys/kern/sys_socket.o
 endif
@@ -584,7 +616,7 @@ bsd += bsd/sys/netinet/in.o
 bsd += bsd/sys/netinet/in_pcb.o
 bsd += bsd/sys/netinet/in_proto.o
 bsd += bsd/sys/netinet/in_mcast.o
-$(out)/bsd/sys/netinet/in_mcast.o: COMMON += -Wno-maybe-uninitialized
+$(out)/bsd/sys/netinet/in_mcast.o: COMMON += $(wno-maybe-uninitialized)
 bsd += bsd/sys/netinet/in_rmx.o
 bsd += bsd/sys/netinet/ip_id.o
 bsd += bsd/sys/netinet/ip_icmp.o
@@ -798,7 +830,7 @@ $(solaris:%=$(out)/%): CFLAGS+= \
 	-Wno-unknown-pragmas \
 	-Wno-unused-variable \
 	-Wno-switch \
-	-Wno-maybe-uninitialized \
+	$(wno-maybe-uninitialized) \
 	-Ibsd/sys/cddl/compat/opensolaris \
 	-Ibsd/sys/cddl/contrib/opensolaris/common \
 	-Ibsd/sys/cddl/contrib/opensolaris/uts/common \
@@ -808,6 +840,9 @@ $(solaris:%=$(out)/%): ASFLAGS+= \
 	-Ibsd/sys/cddl/contrib/opensolaris/uts/common
 
 
+wno-vla-cxx-extension := $(call compiler-flag, -Wno-vla-cxx-extension, -Wno-vla-cxx-extension, compiler/empty.cc)
+wno-c99-designator    := $(call compiler-flag, -Wno-c99-designator,    -Wno-c99-designator,    compiler/empty.cc)
+$(out)/drivers/libtsm/%.o: CXXFLAGS += $(wno-vla-cxx-extension) $(wno-c99-designator)
 libtsm :=
 libtsm += drivers/libtsm/tsm_render.o
 libtsm += drivers/libtsm/tsm_screen.o
@@ -979,7 +1014,9 @@ objects += arch/$(arch)/xen.o
 endif
 
 ifeq ($(conf_memory_optimize),1)
-$(out)/arch/x64/string-ssse3.o: CXXFLAGS += -mssse3
+wno-unknown-attributes := $(call compiler-flag, -Wno-unknown-attributes, -Wno-unknown-attributes, compiler/empty.cc)
+$(out)/arch/x64/string-ssse3.o: CXXFLAGS += -mssse3 $(wno-unknown-attributes)
+$(out)/arch/x64/string.o: CXXFLAGS += $(wno-unknown-attributes)
 endif
 
 ifeq ($(arch),aarch64)
@@ -1203,7 +1240,7 @@ musl += math/__invtrigl.o
 musl += math/__polevll.o
 musl += math/__rem_pio2.o
 musl += math/__rem_pio2_large.o
-$(out)/musl/src/math/__rem_pio2_large.o: CFLAGS += -Wno-maybe-uninitialized
+$(out)/musl/src/math/__rem_pio2_large.o: CFLAGS += $(wno-maybe-uninitialized)
 musl += math/__rem_pio2f.o
 musl += math/__rem_pio2l.o
 musl += math/__signbit.o
@@ -1326,12 +1363,12 @@ musl += math/ldexpf.o
 musl += math/ldexpl.o
 musl += math/lgamma.o
 musl += math/lgamma_r.o
-$(out)/musl/src/math/lgamma_r.o: CFLAGS += -Wno-maybe-uninitialized
+$(out)/musl/src/math/lgamma_r.o: CFLAGS += $(wno-maybe-uninitialized)
 musl += math/lgammaf.o
 musl += math/lgammaf_r.o
-$(out)/musl/src/math/lgammaf_r.o: CFLAGS += -Wno-maybe-uninitialized
+$(out)/musl/src/math/lgammaf_r.o: CFLAGS += $(wno-maybe-uninitialized)
 musl += math/lgammal.o
-$(out)/musl/src/math/lgammal.o: CFLAGS += -Wno-maybe-uninitialized
+$(out)/musl/src/math/lgammal.o: CFLAGS += $(wno-maybe-uninitialized)
 #musl += math/llrint.o
 #musl += math/llrintf.o
 #musl += math/llrintl.o
@@ -1511,7 +1548,7 @@ musl += network/gethostbyaddr_r.o
 musl += network/gethostbyaddr.o
 musl += network/resolvconf.o
 musl += network/res_msend.o
-$(out)/musl/src/network/res_msend.o: CFLAGS += -Wno-maybe-uninitialized --include libc/syscall_to_function.h --include libc/internal/pthread_stubs.h $(cc-hide-flags-$(conf_hide_symbols))
+$(out)/musl/src/network/res_msend.o: CFLAGS += $(wno-maybe-uninitialized) --include libc/syscall_to_function.h --include libc/internal/pthread_stubs.h $(cc-hide-flags-$(conf_hide_symbols))
 $(out)/libc/multibyte/mbsrtowcs.o: CFLAGS += -Imusl/src/multibyte
 musl += network/lookup_ipliteral.o
 libc += network/getaddrinfo.o
@@ -1533,9 +1570,9 @@ musl += network/inet_pton.o
 musl += network/inet_ntop.o
 musl += network/proto.o
 musl += network/if_indextoname.o
-$(out)/musl/src/network/if_indextoname.o: CFLAGS += --include libc/syscall_to_function.h --include libc/network/__socket.h -Wno-stringop-truncation
+$(out)/musl/src/network/if_indextoname.o: CFLAGS += --include libc/syscall_to_function.h --include libc/network/__socket.h $(wno-stringop-truncation)
 musl += network/if_nametoindex.o
-$(out)/musl/src/network/if_nametoindex.o: CFLAGS += --include libc/syscall_to_function.h --include libc/network/__socket.h -Wno-stringop-truncation
+$(out)/musl/src/network/if_nametoindex.o: CFLAGS += --include libc/syscall_to_function.h --include libc/network/__socket.h $(wno-stringop-truncation)
 musl += network/gai_strerror.o
 musl += network/h_errno.o
 musl += network/getservbyname_r.o
@@ -1702,12 +1739,12 @@ musl += stdio/ungetwc.o
 musl += stdio/vasprintf.o
 libc += stdio/vdprintf.o
 libc += stdio/vfprintf.o
-$(out)/libc/stdio/vfprintf.o: COMMON += -Wno-maybe-uninitialized
+$(out)/libc/stdio/vfprintf.o: COMMON += $(wno-maybe-uninitialized)
 musl += stdio/vfscanf.o
-$(out)/musl/src/stdio/vfscanf.o: COMMON += -Wno-maybe-uninitialized
+$(out)/musl/src/stdio/vfscanf.o: COMMON += $(wno-maybe-uninitialized)
 musl += stdio/vfwprintf.o
 musl += stdio/vfwscanf.o
-$(out)/musl/src/stdio/vfwscanf.o: COMMON += -Wno-maybe-uninitialized
+$(out)/musl/src/stdio/vfwscanf.o: COMMON += $(wno-maybe-uninitialized)
 musl += stdio/vprintf.o
 musl += stdio/vscanf.o
 libc += stdio/vsnprintf.o
@@ -1738,9 +1775,9 @@ musl += stdlib/ldiv.o
 musl += stdlib/llabs.o
 musl += stdlib/lldiv.o
 musl += stdlib/qsort.o
-$(out)/musl/src/stdlib/qsort.o: COMMON += -Wno-dangling-pointer
+$(out)/musl/src/stdlib/qsort.o: COMMON += $(wno-dangling-pointer)
 libc += stdlib/qsort_r.o
-$(out)/libc/stdlib/qsort_r.o: COMMON += -Wno-dangling-pointer
+$(out)/libc/stdlib/qsort_r.o: COMMON += $(wno-dangling-pointer)
 libc += stdlib/strtol.o
 libc += stdlib/strtod.o
 libc += stdlib/wcstol.o
@@ -2350,7 +2387,7 @@ $(out)/fs/zfs/zfs_initialize.o: CFLAGS+= \
 	-Wno-unknown-pragmas \
 	-Wno-unused-variable \
 	-Wno-switch \
-	-Wno-maybe-uninitialized
+	$(wno-maybe-uninitialized)
 
 #build libsolaris.so with -z,now so that all symbols get resolved eagerly (BIND_NOW)
 #also make sure libsolaris.so has osv-mlock note (see zfs_initialize.c) so that
@@ -2398,7 +2435,7 @@ $(libzfs-objects): kernel-defines =
 $(libzfs-objects): CFLAGS += -D_GNU_SOURCE
 
 $(libzfs-objects): CFLAGS += -Wno-switch -D__va_list=__builtin_va_list '-DTEXT_DOMAIN=""' \
-			-Wno-maybe-uninitialized -Wno-unused-variable -Wno-unknown-pragmas -Wno-unused-function \
+			$(wno-maybe-uninitialized) -Wno-unused-variable -Wno-unknown-pragmas -Wno-unused-function \
 			-D_OPENSOLARIS_SYS_UIO_H_
 
 $(out)/bsd/cddl/contrib/opensolaris/lib/libzpool/common/kernel.o: CFLAGS += -fvisibility=hidden
@@ -2432,7 +2469,7 @@ $(zpool-cmd-objects): CFLAGS += -D_GNU_SOURCE
 $(zpool-cmd-objects): local-includes += $(cflags-zpool-cmd-includes)
 
 $(zpool-cmd-objects): CFLAGS += -Wno-switch -D__va_list=__builtin_va_list '-DTEXT_DOMAIN=""' \
-			-Wno-maybe-uninitialized -Wno-unused-variable -Wno-unknown-pragmas -Wno-unused-function
+			$(wno-maybe-uninitialized) -Wno-unused-variable -Wno-unknown-pragmas -Wno-unused-function
 
 
 $(out)/zpool.so: $(zpool-cmd-objects) $(out)/libzfs.so
@@ -2454,7 +2491,7 @@ $(zfs-cmd-objects): CFLAGS += -D_GNU_SOURCE
 $(zfs-cmd-objects): local-includes += $(cflags-zfs-cmd-includes)
 
 $(zfs-cmd-objects): CFLAGS += -Wno-switch -D__va_list=__builtin_va_list '-DTEXT_DOMAIN=""' \
-			-Wno-maybe-uninitialized -Wno-unused-variable -Wno-unknown-pragmas -Wno-unused-function
+			$(wno-maybe-uninitialized) -Wno-unused-variable -Wno-unknown-pragmas -Wno-unused-function
 
 
 $(out)/zfs.so: $(zfs-cmd-objects) $(out)/libzfs.so

@@ -56,9 +56,9 @@ void setup_temporary_phys_map()
 
 void for_each_e820_entry(void* e820_buffer, unsigned size, void (*f)(e820ent e))
 {
-    auto p = e820_buffer;
-    while (p < e820_buffer + size) {
-        auto ent = static_cast<e820ent*>(p);
+    auto p = static_cast<char*>(e820_buffer);
+    while (p < static_cast<char*>(e820_buffer) + size) {
+        auto ent = reinterpret_cast<e820ent*>(p);
         if (ent->type == 1) {
             f(*ent);
         }
@@ -210,7 +210,7 @@ void arch_setup_free_memory()
             ent = truncate_below(ent, initial_map);
         }
         for (auto&& area : mmu::identity_mapped_areas) {
-            auto base = reinterpret_cast<void*>(get_mem_area_base(area));
+            auto base = reinterpret_cast<char*>(get_mem_area_base(area));
             mmu::linear_map(base + ent.addr, ent.addr, ent.size,
                area == mmu::mem_area::main ? "main" :
                area == mmu::mem_area::page ? "page" : "mempool", ~0);
@@ -223,8 +223,8 @@ void arch_setup_tls(void *tls, const elf::tls_data& info)
 {
     struct thread_control_block *tcb;
     memcpy(tls, info.start, info.filesize);
-    memset(tls + info.filesize, 0, info.size - info.filesize);
-    tcb = (struct thread_control_block *)(tls + info.size);
+    memset(static_cast<char*>(tls) + info.filesize, 0, info.size - info.filesize);
+    tcb = reinterpret_cast<struct thread_control_block *>(static_cast<char*>(tls) + info.size);
     tcb->self = tcb;
     processor::wrmsr(msr::IA32_FS_BASE, reinterpret_cast<uint64_t>(tcb));
 }

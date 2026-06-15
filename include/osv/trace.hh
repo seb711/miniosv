@@ -190,7 +190,7 @@ struct object_serializer<T, typename std::enable_if<is_blob<T>::value>::type> {
 
     [[gnu::always_inline]]
     void serialize(T range, void* _buffer) {
-        auto data_buf = reinterpret_cast<value_type*>(_buffer + sizeof(len_t));
+        auto data_buf = reinterpret_cast<value_type*>(static_cast<char*>(_buffer) + sizeof(len_t));
         size_t count = 0;
         for (auto& item : range) {
             *data_buf++ = item;
