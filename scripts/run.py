@@ -662,7 +662,10 @@ if __name__ == "__main__":
         default_image_file_name = "disk.img"
     else:
         default_kernel_file_name = "loader-stripped.elf"
-        default_image_file_name = "usr.img"
+        default_image_file_name = "disk.img"
+        # x64 no longer has a BIOS boot sector; the kernel is always loaded
+        # via QEMU -kernel (multiboot/PVH) with a kernel-less data disk.
+        cmdargs.kernel = True
     cmdargs.kernel_file = os.path.abspath(cmdargs.kernel_path or os.path.join(osv_base, "build/%s/%s" % (cmdargs.opt_path, default_kernel_file_name)))
     cmdargs.image_file = os.path.abspath(cmdargs.image or os.path.join(osv_base, "build/%s/%s" % (cmdargs.opt_path, default_image_file_name)))
     if not os.path.exists(cmdargs.image_file):
