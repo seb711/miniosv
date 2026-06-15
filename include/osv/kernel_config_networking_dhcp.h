@@ -3,7 +3,7 @@
 #define OSV_kernel_config_networking_dhcp_H
 
 #ifndef CONF_networking_dhcp
-#define CONF_networking_dhcp 1
+#define CONF_networking_dhcp 0
 #endif
 
 #endif

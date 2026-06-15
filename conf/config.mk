@@ -18,8 +18,8 @@ conf_tracepoints_sampler=1
 conf_tracepoints_strace=1
 
 # --- networking ------------------------------------------------------------
-conf_networking_stack=1
-conf_networking_dhcp=1
+conf_networking_stack=0
+conf_networking_dhcp=0
 
 # --- core ------------------------------------------------------------------
 conf_core_c_wrappers=1
