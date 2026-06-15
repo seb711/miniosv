@@ -228,9 +228,10 @@ ramfs)
 	exit 2
 esac
 
-if [[ "$host_arch" == "aarch64" || "$arch" == "aarch64" ]]; then
-	vars[create_disk]="true"
-fi
+# x64 no longer embeds a bootable kernel in the disk image (the lzloader and
+# BIOS boot sector are gone); the kernel is loaded via QEMU -kernel. So every
+# arch now produces a kernel-less data disk.
+vars[create_disk]="true"
 
 if test -n "${vars[usrskel]}"
 then
@@ -303,14 +304,20 @@ then
 	exit $status
 fi
 
-if test ! -f build/last/loader.img
+if test ! -f build/last/loader-stripped.elf
 then
 	echo "'make' did not leave expected results" >&2
 	exit 2
 fi
 
-loader_size=`stat --printf %s $OUT/loader.img`
-kernel_end=$(($loader_size+2097151 & ~2097151))
+# loader.img only exists for the kernel-on-disk (aarch64 preboot) layout and
+# feeds the non-create-disk partition offset below. x64 boots via -kernel and
+# never produces it.
+if test -f build/last/loader.img
+then
+	loader_size=`stat --printf %s $OUT/loader.img`
+	kernel_end=$(($loader_size+2097151 & ~2097151))
+fi
 
 # The python scripts called below assume the current directory is $OUT (as was
 # the case in our old build.mk).
