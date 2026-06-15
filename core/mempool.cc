@@ -1296,7 +1296,7 @@ public:
         , _watermark_lo(_max * 1 / 4)
         , _watermark_hi(_max * 3 / 4)
         , _stack(_max)
-        , _fill_thread(sched::thread::make([=] { fill_thread(); }, sched::thread::attr().name("page_pool_l2")))
+        , _fill_thread(sched::thread::make([this] { fill_thread(); }, sched::thread::attr().name("page_pool_l2")))
     {
        _fill_thread->start();
     }
@@ -1522,7 +1522,7 @@ void l2::fill_thread()
 
     sched::thread::wait_until([] {return smp_allocator;});
     for (;;) {
-        sched::thread::wait_for([=] {
+        sched::thread::wait_for([this] {
                 auto nr = get_nr();
                 return nr < _watermark_lo || nr > _watermark_hi;
         });

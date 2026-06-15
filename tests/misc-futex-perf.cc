@@ -98,7 +98,7 @@ private:
 
 void loop(int iterations)
 {
-    for (register int i=0; i<iterations; i++) {
+    for (int i=0; i<iterations; i++) {
         // To force gcc to not optimize this loop away
         asm volatile("" : : : "memory");
     }

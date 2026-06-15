@@ -315,7 +315,7 @@ net::net(virtio_device& dev)
     int_factory.create_pci_interrupt = [this,poll_task](pci::device &pci_dev) {
         return new pci_interrupt(
             pci_dev,
-            [=] { return this->ack_irq(); },
+            [this] { return this->ack_irq(); },
             [=] { poll_task->wake_with_irq_disabled(); });
     };
 #endif
@@ -326,14 +326,14 @@ net::net(virtio_device& dev)
         return new spi_interrupt(
             gic::irq_type::IRQ_TYPE_EDGE,
             _dev.get_irq(),
-            [=] { return this->ack_irq(); },
+            [this] { return this->ack_irq(); },
             [=] { poll_task->wake_with_irq_disabled(); });
     };
 #else
     int_factory.create_gsi_edge_interrupt = [this,poll_task]() {
         return new gsi_edge_interrupt(
             _dev.get_irq(),
-            [=] { if (this->ack_irq()) poll_task->wake_with_irq_disabled(); });
+            [=, this] { if (this->ack_irq()) poll_task->wake_with_irq_disabled(); });
     };
 #endif
 #endif

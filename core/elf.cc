@@ -1508,7 +1508,7 @@ program::load_object(std::string name, std::vector<std::string> extra_path,
     if (f) {
         trace_elf_load(name.c_str());
         auto ef = std::shared_ptr<object>(new file(*this, f, name),
-                [=](object *obj) { remove_object(obj); });
+                [=, this](object *obj) { remove_object(obj); });
         ef->set_base(_next_alloc);
         ef->set_visibility(ThreadOnly);
         ef->set_dlopen_ed(dlopen);

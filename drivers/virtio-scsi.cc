@@ -173,7 +173,7 @@ scsi::scsi(virtio_device& dev)
     int_factory.create_pci_interrupt = [this,t](pci::device &pci_dev) {
         return new pci_interrupt(
                 pci_dev,
-                [=] { return this->ack_irq(); },
+                [this] { return this->ack_irq(); },
                 [=] { t->wake_with_irq_disabled(); });
     };
     _dev.register_interrupt(int_factory);
