@@ -2316,7 +2316,10 @@ generated-headers: $(out)/gen/include/bits/alltypes.h perhaps-modify-version-h p
 # should be recreated on every compilation. To avoid a cascade of
 # recompilation, the rule below makes sure not to modify version.h's timestamp
 # if the version hasn't changed.
+# conf/Makefile used to pre-create $(out)/gen/include/osv when generating the
+# kconfig headers; with kconfig gone the generated-headers rules create it.
 perhaps-modify-version-h:
+	$(call very-quiet, mkdir -p $(out)/gen/include/osv)
 	$(call quiet, sh scripts/gen-version-header $(out)/gen/include/osv/version.h, GEN gen/include/osv/version.h)
 .PHONY: perhaps-modify-version-h
 #
@@ -2327,6 +2330,7 @@ perhaps-modify-version-h:
 # In either case, syscalls_config.h will contain list of '#define CONF_syscall_*' statements for each selected
 # syscall
 perhaps-modify-syscalls-h:
+	$(call very-quiet, mkdir -p $(out)/gen/include/osv)
 	$(call quiet, bash scripts/gen-syscalls $(out)/gen/include/osv/ $(conf_syscalls_list_file), GEN gen/include/osv/syscall_*)
 .PHONY: perhaps-modify-syscalls-h
 
