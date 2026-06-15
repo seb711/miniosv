@@ -319,6 +319,14 @@ set(TARGET_LIBC_ENTRYPOINTS
     libc.src.wchar.mbsnrtowcs
     libc.src.wchar.wcsnrtombs
     libc.src.wctype.iswalpha
+
+    # OSv additions, Phase 8.2 (string/stdlib family swap)
+    libc.src.wchar.wcschr
+    libc.src.wchar.wcsnlen
+    libc.src.wchar.wcstol
+    libc.src.wchar.wcstoll
+    libc.src.wchar.wcstoul
+    libc.src.wchar.wcstoull
 )
 
 set(TARGET_LIBM_ENTRYPOINTS

@@ -45,9 +45,6 @@ __dup3 = dup3;
 /* string */
 __strtok_r = strtok_r;
 __strndup = strndup;
-__stpcpy = stpcpy;
-__stpncpy = stpncpy;
-__strdup = strdup;
 strerrordesc_np = strerror;
 
 /* time */
