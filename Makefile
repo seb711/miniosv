@@ -203,41 +203,23 @@ local-includes =
 INCLUDES = $(local-includes) -Iarch/$(arch) -I. -Iinclude  -Iarch/common
 INCLUDES += -isystem include/glibc-compat
 #
-# Let us detect presence of standard C++ headers
-CXX_INCLUDES = $(shell $(CXX) -E -xc++ - -v </dev/null 2>&1 | awk '/^End/ {exit} /^ \// && /c\+\+/ {print "-isystem" $$0}')
-ifeq ($(CXX_INCLUDES),)
-  ifeq ($(CROSS_PREFIX),aarch64-linux-gnu-)
-    # We are on distribution where the aarch64-linux-gnu package does not come with C++ headers
-    # So let use point it to the expected location
-    aarch64_gccbase = build/downloaded_packages/aarch64/gcc/install
-    ifeq (,$(wildcard $(aarch64_gccbase)))
-     $(error Missing $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
-    endif
-
-    gcc-inc-base := $(dir $(shell find $(aarch64_gccbase)/ -name vector | grep -v -e debug/vector$$ -e profile/vector$$ -e experimental/vector$$))
-    ifeq (,$(gcc-inc-base))
-      $(error Could not find C++ headers under $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
-    endif
-
-    gcc-inc-base3 := $(dir $(shell dirname `find $(aarch64_gccbase)/ -name c++config.h | grep -v /32/`))
-    ifeq (,$(gcc-inc-base3))
-      $(error Could not find C++ headers under $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
-    endif
-    CXX_INCLUDES = -isystem $(gcc-inc-base) -isystem $(gcc-inc-base3)
-
-    gcc-inc-base2 := $(dir $(shell find $(aarch64_gccbase)/ -name unwind.h))
-    ifeq (,$(gcc-inc-base2))
-      $(error Could not find standard gcc headers like "unwind.h" under $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
-    endif
-    STANDARD_GCC_INCLUDES = -isystem $(gcc-inc-base2)
-
-    gcc-sysroot = --sysroot $(aarch64_gccbase)
-    standard-includes-flag = -nostdinc
-  else
-    $(error Could not find standard C++ headers. Please run "sudo ./scripts/setup.py")
+# C++ standard headers come from our own libc++ (CXX_INCLUDES is set below,
+# overriding anything here). The aarch64 cross-build still needs a sysroot and
+# the target toolchain's standard C headers (e.g. unwind.h) for the freestanding
+# bits; the native x86 build needs nothing extra.
+ifeq ($(CROSS_PREFIX),aarch64-linux-gnu-)
+  aarch64_gccbase = build/downloaded_packages/aarch64/gcc/install
+  ifeq (,$(wildcard $(aarch64_gccbase)))
+   $(error Missing $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
   endif
+  cross-inc-base := $(dir $(shell find $(aarch64_gccbase)/ -name unwind.h))
+  ifeq (,$(cross-inc-base))
+    $(error Could not find standard headers like "unwind.h" under $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
+  endif
+  STANDARD_GCC_INCLUDES = -isystem $(cross-inc-base)
+  gcc-sysroot = --sysroot $(aarch64_gccbase)
+  standard-includes-flag = -nostdinc
 else
-  # If gcc can find C++ headers it also means it can find standard libc headers, so no need to add them specifically
   STANDARD_GCC_INCLUDES =
   standard-includes-flag =
 endif
@@ -1091,40 +1073,13 @@ libc_objects_to_hide = $(addprefix $(out)/libc/, $(libc_to_hide))
 $(libc_objects_to_hide): cc-hide-flags = $(cc-hide-flags-$(conf_hide_symbols))
 $(libc_objects_to_hide): cxx-hide-flags = $(cxx-hide-flags-$(conf_hide_symbols))
 
-libstdc++.a := $(shell $(CXX) -print-file-name=libstdc++.a)
-ifeq ($(filter /%,$(libstdc++.a)),)
-ifeq ($(arch),aarch64)
-    libstdc++.a := $(shell find $(aarch64_gccbase)/ -name libstdc++.a)
-    ifeq ($(libstdc++.a),)
-        $(error Error: libstdc++.a needs to be installed.)
-    endif
-else
-    $(error Error: libstdc++.a needs to be installed.)
-endif
-endif
-
-libgcc.a := $(shell $(CC) -print-libgcc-file-name)
-ifeq ($(filter /%,$(libgcc.a)),)
-ifeq ($(arch),aarch64)
-    libgcc.a := $(shell find $(aarch64_gccbase)/ -name libgcc.a |  grep -v /32/)
-    ifeq ($(libgcc.a),)
-        $(error Error: libgcc.a needs to be installed.)
-    endif
-else
-    $(error Error: libgcc.a needs to be installed.)
-endif
-endif
-
-libgcc_eh.a := $(shell $(CC) -print-file-name=libgcc_eh.a)
-ifeq ($(filter /%,$(libgcc_eh.a)),)
-ifeq ($(arch),aarch64)
-    libgcc_eh.a := $(shell find $(aarch64_gccbase)/ -name libgcc_eh.a |  grep -v /32/)
-    ifeq ($(libgcc_eh.a),)
-        $(error Error: libgcc_eh.a needs to be installed.)
-    endif
-else
-    $(error Error: libgcc_eh.a needs to be installed.)
-endif
+# Compiler builtins (soft-int helpers like __umodti3) come from LLVM compiler-rt,
+# not GNU libgcc - no GCC anywhere in the toolchain. The C++ exception unwinder
+# that used to come from libgcc_eh.a is now libunwind (Phase 8.7), and the C++
+# runtime that used to come from libstdc++.a is now libc++/libc++abi (Phase 8.7).
+compiler_rt_builtins := $(shell $(CC) --rtlib=compiler-rt --print-libgcc-file-name)
+ifeq ($(filter /%,$(compiler_rt_builtins)),)
+    $(error Error: LLVM compiler-rt builtins not found. Install the clang/compiler-rt runtime.)
 endif
 
 #Allow user specify non-default location of boost
@@ -1180,7 +1135,7 @@ $(shell cp $(out)/default_version_script $(out)/version_script)
 endif
 endif
 linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group \
-  $(libgcc.a) $(boost-libs) --gc-sections
+  $(compiler_rt_builtins) $(boost-libs) --gc-sections
 ifneq ($(shell grep -c iconv $(out)/version_script),0)
 else
 libc += locale/iconv_stubs.o
@@ -1192,7 +1147,7 @@ else
 # are needed. The group resolves the libc++ <-> libc++abi cycle, and pulling
 # each symbol once avoids the multiple-definition clash from the libunwind
 # objects that the build bundles into all three archives.
-linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group $(boost-libs) $(libgcc.a)
+linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group $(boost-libs) $(compiler_rt_builtins)
 endif
 
 # LLVM libc (LLVM_LIBC_PLAN.md): llvm-libc is the generic libc, linked trailing
@@ -1210,9 +1165,9 @@ $(out)/.llvm-libc-built: scripts/build-llvm-libc.sh tools/llvm-libc/entrypoints.
 	$(call very-quiet, touch $@)
 $(llvm_libc_archives): $(out)/.llvm-libc-built
 llvm_libc_dep = $(llvm_libc_archives)
-# libgcc.a repeats after the llvm-libc archives: their members need its soft-int
-# helpers (e.g. __umodti3), and ld resolves archives in order.
-linker_archives_options += $(llvm_libc_archives) $(libgcc.a)
+# compiler-rt builtins repeat after the llvm-libc archives: their members need
+# its soft-int helpers (e.g. __umodti3), and ld resolves archives in order.
+linker_archives_options += $(llvm_libc_archives) $(compiler_rt_builtins)
 
 # libc++ / libc++abi / libunwind replace the host GNU libstdc++.a and the libgcc
 # exception unwinder (LLVM_LIBC_PLAN.md, Phase 8). Built by scripts/build-libcxx.sh
@@ -1338,11 +1293,6 @@ $(bootfs_manifest_dep): phony
 		echo -n $(bootfs_manifest) > $(bootfs_manifest_dep) ; \
 	fi
 
-libgcc_s_dir := $(dir $(shell $(CC) -print-file-name=libgcc_s.so.1))
-ifeq ($(filter /%,$(libgcc_s_dir)),)
-libgcc_s_dir := ../../$(aarch64_gccbase)/lib64
-endif
-
 bootfs_dep := scripts/mkbootfs.py $(bootfs_manifest) $(bootfs_manifest_dep) $(out)/libenviron.so
 ifeq ($(fs),ext)
 bootfs_dep += $(out)/modules/libext/libext.so
@@ -1358,20 +1308,6 @@ $(out)/libvdso-stripped.so: $(out)/libvdso.so
 
 $(out)/libvdso-content.o: $(out)/libvdso-stripped.so
 $(out)/libvdso-content.o: ASFLAGS += -I$(out)
-
-# Standard C++ library
-libstd_dir := $(dir $(shell $(CXX) -print-file-name=libstdc++.so))
-ifeq ($(filter /%,$(libstd_dir)),)
-ifeq ($(arch),aarch64)
-    libstd_dir := $(dir $(shell find $(aarch64_gccbase)/ -name libstdc++.so))
-    ifeq ($(libstd_dir),)
-        $(error Error: libstdc++.so needs to be installed.)
-    endif
-    LDFLAGS := -L$(libstd_dir)
-else
-    $(error Error: libstdc++.so needs to be installed.)
-endif
-endif
 
 
 ################################################################################
