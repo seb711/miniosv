@@ -153,18 +153,19 @@ endif
 quiet = $(if $V, $1, @echo " $2"; $1)
 very-quiet = $(if $V, $1, @$1)
 
-ifeq ($(fs),zfs)
-all: $(out)/loader.img links $(out)/zfs_builder-stripped.elf
+# x64 boots loader[-stripped].elf directly via QEMU -kernel (multiboot/PVH);
+# there is no boot sector or compressed image, so loader.img is not built.
+# aarch64 keeps loader.img (preboot stub + uncompressed loader).
 ifeq ($(arch),x64)
-all: $(out)/vmlinuz.bin
+all: $(out)/loader-stripped.elf links $(out)/vmlinuz.bin
+ifeq ($(fs),zfs)
+all: $(out)/zfs_builder-stripped.elf
+endif
 endif
 ifeq ($(arch),aarch64)
-all: $(out)/zfs_builder.img
-endif
-else
 all: $(out)/loader.img links
-ifeq ($(arch),x64)
-all: $(out)/vmlinuz.bin
+ifeq ($(fs),zfs)
+all: $(out)/zfs_builder.img
 endif
 endif
 .PHONY: all
@@ -344,7 +345,7 @@ kernel-defines = -D_KERNEL $(source-dialects) $(cc-hide-flags) $(gc-flags)
 #   mydir/*.o EXTRA_FLAGS = <MY_STUFF>
 ifeq ($(arch),x64)
 EXTRA_FLAGS = -D__OSV_CORE__ -DOSV_KERNEL_BASE=$(kernel_base) -DOSV_KERNEL_VM_BASE=$(kernel_vm_base) \
-	-DOSV_KERNEL_VM_SHIFT=$(kernel_vm_shift) -DOSV_LZKERNEL_BASE=$(lzkernel_base)
+	-DOSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 else
 EXTRA_FLAGS = -D__OSV_CORE__ -DOSV_KERNEL_VM_BASE=$(kernel_vm_base)
 endif
@@ -452,29 +453,20 @@ $(out)/loader-stripped.elf: $(out)/loader.elf
 
 ifeq ($(arch),x64)
 
-# kernel_base is where the kernel will be loaded after uncompression.
-# lzkernel_base is where the compressed kernel is loaded from disk.
+# kernel_base is where the kernel is loaded by the multiboot/PVH boot loader
+# (QEMU -kernel). There is no longer a compressed/relocated copy: the loader
+# ELF is placed directly by the boot loader, so OSV_KERNEL_BASE is the only
+# load address.
 kernel_base := 0x200000
-lzkernel_base := 0x100000
 kernel_vm_base := 0x40200000
 
 # the default of 512 bytes can be overridden by passing the app_local_exec_tls_size
 # environment variable to the make or scripts/build
 app_local_exec_tls_size := 0x200
 
-$(out)/arch/x64/boot16.o: $(out)/lzloader.elf
-$(out)/boot.bin: arch/x64/boot16.ld $(out)/arch/x64/boot16.o
-	$(call quiet, $(LD) -o $@ -T $^, LD $@)
-
-image-size = $(shell stat --printf %s $(out)/lzloader.elf)
-
-$(out)/loader.img: $(out)/boot.bin $(out)/lzloader.elf
-	$(call quiet, dd if=$(out)/boot.bin of=$@ > /dev/null 2>&1, DD loader.img boot.bin)
-	$(call quiet, dd if=$(out)/lzloader.elf of=$@ conv=notrunc seek=128 > /dev/null 2>&1, \
-		DD loader.img lzloader.elf)
-	$(call quiet, scripts/imgedit.py setsize "-f raw $@" $(image-size), IMGEDIT $@)
-	$(call quiet, scripts/imgedit.py setargs "-f raw $@" $(cmdline), IMGEDIT $@)
-
+# vmlinuz.bin is the uncompressed bzImage-style wrapper around loader-stripped.elf
+# for hosts that expect a Linux-kernel blob. The primary x64 boot path is
+# 'qemu -kernel loader[-stripped].elf' (multiboot/PVH), which needs no wrapper.
 kernel_size = $(shell stat --printf %s $(out)/loader-stripped.elf)
 
 $(out)/arch/x64/vmlinuz-boot32.o: $(out)/loader-stripped.elf
@@ -488,31 +480,6 @@ $(out)/vmlinuz.bin: $(out)/vmlinuz-boot.bin $(out)/loader-stripped.elf
 	$(call quiet, dd if=$(out)/vmlinuz-boot.bin of=$@ > /dev/null 2>&1, DD vmlinuz.bin vmlinuz-boot.bin)
 	$(call quiet, dd if=$(out)/loader-stripped.elf of=$@ conv=notrunc seek=4 > /dev/null 2>&1, \
 		DD vmlinuz.bin loader-stripped.elf)
-
-$(out)/fastlz/fastlz.o:
-	$(makedir)
-	$(call quiet, $(CXX) $(CXXFLAGS) -O2 -m32 -fno-instrument-functions -o $@ -c fastlz/fastlz.cc, CXX fastlz/fastlz.cc)
-
-$(out)/fastlz/lz: fastlz/fastlz.cc fastlz/lz.cc | generated-headers
-	$(makedir)
-	$(call quiet, $(CXX) $(CXXFLAGS) -O2 -o $@ $(filter %.cc, $^), CXX $@)
-
-$(out)/loader-stripped.elf.lz.o: $(out)/loader-stripped.elf $(out)/fastlz/lz
-	$(call quiet, $(out)/fastlz/lz $(out)/loader-stripped.elf, LZ loader-stripped.elf)
-	$(call quiet, cd $(out); objcopy -B i386 -I binary -O elf32-i386 loader-stripped.elf.lz loader-stripped.elf.lz.o, OBJCOPY loader-stripped.elf.lz -> loader-stripped.elf.lz.o)
-
-$(out)/fastlz/lzloader.o: fastlz/lzloader.cc | generated-headers
-	$(makedir)
-	$(call quiet, $(CXX) $(CXXFLAGS) -O0 -m32 -fno-instrument-functions -o $@ -c fastlz/lzloader.cc, CXX $<)
-
-$(out)/lzloader.elf: $(out)/loader-stripped.elf.lz.o $(out)/fastlz/lzloader.o arch/x64/lzloader.ld \
-	$(out)/fastlz/fastlz.o
-	$(call very-quiet, scripts/check-image-size.sh $(out)/loader-stripped.elf)
-	$(call quiet, $(LD) -o $@ --defsym=OSV_LZKERNEL_BASE=$(lzkernel_base) \
-		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -z max-page-size=4096 \
-		-T arch/x64/lzloader.ld \
-		$(filter %.o, $^), LINK lzloader.elf)
-	$(call quiet, truncate -s %32768 $@, ALIGN lzloader.elf)
 
 acpi-defines = -DACPI_MACHINE_WIDTH=64 -DACPI_USE_LOCAL_CACHE
 
