@@ -152,13 +152,13 @@ tests := tst-pthread.so misc-ramdisk.so tst-vblk.so tst-bsd-evh.so \
 	tst-calloc.so tst-crypt.so tst-non-fpic.so tst-small-malloc.so \
 	tst-getopt.so tst-getopt-pie.so tst-non-pie.so tst-semaphore.so \
 	tst-elf-init.so tst-realloc.so tst-setjmp.so \
-	libtls.so libtls_gold.so lib-misc-tls.so tst-tls.so \
-	tst-tls-gold.so tst-tls-pie.so tst-tls-pie-dlopen.so \
+	libtls.so lib-misc-tls.so tst-tls.so \
+	tst-tls-pie.so tst-tls-pie-dlopen.so \
 	tst-sigaction.so tst-syscall.so tst-ifaddrs.so tst-getdents.so \
 	tst-netlink.so misc-zfs-io.so misc-zfs-arc.so tst-pthread-create.so \
 	misc-futex-perf.so misc-syscall-perf.so tst-brk.so tst-reloc.so \
 	misc-vdso-perf.so tst-string-utils.so tst-elf-circular-reloc.so \
-	lib-circular-reloc1.so lib-circular-reloc2.so tst-rwlock.so
+	lib-circular-reloc1.so lib-circular-reloc2.so
 #	tst-f128.so \
 
 
@@ -250,45 +250,26 @@ $(out)/tests/tst-tls-pie-dlopen.so: \
 	$(makedir)
 	$(call quiet, cd $(out); $(CXX) $(CXXFLAGS) $(LDFLAGS) -export-dynamic -pthread -fpie -o $@ $< $(LIBS), LD tests/tst-tls-pie-dlopen.so)
 
-$(out)/tests/libtls_gold.so: COMMON += -fuse-ld=gold
-$(out)/tests/libtls_gold.so: $(out)/tests/libtls.o
-	$(makedir)
-	$(call quiet, $(CXX) $(CXXFLAGS) $(LDFLAGS) -shared -o $@ $< $(LIBS), LD tests/libtls_gold.so)
+# The gold-linker TLS tests (libtls_gold, tst-tls-gold) are dropped: gold is
+# not required to build OSv.
 
-$(out)/tests/tst-tls-gold.so: COMMON += -fuse-ld=gold
-$(out)/tests/tst-tls-gold.so: \
-		$(src)/tests/tst-tls.cc \
-		$(out)/tests/libtls_gold.so
-	$(makedir)
-	$(call quiet, cd $(out); $(CXX) $(CXXFLAGS) $(LDFLAGS) -D__SHARED_OBJECT__=1 -shared -o $@ $< tests/libtls_gold.so, CXX tests/tst-tls.cc)
-
-common-boost-tests := tst-vfs.so tst-libc-locking.so misc-fs-stress.so \
-	misc-bdev-write.so misc-bdev-wlatency.so misc-bdev-rw.so \
-	tst-promise.so tst-dlfcn.so tst-stat.so tst-wait-for.so \
-	tst-bsd-tcp1.so tst-bsd-tcp1-zsnd.so tst-bsd-tcp1-zrcv.so \
-	tst-bsd-tcp1-zsndrcv.so tst-async.so tst-rcu-list.so tst-tcp-listen.so \
-	tst-poll.so tst-bitset-iter.so tst-timer-set.so tst-clock.so \
-	tst-rcu-hashtable.so tst-unordered-ring-mpsc.so \
-	tst-seek.so tst-ctype.so tst-wctype.so tst-string.so tst-time.so tst-dax.so \
-	tst-net_if_test.so
+# Tests that link against the Boost libraries (unit_test_framework, filesystem,
+# program_options) are dropped here so the suite can be built and run without a
+# system Boost installation. Only Boost *headers* are vendored (external/boost);
+# the Boost *libraries* are not.
+common-boost-tests :=
 
 boost-tests := $(common-boost-tests)
 
-rofs-only-boost-tests := rofs/tst-stdio.so
+rofs-only-boost-tests :=
 
-zfs-only-boost-tests := tst-rename.so tst-stdio.so
+zfs-only-boost-tests :=
 
-ext-only-boost-tests := tst-rename.so tst-stdio.so
+ext-only-boost-tests :=
 
 boost-tests += $($(fs_type)-only-boost-tests)
 
-$(boost-tests:%=$(out)/tests/%): LIBS += \
-	-lboost_unit_test_framework \
-	-lboost_filesystem
-
-boost-program-options-tests := misc-tcp.so misc-zfs-arc.so tst-rwlock.so
-$(boost-program-options-tests:%=$(out)/tests/%): LIBS += \
-	-lboost_program_options
+boost-program-options-tests :=
 
 common-tests := $(tests) $(common-boost-tests)
 tests += $(boost-tests)
@@ -341,7 +322,7 @@ usr.manifest: build_all_tests $(lastword $(MAKEFILE_LIST)) usr.manifest.skel FOR
 	@cat $@.skel > $@
 	@case "$(CROSS_PREFIX)" in \
 		"aarch64"*) ./add_aarch64_boost_libraries.sh $(OSV_BASE) >> $@ ;; \
-		*) LD_LIBRARY_PATH=$(boost-lib-dir) ldd $(addprefix $(out)/tests/,$(boost-tests)) $(addprefix $(out)/tests/,$(boost-program-options-tests)) | grep $(manifest-lib-pattern) | sed 's/ *[^ ] *\(.*\) => \(.*\) .*/\/usr\/lib\/\1: \2/' | sort | uniq >> $@ ;; \
+		*) : ;; \
 	esac
 	@echo $(all_tests) | tr ' ' '\n' | grep -v "tests/rofs/tst-.*.so" | awk '{print "/" $$0 ": ./" $$0}' >> $@
 	@echo $(all_tests) | tr ' ' '\n' | grep "tests/rofs/tst-.*.so" | sed 's/\.so//' | awk 'BEGIN { FS = "/" } ; { print "/tests/" $$3 "-rofs.so: ./tests/" $$2 "/" $$3 ".so"}' >> $@
@@ -354,7 +335,7 @@ common.manifest: build_all_tests $(lastword $(MAKEFILE_LIST)) usr.manifest.skel 
 	@cat usr.manifest.skel > $@
 	@case "$(CROSS_PREFIX)" in \
 		"aarch64"*) ./add_aarch64_boost_libraries.sh $(OSV_BASE) >> $@ ;; \
-		*) LD_LIBRARY_PATH=$(boost-lib-dir) ldd $(addprefix $(out)/tests/,$(boost-tests)) $(addprefix $(out)/tests/,$(boost-program-options-tests)) | grep $(manifest-lib-pattern) | sed 's/ *[^ ] *\(.*\) => \(.*\) .*/\/usr\/lib\/\1: \2/' | sort | uniq >> $@ ;; \
+		*) : ;; \
 	esac
 	@echo $(common-tests) | tr ' ' '\n' | awk '{print "/tests/" $$0 ": ./tests/" $$0}' >> $@
 

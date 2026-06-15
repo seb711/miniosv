@@ -6,10 +6,7 @@
  */
 
 #include <osv/drivers_config.h>
-extern "C" {
-#include "acpi.h"
-}
-#include <boost/intrusive/parent_from_member.hpp>
+#include <drivers/acpi.hh>
 #include <osv/prio.hh>
 #include "processor.hh"
 #include "clock.hh"
@@ -22,8 +19,6 @@ extern "C" {
 #include <osv/irqlock.hh>
 #include "rtc.hh"
 #include <osv/percpu.hh>
-
-using boost::intrusive::get_parent_from_member;
 
 class hpetclock : public clock {
 public:
@@ -161,20 +156,17 @@ void __attribute__((constructor(init_prio::hpet))) hpet_init()
             return;
         }
 
-        char hpet_sig[] = ACPI_SIG_HPET;
-        ACPI_TABLE_HEADER *hpet_header;
-        auto st = AcpiGetTable(hpet_sig, 0, &hpet_header);
+        auto h = reinterpret_cast<const acpi::hpet*>(acpi::find_table(ACPI_SIG_HPET));
         // If we don't have a paravirtual clock, nor an HPET clock, we currently
         // have no chance of running.
-        if (st != AE_OK) {
+        if (!h) {
             abort("Neither paravirtual clock nor HPET is available.\n");
         }
-        auto h = get_parent_from_member(hpet_header, &ACPI_TABLE_HPET::Header);
-        auto hpet_address = h->Address;
+        auto hpet_address = h->address;
 
         // Check what type of main counter - 32-bit or 64-bit - is available and
         // construct relevant hpet clock instance
-        mmioaddr_t hpet_mmio_address = mmio_map(hpet_address.Address, 4096, "hpet");
+        mmioaddr_t hpet_mmio_address = mmio_map(hpet_address.address, 4096, "hpet");
 
         auto cap = mmio_getl(hpet_mmio_address + HPET_CAP);
         if (cap & HPET_CAP_COUNT_SIZE) {
