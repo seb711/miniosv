@@ -1,1 +1,6 @@
-../../musl_0.9.12/src/stdio/putchar.c
+#include <stdio.h>
+
+int putchar(int c)
+{
+	return fputc(c, stdout);
+}

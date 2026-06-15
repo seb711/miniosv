@@ -1,1 +1,1 @@
-../../../../musl/arch/x86_64/bits/endian.h
+#define __BYTE_ORDER __LITTLE_ENDIAN

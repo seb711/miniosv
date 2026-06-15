@@ -9,7 +9,7 @@
 
 const char *const sys_errlist[] = {
 #define E(num, message) [num] = message,
-#include "../../musl/src/errno/__strerror.h"
+#include "__strerror.h"
 #undef E
 };
 

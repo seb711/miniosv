@@ -1,1 +1,1 @@
-../../musl/include/syscall.h
+#include <sys/syscall.h>

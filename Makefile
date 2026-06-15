@@ -114,15 +114,6 @@ endif
 
 ###########################################################################
 
-# We need some external git modules to have been downloaded, because the
-# default "make" depends on the following directories:
-#   musl/ -  for some of the header files (symbolic links in include/api) and
-#            some of the source files ($(musl) below).
-# Additional submodules are need when certain make parameters are used.
-ifeq (,$(wildcard musl/include))
-    $(error Missing musl/ directory. Please run "git submodule update --init --recursive")
-endif
-
 # This makefile wraps all commands with the $(quiet) or $(very-quiet) macros
 # so that instead of half-a-screen-long command lines we short summaries
 # like "CC file.cc". These macros also keep the option of viewing the
@@ -255,8 +246,6 @@ INCLUDES += -isystem $(out)/gen/include
 INCLUDES += $(post-includes-bsd)
 
 
-$(out)/musl/%.o: pre-include-api = -isystem include/api/internal_musl_headers -isystem musl/src/include
-
 ifneq ($(werror),0)
 	CFLAGS_WERROR = -Werror
 endif
@@ -282,12 +271,10 @@ source-dialects = -D_GNU_SOURCE
 
 # libc has its own source dialect control
 $(out)/libc/%.o: source-dialects =
-$(out)/musl/%.o: source-dialects =
 
-# do not hide symbols in musl/libc because it has it's own hiding mechanism
+# do not hide symbols in libc because it has its own hiding mechanism
 $(out)/libc/%.o: cc-hide-flags =
 $(out)/libc/%.o: cxx-hide-flags =
-$(out)/musl/%.o: cc-hide-flags =
 
 kernel-defines = -D_KERNEL $(source-dialects) $(cc-hide-flags) $(gc-flags)
 
@@ -353,12 +340,10 @@ CFLAGS = -std=gnu99 $(COMMON) $(tls-model)
 CFLAGS += -I libc/stdio -I libc/internal -I libc/arch/$(arch) \
 	-Wno-missing-braces -Wno-parentheses -Wno-unused-but-set-variable
 # musl uses "str"+int idiom to skip first character conditionally
-$(out)/musl/%.o: CFLAGS += -Wno-string-plus-int
 $(out)/libc/%.o: CFLAGS += -Wno-string-plus-int
 # musl calls fabs() on a long double in a few spots; suppress Clang's narrowing
 # warning rather than patch the vendored musl source (probed; GCC lacks the flag)
 wno-absolute-value := $(call compiler-flag, -Wno-absolute-value, -Wno-absolute-value, compiler/empty.cc)
-$(out)/musl/%.o: CFLAGS += $(wno-absolute-value)
 $(out)/libc/%.o: CFLAGS += $(wno-absolute-value)
 
 ASFLAGS = -g $(autodepend) -D__ASSEMBLY__
@@ -734,15 +719,7 @@ objects += core/string_utils.o
 #include $(src)/libc/build.mk:
 libc =
 libc_to_hide =
-musl =
 environ_libc =
-environ_musl =
-
-ifeq ($(arch),x64)
-musl_arch = x86_64
-else
-musl_arch = aarch64
-endif
 
 libc += internal/_chk_fail.o
 libc_to_hide += internal/_chk_fail.o
@@ -768,7 +745,6 @@ environ_libc += string/strchrnul.c
 
 libc += errno/strerror.o
 
-$(out)/musl/src/locale/__mo_lookup.o: CFLAGS += $(cc-hide-flags-$(conf_hide_symbols))
 libc += locale/catopen.o
 libc += locale/duplocale.o
 libc += locale/freelocale.o
@@ -780,27 +756,7 @@ libc += locale/strtof_l.o
 libc += locale/strtold_l.o
 libc += locale/uselocale.o
 
-$(out)/musl/src/math/__rem_pio2_large.o: CFLAGS += $(wno-maybe-uninitialized)
-$(out)/musl/src/math/exp2l.o: CFLAGS += -Wno-unused-variable
-#musl += math/fma.o
-#musl += math/fmaf.o
-#musl += math/fmal.o
 libc += math/finitel.o
-$(out)/musl/src/math/ilogb.o: CFLAGS += -Wno-unknown-pragmas
-$(out)/musl/src/math/ilogbf.o: CFLAGS += -Wno-unknown-pragmas
-$(out)/musl/src/math/ilogbl.o: CFLAGS += -Wno-unknown-pragmas
-$(out)/musl/src/math/lgamma_r.o: CFLAGS += $(wno-maybe-uninitialized)
-$(out)/musl/src/math/lgammaf_r.o: CFLAGS += $(wno-maybe-uninitialized)
-$(out)/musl/src/math/lgammal.o: CFLAGS += $(wno-maybe-uninitialized)
-#musl += math/llrint.o
-#musl += math/llrintf.o
-#musl += math/llrintl.o
-#musl += math/lrintf.o
-#musl += math/lrintl.o
-$(out)/musl/src/math/nearbyint.o: CFLAGS += -Wno-unknown-pragmas
-$(out)/musl/src/math/nearbyintf.o: CFLAGS += -Wno-unknown-pragmas
-$(out)/musl/src/math/nearbyintl.o: CFLAGS += -Wno-unknown-pragmas
-msul += math/sincosl.o
 
 # Issue #867: Gcc 4.8.4 has a bug where it optimizes the trivial round-
 # related functions incorrectly - it appears to convert calls to any
@@ -809,12 +765,6 @@ msul += math/sincosl.o
 # None of the specific "-fno-*" options disable this buggy optimization,
 # unfortunately. The simplest workaround is to just disable optimization
 # for the affected files.
-$(out)/musl/src/math/lround.o: conf_compiler_opt := $(conf_compiler_opt) -O0
-$(out)/musl/src/math/lroundf.o: conf_compiler_opt := $(conf_compiler_opt) -O0
-$(out)/musl/src/math/lroundl.o: conf_compiler_opt := $(conf_compiler_opt) -O0
-$(out)/musl/src/math/llround.o: conf_compiler_opt := $(conf_compiler_opt) -O0
-$(out)/musl/src/math/llroundf.o: conf_compiler_opt := $(conf_compiler_opt) -O0
-$(out)/musl/src/math/llroundl.o: conf_compiler_opt := $(conf_compiler_opt) -O0
 
 libc += misc/error.o
 ifeq ($(conf_networking_stack),1)
@@ -835,12 +785,9 @@ libc += multibyte/__mbsnrtowcs_chk.o
 libc += multibyte/__mbsrtowcs_chk.o
 libc += multibyte/__mbstowcs_chk.o
 
-$(out)/libc/multibyte/mbsrtowcs.o: CFLAGS += -Imusl/src/multibyte
 
 ifeq ($(conf_networking_stack),1)
 libc += network/gethostbyname_r.o
-$(out)/musl/src/network/res_msend.o: CFLAGS += $(wno-maybe-uninitialized) --include libc/syscall_to_function.h --include libc/internal/pthread_stubs.h $(cc-hide-flags-$(conf_hide_symbols))
-$(out)/libc/multibyte/mbsrtowcs.o: CFLAGS += -Imusl/src/multibyte
 libc += network/getaddrinfo.o
 libc += network/freeaddrinfo.o
 libc += network/getnameinfo.o
@@ -848,13 +795,9 @@ libc += network/__dns.o
 libc_to_hide += network/__dns.o
 libc += network/__ipparse.o
 libc_to_hide += network/__ipparse.o
-$(out)/musl/src/network/if_indextoname.o: CFLAGS += --include libc/syscall_to_function.h --include libc/network/__socket.h $(wno-stringop-truncation)
-$(out)/musl/src/network/if_nametoindex.o: CFLAGS += --include libc/syscall_to_function.h --include libc/network/__socket.h $(wno-stringop-truncation)
-$(out)/musl/src/network/netlink.o: CFLAGS += --include libc/syscall_to_function.h --include libc/network/__netlink.h
 endif
 
 libc += prng/random.o
-$(out)/musl/src/prng/seed48.o: CFLAGS += -Wno-array-parameter
 libc += random.o
 
 libc += process/execve.o
@@ -980,7 +923,6 @@ libc += stdio/vsprintf.o
 libc += stdio/vsscanf.o
 libc += stdio/printf-hooks.o
 
-$(out)/musl/src/stdlib/qsort.o: COMMON += $(wno-dangling-pointer)
 $(out)/libc/stdlib/qsort_r.o: COMMON += $(wno-dangling-pointer)
 ifeq ($(arch),x64)
 libc += stdlib/unimplemented.o
@@ -1014,9 +956,8 @@ libc += string/__wmemmove_chk.o
 libc += string/__wmemset_chk.o
 
 
-$(out)/musl/src/time/__map_file.o: CFLAGS += --include libc/syscall_to_function.h
 libc += time/__tz.o
-$(out)/libc/time/__tz.o: pre-include-api = -isystem include/api/internal_musl_headers -isystem musl/src/include
+$(out)/libc/time/__tz.o: pre-include-api = -isystem include/api/internal_musl_headers
 libc += time/__year_to_secs.o
 $(out)/libc/time/ftime.o: CFLAGS += -Ilibc/include
 
@@ -1030,9 +971,6 @@ libc += unistd/getppid.o
 libc += unistd/getsid.o
 libc += unistd/ttyname_r.o
 
-$(out)/musl/src/regex/regcomp.o: CFLAGS += -UNDEBUG
-$(out)/musl/src/regex/regexec.o: CFLAGS += -UNDEBUG
-$(out)/musl/src/regex/tre-mem.o: CFLAGS += -UNDEBUG
 
 libc += pthread.o
 libc_to_hide += pthread.o
@@ -1065,7 +1003,6 @@ libc += linux/makedev.o
 # There is no filesystem: the kernel has no VFS, no fd table and no on-disk or
 # in-memory file systems. Minimal console-backed stdio lives in libc/io.cc.
 objects += $(addprefix libc/, $(libc))
-objects += $(addprefix musl/src/, $(musl))
 
 libc_objects_to_hide = $(addprefix $(out)/libc/, $(libc_to_hide))
 $(libc_objects_to_hide): cc-hide-flags = $(cc-hide-flags-$(conf_hide_symbols))
@@ -1234,9 +1171,8 @@ $(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(ou
 
 
 environ_sources = $(addprefix libc/, $(environ_libc))
-environ_sources += $(addprefix musl/src/, $(environ_musl))
 
-$(out)/libenviron.so: pre-include-api = -isystem include/api/internal_musl_headers -isystem musl/src/include
+$(out)/libenviron.so: pre-include-api = -isystem include/api/internal_musl_headers
 $(out)/libenviron.so: source-dialects =
 
 $(out)/libenviron.so: $(environ_sources)

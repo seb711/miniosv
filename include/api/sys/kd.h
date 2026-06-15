@@ -1,1 +1,1 @@
-../../../musl/include/sys/kd.h
+#include <bits/kd.h>
