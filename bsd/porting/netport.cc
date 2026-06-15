@@ -9,10 +9,13 @@
 #include <memory.h>
 
 #include <sys/time.h>
+#include <osv/kernel_config_networking_stack.h>
 #include <bsd/porting/netport.h>
+#if CONF_networking_stack
 #include <bsd/sys/sys/socket.h>
 #include <bsd/sys/net/if_var.h>
 #include <bsd/sys/net/if_media.h>
+#endif
 
 #include <osv/export.h>
 
@@ -143,6 +146,7 @@ int tvtohz(struct timeval *tv)
     return (tv->tv_sec*hz + tv->tv_usec);
 }
 
+#if CONF_networking_stack
 void
 ifmedia_init(struct ifmedia *ifm, int dontcare_mask, ifm_change_cb_t change_callback,
              ifm_stat_cb_t status_callback)
@@ -163,6 +167,7 @@ ifmedia_ioctl(struct ifnet *ifp, struct bsd_ifreq *ifr, struct ifmedia *ifm, u_l
 {
     return -ENOSYS;
 }
+#endif
 
 OSV_LIBSOLARIS_API
 size_t physmem;

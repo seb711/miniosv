@@ -2,10 +2,12 @@
 #include <osv/power.hh>
 #include <osv/debug.hh>
 #include <osv/sched.hh>
-#include <osv/dhcp.hh>
 #include <osv/strace.hh>
 #include <osv/kernel_config_tracepoints_strace.h>
 #include <osv/kernel_config_networking_dhcp.h>
+#if CONF_networking_dhcp
+#include <osv/dhcp.hh>
+#endif
 
 namespace osv {
 
