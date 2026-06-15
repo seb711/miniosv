@@ -24,7 +24,6 @@
 #include <unordered_map>
 #include <osv/wait_record.hh>
 #include <osv/preempt-lock.hh>
-#include <osv/app.hh>
 #include <osv/symbols.hh>
 #include <osv/stubbing.hh>
 #include <algorithm>
@@ -1088,29 +1087,11 @@ thread::thread(std::function<void ()> func, attr attr, bool main, bool app)
 {
     trace_thread_create(this);
 
-    if (!main && sched::s_current) {
-        auto app = application::get_current().get();
-        if (override_current_app) {
-            app = override_current_app;
-        }
-        if (_app && app) {
-            _app_runtime = app->runtime();
-        }
-    }
     setup_tcb();
-    // module 0 is always the core:
-    assert(_tls.size() == elf::program::core_module_index);
+    // module 0 is always the core; with the application statically linked into
+    // the kernel there are no additional (dynamically loaded) TLS modules.
+    assert(_tls.size() == 0);
     _tls.push_back((char *)_tcb->tls_base);
-    if (_app_runtime) {
-        auto& offsets = _app_runtime->app.lib()->initial_tls_offsets();
-        for (unsigned i = 1; i < offsets.size(); i++) {
-            if (!offsets[i]) {
-                _tls.push_back(nullptr);
-            } else {
-                _tls.push_back(reinterpret_cast<char*>(_tcb) + offsets[i]);
-            }
-        }
-    }
     update_dtv();
 
     WITH_LOCK(thread_map_mutex) {
@@ -1194,18 +1175,6 @@ static void run_exit_notifiers()
     }
 }
 
-// not in the header to avoid double inclusion between osv/app.hh and
-// osv/sched.hh
-osv::application *thread::current_app() {
-    auto cur = current();
-
-    if (!cur->_app_runtime) {
-        return nullptr;
-    }
-
-    return &(cur->_app_runtime->app);
-}
-
 thread::~thread()
 {
     cancel_this_thread_alarm();
@@ -1220,15 +1189,8 @@ thread::~thread()
     if (_attr._stack.deleter) {
         _attr._stack.deleter(_attr._stack);
     }
-    for (unsigned i = 1; i < _tls.size(); i++) {
-        if (_app_runtime) {
-            auto& offsets = _app_runtime->app.lib()->initial_tls_offsets();
-            if (i < offsets.size() && offsets[i]) {
-                continue;
-            }
-        }
-        delete[] _tls[i];
-    }
+    // _tls holds only the core (module 0) TLS, whose storage is the TCB freed
+    // by free_tcb(); there are no dynamically loaded modules to clean up.
     free_tcb();
     free_syscall_stack();
     rcu_dispose(_detached_state.release());

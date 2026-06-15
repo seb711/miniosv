@@ -7,13 +7,13 @@
 
 #include <osv/drivers_config.h>
 #include <osv/sched.hh>
-#include <osv/elf.hh>
 #include <stdlib.h>
 #include <cstring>
 #include <string.h>
 #include <exception>
 #include <sys/mman.h>
 #include <unistd.h>
+#include <elf.h>
 #include <link.h>
 #include <stdio.h>
 #include <sys/poll.h>
@@ -126,7 +126,7 @@ void abort(const char *fmt, ...)
     debug_early(msg);
     // backtrace requires threads to be available, and also
     // ELF s_program to be initialized.
-    if (sched::thread::current() && elf::get_program() != nullptr) {
+    if (sched::thread::current()) {
         print_backtrace();
     } else {
         debug_early("Halting.\n");
@@ -677,3 +677,19 @@ char *ctermid(char *s)
 // OSv is always multi-threaded.
 OSV_LIBC_API
 char __libc_single_threaded = 0;
+
+// getauxval() used to live in the ELF loader (core/elf.cc). With the
+// application statically linked into the kernel there is no auxiliary vector;
+// return real values for the few entries that matter and 0 for everything else.
+extern "C" OSV_LIBC_API
+unsigned long getauxval(unsigned long type)
+{
+    switch (type) {
+    case AT_PAGESZ:
+        return sysconf(_SC_PAGESIZE);
+    case AT_CLKTCK:
+        return sysconf(_SC_CLK_TCK);
+    default:
+        return 0;
+    }
+}

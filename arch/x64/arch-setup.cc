@@ -22,7 +22,6 @@
 #include <alloca.h>
 #include <string.h>
 #include <osv/boot.hh>
-#include <osv/commands.hh>
 #include "dmi.hh"
 #if CONF_drivers_acpi
 #include "drivers/acpi.hh"
@@ -34,14 +33,6 @@ osv_multiboot_info_type* osv_multiboot_info;
 #if CONF_drivers_mmio
 #include "drivers/virtio-mmio.hh"
 #endif
-void parse_cmdline(multiboot_info_type& mb)
-{
-    auto p = reinterpret_cast<char*>(mb.cmdline);
-#if CONF_drivers_mmio
-    virtio::parse_mmio_device_configuration(p);
-#endif
-    osv::parse_cmdline(p);
-}
 
 void setup_temporary_phys_map()
 {
@@ -183,8 +174,6 @@ void arch_setup_free_memory()
     elf_start = reinterpret_cast<void*>(elf_phys_start + OSV_KERNEL_VM_SHIFT);
     elf_size = edata_phys - elf_phys_start;
     mmu::linear_map(elf_start, elf_phys_start, elf_size, "kernel", OSV_KERNEL_BASE);
-    // get rid of the command line, before low memory is unmapped
-    parse_cmdline(mb);
     // now that we have some free memory, we can start mapping the rest
     mmu::switch_to_runtime_page_tables();
     for_each_e820_entry(e820_buffer, e820_size, [] (e820ent ent) {

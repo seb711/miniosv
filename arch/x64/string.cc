@@ -310,26 +310,16 @@ void *memcpy_repmov_ssse3(void *__restrict dest, const void *__restrict src, siz
     }
 }
 
+// The kernel is a single statically linked image, so we bind memcpy directly
+// to the baseline (SSE2 + rep movs) implementation rather than using an ifunc.
+// ifuncs generate R_X86_64_IRELATIVE relocations that would need to be resolved
+// at boot; a direct binding needs none and is also safe to call before CPU
+// feature detection has run.
 extern "C"
-void *(*resolve_memcpy())(void *__restrict dest, const void *__restrict src, size_t n)
-{
-    if (processor::features().repmovsb) {
-        if (processor::features().ssse3) {
-            return memcpy_repmov_ssse3;
-        } else {
-            return memcpy_repmov;
-        }
-    } else {
-        if (processor::features().ssse3) {
-            return memcpy_repmov_old_ssse3;
-        } else {
-            return memcpy_repmov_old;
-        }
-    }
-}
-
 void *memcpy(void *__restrict dest, const void *__restrict src, size_t n)
-    __attribute__((ifunc("resolve_memcpy")));
+{
+    return memcpy_repmov_old(dest, src, n);
+}
 
 // Since we are using explicit loops, and not the rep instruction
 // (that requires a very specific rcx layout), we can use the same
@@ -525,16 +515,12 @@ void *memset_repstosb(void *__restrict dest, int c, size_t n)
     return ret;
 }
 
+// Bind memset directly to the baseline implementation (see memcpy above for
+// the rationale: no ifunc, no R_X86_64_IRELATIVE relocation).
 extern "C"
-void *(*resolve_memset())(void *__restrict dest, int c, size_t n)
-{
-    if (processor::features().repmovsb) {
-        return memset_repstosb;
-    }
-    return memset_repstos_old;
-}
-
 void *memset(void *__restrict dest, int c, size_t n)
-    __attribute__((ifunc("resolve_memset")));
+{
+    return memset_repstos_old(dest, c, n);
+}
 
 

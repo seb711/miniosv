@@ -530,6 +530,20 @@ int pthread_rwlock_tryrdlock(pthread_rwlock_t *rw)
     return EBUSY;
 }
 
+// OSv's rwlock has no timed wait; the clock variants (used by libstdc++'s
+// std::shared_mutex) block like the plain rdlock/wrlock, ignoring the deadline.
+int pthread_rwlock_clockrdlock(pthread_rwlock_t *rw, clockid_t, const struct timespec *)
+{
+    from_libc(rw)->rlock();
+    return 0;
+}
+
+int pthread_rwlock_clockwrlock(pthread_rwlock_t *rw, clockid_t, const struct timespec *)
+{
+    from_libc(rw)->wlock();
+    return 0;
+}
+
 int pthread_rwlockattr_destroy(pthread_rwlockattr_t *attr)
 {
 	return 0;

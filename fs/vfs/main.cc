@@ -62,7 +62,6 @@
 #include <osv/stubbing.hh>
 #include <osv/ioctl.h>
 #include <osv/trace.hh>
-#include <osv/run.hh>
 #include <osv/mount.h>
 #include <drivers/console.hh>
 
@@ -2545,28 +2544,10 @@ int nmount(struct iovec *iov, unsigned niov, int flags)
 
 extern "C" void import_extra_zfs_pools(void)
 {
-    struct stat st;
-    int ret;
-
-    // The file '/etc/mnttab' is a LibZFS requirement and will not
-    // exist during cpiod phase. The functionality provided by this
-    // function isn't needed during that phase, so let's skip it.
-    if (stat("/etc/mnttab" , &st) != 0) {
-        return;
-    }
-
-    // Import extra pools mounting datasets there contained.
-    // Datasets from osv pool will not be mounted here.
-    if (access("zpool.so", X_OK) != 0) {
-        return;
-    }
-    vector<string> zpool_args = {"zpool", "import", "-f", "-a" };
-    auto ok = osv::run("zpool.so", zpool_args, &ret);
-    assert(ok);
-
-    if (!ret) {
-        debug("zfs: extra ZFS pool(s) found.\n");
-    }
+    // Importing extra ZFS pools used to run the zpool tool via osv::run(), but
+    // the runtime ELF loader and app runner are gone (the app is linked into
+    // the kernel now). The whole ZFS stack is slated for removal anyway, so
+    // this is a no-op. (Nothing in the slim configuration imports ZFS pools.)
 }
 
 static void mount_fs(mntent *m)

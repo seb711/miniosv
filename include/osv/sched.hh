@@ -68,12 +68,6 @@ namespace elf {
     struct tls_data;
 }
 
-namespace osv {
-
-class application;
-struct application_runtime;
-
-}
 
 /**
  * OSV Scheduler namespace
@@ -598,14 +592,6 @@ public:
     void detach();
     void set_cleanup(std::function<void ()> cleanup);
     bool is_app() const { return _app; }
-    void set_app_runtime(const std::shared_ptr<osv::application_runtime>& app) {
-        assert(_app);
-        _app_runtime = app;
-    }
-    std::shared_ptr<osv::application_runtime> app_runtime() {
-        return _app_runtime;
-    }
-    static osv::application *current_app();
     bool migratable() const { return _migration_lock_counter == 0; }
     bool pinned() const { return _pinned; }
     /**
@@ -834,7 +820,6 @@ private:
     std::function<void ()> _cleanup;
     std::vector<char*> _tls;
     bool _app;
-    std::shared_ptr<osv::application_runtime> _app_runtime;
 public:
     void destroy();
 #ifdef __x86_64__

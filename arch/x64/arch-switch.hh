@@ -237,52 +237,22 @@ void thread::setup_tcb()
 
     assert(sched::tls.size);
 
-    void* user_tls_data;
-    size_t user_tls_size = 0;
-    size_t executable_tls_size = 0;
-    size_t aligned_executable_tls_size = 0;
-    if (_app_runtime) {
-        auto obj = _app_runtime->app.lib();
-        assert(obj);
-        user_tls_size = obj->initial_tls_size();
-        user_tls_data = obj->initial_tls();
-        if (obj->is_dynamically_linked_executable()) {
-           executable_tls_size = obj->get_tls_size();
-           aligned_executable_tls_size = obj->get_aligned_tls_size();
-        }
-    }
-
-    // In arch/x64/loader.ld, the TLS template segment is aligned to 64
-    // bytes, and that's what the objects placed in it assume. So make
-    // sure our copy is allocated with the same 64-byte alignment, and
-    // verify that object::init_static_tls() ensured that user_tls_size
-    // also doesn't break this alignment.
+    // The application is statically linked into the kernel, so a thread's TLS
+    // is just the kernel TLS template (module 0); there is no separately
+    // loaded executable/shared-object TLS to splice in.
+    // In arch/x64/loader.ld the TLS template segment is aligned to 64 bytes,
+    // and the objects placed in it assume that, so allocate with the same
+    // alignment.
     auto kernel_tls_size = sched::tls.size;
     assert(align_check(kernel_tls_size, (size_t)64));
-    assert(align_check(user_tls_size, (size_t)64));
 
-    auto total_tls_size = kernel_tls_size + user_tls_size;
-    char* p = static_cast<char*>(aligned_alloc(64, total_tls_size + sizeof(*_tcb)));
-    // First goes user TLS data
-    if (user_tls_size) {
-        memcpy(p, user_tls_data, user_tls_size);
-    }
-    // Next goes kernel TLS data
-    auto kernel_tls_offset = user_tls_size;
-    memcpy(p + kernel_tls_offset, sched::tls.start, sched::tls.filesize);
-    memset(p + kernel_tls_offset + sched::tls.filesize, 0,
-           kernel_tls_size - sched::tls.filesize);
+    char* p = static_cast<char*>(aligned_alloc(64, kernel_tls_size + sizeof(*_tcb)));
+    memcpy(p, sched::tls.start, sched::tls.filesize);
+    memset(p + sched::tls.filesize, 0, kernel_tls_size - sched::tls.filesize);
 
-    if (executable_tls_size) {
-        // If executable copy its TLS block data at the designated offset
-        // at the end of area as described in the ascii art for executables
-        // TLS layout
-        auto executable_tls_offset = total_tls_size - aligned_executable_tls_size;
-        _app_runtime->app.lib()->copy_local_tls(p + executable_tls_offset);
-    }
-    _tcb = reinterpret_cast<thread_control_block*>(p + total_tls_size);
+    _tcb = reinterpret_cast<thread_control_block*>(p + kernel_tls_size);
     _tcb->self = _tcb;
-    _tcb->tls_base = p + user_tls_size;
+    _tcb->tls_base = p;
 
     _tcb->app_tcb = 0;
 }
@@ -345,12 +315,8 @@ void thread::free_tiny_syscall_stack()
 
 void thread::free_tcb()
 {
-    if (_app_runtime) {
-        auto obj = _app_runtime->app.lib();
-        free(static_cast<char*>(_tcb->tls_base) - obj->initial_tls_size());
-    } else {
-        free(_tcb->tls_base);
-    }
+    // tls_base points at the start of the allocation made in setup_tcb().
+    free(_tcb->tls_base);
 }
 
 void thread::free_syscall_stack()
