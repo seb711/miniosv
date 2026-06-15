@@ -11,8 +11,6 @@
 #include <osv/mempool.hh>
 #include <osv/debug.hh>
 #include "osv/trace.hh"
-#include "osv/dentry.h"
-#include "osv/mount.h"
 #include <osv/stubbing.hh>
 #include "libc/libc.hh"
 #include <safe-ptr.hh>
@@ -145,7 +143,14 @@ void *mmap(void *addr, size_t length, int prot, int flags,
         addr = (void*)0x2000000ul;
     }
 #endif
-    if (flags & MAP_ANONYMOUS) {
+    // There is no filesystem, so only anonymous mappings are supported;
+    // file-backed mmap is not available.
+    if (!(flags & MAP_ANONYMOUS)) {
+        errno = ENODEV;
+        trace_memory_mmap_err(errno);
+        return MAP_FAILED;
+    }
+    {
 #if CONF_memory_jvm_balloon
         // We have already determined (see below) the region where the heap must be located. Now the JVM will request
         // fixed mappings inside that region
@@ -177,20 +182,6 @@ void *mmap(void *addr, size_t length, int prot, int flags,
             jvm_heap_region_end = ret + length;
         }
 #endif
-    } else {
-        fileref f(fileref_from_fd(fd));
-        if (!f) {
-            errno = EBADF;
-            trace_memory_mmap_err(errno);
-            return MAP_FAILED;
-        }
-        try {
-            ret = mmu::map_file(addr, length, mmap_flags, mmap_perm, f, offset);
-        } catch (error& err) {
-            err.to_libc(); // sets errno
-            trace_memory_mmap_err(errno);
-            return MAP_FAILED;
-        }
     }
     trace_memory_mmap_ret(ret);
     return ret;

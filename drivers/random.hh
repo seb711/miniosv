@@ -8,7 +8,6 @@
 #ifndef RANDOM_DEVICE_H
 #define RANDOM_DEVICE_H
 
-#include <osv/device.h>
 #include <osv/types.h>
 #include <memory>
 
@@ -23,11 +22,6 @@ public:
     virtual ~random_device();
 
     static void register_source(hw_rng* hwrng);
-
-private:
-
-    device* _random_dev;
-    device* _urandom_dev;
 };
 
 class hw_rng {

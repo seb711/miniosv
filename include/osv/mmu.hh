@@ -8,7 +8,6 @@
 #ifndef MMU_HH
 #define MMU_HH
 
-#include "fs/fs.hh"
 #include <stdint.h>
 #include <boost/intrusive/set.hpp>
 #include <osv/types.h>
@@ -132,25 +131,8 @@ public:
     virtual error sync(uintptr_t start, uintptr_t end) override;
 };
 
-class file_vma : public vma {
-public:
-    file_vma(addr_range range, unsigned perm, unsigned flags, fileref file, f_offset offset, page_allocator *page_ops);
-    ~file_vma();
-    virtual void split(uintptr_t edge) override;
-    virtual error sync(uintptr_t start, uintptr_t end) override;
-    virtual int validate_perm(unsigned perm) override;
-    virtual void fault(uintptr_t addr, exception_frame *ef) override;
-    fileref file() const { return _file; }
-    f_offset offset() const { return _offset; }
-    u64 file_inode() const { return _file_inode; }
-    dev_t file_dev_id() const { return _file_dev_id; }
-private:
-    f_offset offset(uintptr_t addr);
-    fileref _file;
-    f_offset _offset;
-    u64 _file_inode;
-    dev_t _file_dev_id;
-};
+// There is no filesystem: file-backed mappings (file_vma) have been removed;
+// only anonymous mappings remain.
 
 #if CONF_memory_jvm_balloon
 ulong map_jvm(unsigned char* addr, size_t size, size_t align, balloon_ptr b);
@@ -186,24 +168,8 @@ private:
 };
 #endif
 
-class shm_file final : public special_file {
-    size_t _size;
-    std::unordered_map<uintptr_t, void*> _pages;
-    void* page(uintptr_t hp_off);
-public:
-    shm_file(size_t size, int flags);
-    virtual int stat(struct stat* buf) override;
-    virtual int close() override;
-    virtual std::unique_ptr<file_vma> mmap(addr_range range, unsigned flags, unsigned perm, off_t offset) override;
+// The POSIX shared-memory file (shm_file) is gone with the filesystem.
 
-    virtual bool map_page(uintptr_t offset, hw_ptep<0> ptep, pt_element<0> pte, bool write, bool shared) override;
-    virtual bool map_page(uintptr_t offset, hw_ptep<1> ptep, pt_element<1> pte, bool write, bool shared) override;
-    virtual bool put_page(void *addr, uintptr_t offset, hw_ptep<0> ptep) override;
-    virtual bool put_page(void *addr, uintptr_t offset, hw_ptep<1> ptep) override;
-};
-
-void* map_file(const void* addr, size_t size, unsigned flags, unsigned perm,
-              fileref file, f_offset offset);
 void* map_anon(const void* addr, size_t size, unsigned flags, unsigned perm);
 
 error munmap(const void* addr, size_t size);
@@ -213,8 +179,6 @@ error mincore(const void *addr, size_t length, unsigned char *vec);
 bool is_linear_mapped(const void *addr, size_t size);
 bool ismapped(const void *addr, size_t size);
 bool isreadable(void *addr, size_t size);
-std::unique_ptr<file_vma> default_file_mmap(file* file, addr_range range, unsigned flags, unsigned perm, off_t offset);
-std::unique_ptr<file_vma> map_file_mmap(file* file, addr_range range, unsigned flags, unsigned perm, off_t offset);
 
 
 template<int N>
