@@ -607,7 +607,9 @@ int sysctl(int *, int, void *, size_t *, void *, size_t)
 extern "C" OSV_LIBC_API
 char *tmpnam_r(char *s)
 {
-    return s ? tmpnam(s) : NULL;
+    // No filesystem (Phase 6), so temp-file naming cannot succeed. tmpnam and
+    // its friends were dropped; report failure.
+    return NULL;
 }
 
 OSV_LIBC_API
