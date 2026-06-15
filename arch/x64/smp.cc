@@ -14,12 +14,8 @@
 #include <osv/mmu.hh>
 #include <string.h>
 #if CONF_drivers_acpi
-extern "C" {
-#include "acpi.h"
-}
 #include <drivers/acpi.hh>
 #endif
-#include <boost/intrusive/parent_from_member.hpp>
 #include <osv/debug.hh>
 #include <osv/sched.hh>
 #include <osv/barrier.hh>
@@ -42,8 +38,6 @@ extern bool smp_allocator;
 OSV_LIBSOLARIS_API
 volatile unsigned smp_processors = 1;
 
-using boost::intrusive::get_parent_from_member;
-
 static void register_cpu(unsigned cpu_id, u32 apic_id, u32 acpi_id = 0)
 {
     auto c = new sched::cpu(cpu_id);
@@ -57,37 +51,34 @@ static void register_cpu(unsigned cpu_id, u32 apic_id, u32 acpi_id = 0)
 #if CONF_drivers_acpi
 void parse_madt()
 {
-    char madt_sig[] = ACPI_SIG_MADT;
-    ACPI_TABLE_HEADER* madt_header;
-    auto st = AcpiGetTable(madt_sig, 0, &madt_header);
-    assert(st == AE_OK);
-    auto madt = get_parent_from_member(madt_header, &ACPI_TABLE_MADT::Header);
-    void* subtable = madt + 1;
-    void* madt_end = static_cast<void*>(madt) + madt->Header.Length;
+    auto madt = reinterpret_cast<const acpi::madt*>(acpi::find_table(ACPI_SIG_MADT));
+    assert(madt);
+    auto subtable = reinterpret_cast<const char*>(madt + 1);
+    auto madt_end = reinterpret_cast<const char*>(madt) + madt->header.length;
     unsigned nr_cpus = 0;
-    while (subtable != madt_end) {
-        auto s = static_cast<ACPI_SUBTABLE_HEADER*>(subtable);
-        switch (s->Type) {
-        case ACPI_MADT_TYPE_LOCAL_APIC: {
-            auto lapic = get_parent_from_member(s, &ACPI_MADT_LOCAL_APIC::Header);
-            if (!(lapic->LapicFlags & ACPI_MADT_ENABLED)) {
+    while (subtable < madt_end) {
+        auto s = reinterpret_cast<const acpi::madt_subtable*>(subtable);
+        switch (s->type) {
+        case acpi::MADT_LOCAL_APIC: {
+            auto lapic = reinterpret_cast<const acpi::madt_local_apic*>(s);
+            if (!(lapic->flags & acpi::MADT_ENABLED)) {
                 break;
             }
-            register_cpu(nr_cpus++, lapic->Id, lapic->ProcessorId);
+            register_cpu(nr_cpus++, lapic->apic_id, lapic->processor_id);
             break;
         }
-        case ACPI_MADT_TYPE_LOCAL_X2APIC: {
-            auto x2apic = get_parent_from_member(s, &ACPI_MADT_LOCAL_X2APIC::Header);
-            if (!(x2apic->LapicFlags & ACPI_MADT_ENABLED)) {
+        case acpi::MADT_LOCAL_X2APIC: {
+            auto x2apic = reinterpret_cast<const acpi::madt_local_x2apic*>(s);
+            if (!(x2apic->flags & acpi::MADT_ENABLED)) {
                 break;
             }
-            register_cpu(nr_cpus++, x2apic->LocalApicId, x2apic->Uid);
+            register_cpu(nr_cpus++, x2apic->apic_id, x2apic->uid);
             break;
         }
         default:
             break;
         }
-        subtable += s->Length;
+        subtable += s->length;
     }
     if (!nr_cpus) { // No MP table was found or no cpu was found in there -> assume uni-processor
         register_cpu(nr_cpus++, 0);

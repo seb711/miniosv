@@ -48,9 +48,6 @@
 #include <boost/range/adaptor/reversed.hpp>
 #include <osv/align.hh>
 #include <osv/stubbing.hh>
-#if CONF_drivers_acpi
-#include "drivers/pvpanic.hh"
-#endif
 #include <api/sys/resource.h>
 #include <api/math.h>
 #include <osv/shutdown.hh>
@@ -134,11 +131,6 @@ void abort(const char *fmt, ...)
     } else {
         debug_early("Halting.\n");
     }
-#ifndef AARCH64_PORT_STUB
-#if CONF_drivers_acpi
-    panic::pvpanic::panicked();
-#endif
-#endif /* !AARCH64_PORT_STUB */
 
     if (opt_power_off_on_abort) {
         osv::poweroff();

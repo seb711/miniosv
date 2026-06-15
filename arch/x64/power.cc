@@ -13,10 +13,6 @@
 #include <arch.hh>
 
 #if CONF_drivers_acpi
-extern "C" {
-#include "acpi.h"
-}
-
 #include <drivers/acpi.hh>
 #endif
 
@@ -33,30 +29,18 @@ void halt(void)
 void poweroff(void)
 {
 #if CONF_drivers_acpi
-    if (acpi::is_enabled()) {
-        ACPI_STATUS status = AcpiEnterSleepStatePrep(ACPI_STATE_S5);
-        if (ACPI_FAILURE(status)) {
-            debugf("AcpiEnterSleepStatePrep failed: %s\n", AcpiFormatException(status));
-            halt();
-        }
-        status = AcpiEnterSleepState(ACPI_STATE_S5);
-        if (ACPI_FAILURE(status)) {
-            debugf("AcpiEnterSleepState failed: %s\n", AcpiFormatException(status));
-            halt();
-        }
-    } else {
+    // Power off cleanly via ACPI S5 when the firmware describes it. This does
+    // not return on success.
+    acpi::power_off();
 #endif
-        // On hypervisors that do not support ACPI like firecracker we
-        // resort to a reset using the 8042 PS/2 Controller ("keyboard controller")
-        // as a way to shutdown the VM
-        processor::outb(0xfe, 0x64);
-        // If the above did not work which would be the case on qemu microvm,
-        // then cause triple fault by loading a broken IDT and triggering an interrupt.
-        processor::lidt(processor::desc_ptr(0, 0));
-        __asm__ __volatile__("int3");
-#if CONF_drivers_acpi
-    }
-#endif
+    // On hypervisors that do not support ACPI like firecracker we resort to a
+    // reset using the 8042 PS/2 Controller ("keyboard controller") as a way to
+    // shutdown the VM.
+    processor::outb(0xfe, 0x64);
+    // If the above did not work which would be the case on qemu microvm,
+    // then cause triple fault by loading a broken IDT and triggering an interrupt.
+    processor::lidt(processor::desc_ptr(0, 0));
+    __asm__ __volatile__("int3");
 
     // We shouldn't get here on x86.
     halt();
@@ -78,18 +62,13 @@ static void kbd_reboot(void) {
 
 void reboot(void)
 {
-#if CONF_drivers_acpi
-    // Method 1: AcpiReset, does not work on qemu or kvm now because the reset
-    // register is not supported. Nevertheless, we should try it first
-    AcpiReset();
-#endif
-    // Method 2: "fast reset" via System Control Port A (port 0x92)
+    // Method 1: "fast reset" via System Control Port A (port 0x92)
     processor::outb(1, 0x92);
-    // Method 3: Reset using the 8042 PS/2 Controller ("keyboard controller")
+    // Method 2: Reset using the 8042 PS/2 Controller ("keyboard controller")
     kbd_reboot();
-    // Method 4: PCI reboot
+    // Method 3: PCI reboot
     pci_reboot();
-    // Method 5: Cause triple fault by loading a broken IDT and triggering an
+    // Method 4: Cause triple fault by loading a broken IDT and triggering an
     // interrupt.
     processor::lidt(processor::desc_ptr(0, 0));
     __asm__ __volatile__("int3");

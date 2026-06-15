@@ -11,7 +11,6 @@
 #define CONF_drivers_mmio 1
 #define CONF_drivers_nvme 1
 #define CONF_drivers_pci 1
-#define CONF_drivers_pvpanic 1
 #define CONF_drivers_pvscsi 1
 #define CONF_drivers_scsi 1
 #define CONF_drivers_vga 1
