@@ -1037,7 +1037,6 @@ objects += arch/$(arch)/cpuid.o
 objects += arch/$(arch)/firmware.o
 objects += arch/$(arch)/hypervisor.o
 objects += arch/$(arch)/interrupt.o
-objects += arch/$(arch)/clone.o
 ifeq ($(conf_drivers_pci),1)
 objects += arch/$(arch)/pci.o
 objects += arch/$(arch)/msi.o
@@ -1085,7 +1084,6 @@ objects += arch/x64/prctl.o
 objects += arch/x64/vmlinux.o
 objects += arch/x64/vmlinux-boot64.o
 objects += arch/x64/pvh-boot.o
-objects += arch/x64/syscall.o
 endif # x64
 
 ifeq ($(conf_drivers_xen),1)
@@ -1109,7 +1107,7 @@ ifeq ($(conf_tracepoints_sampler),1)
 objects += core/sampler.o
 endif
 
-objects += linux.o
+objects += core/futex.o
 objects += core/sched.o
 objects += core/mmio.o
 objects += core/kprintf.o
@@ -2310,7 +2308,7 @@ $(out)/tools/cpiod/cpiod.so: $(out)/tools/cpiod/cpiod.o $(out)/tools/cpiod/cpio.
 # re-created on every compilation. "generated-headers" is used as an order-
 # only dependency on C compilation rules above, so we don't try to compile
 # C code before generating these headers.
-generated-headers: $(out)/gen/include/bits/alltypes.h perhaps-modify-version-h perhaps-modify-syscalls-h
+generated-headers: $(out)/gen/include/bits/alltypes.h perhaps-modify-version-h
 .PHONY: generated-headers
 
 # While other generated headers only need to be generated once, version.h
@@ -2323,17 +2321,6 @@ perhaps-modify-version-h:
 	$(call very-quiet, mkdir -p $(out)/gen/include/osv)
 	$(call quiet, sh scripts/gen-version-header $(out)/gen/include/osv/version.h, GEN gen/include/osv/version.h)
 .PHONY: perhaps-modify-version-h
-#
-# This generates 3 files included by linux.cc - syscalls_config.h, syscalls.cc and syscall_tracepoints.cc.
-# By default gen-syscalls copies the syscalls/syscalls.cc.in and syscalls/syscall_tracepoints.cc as is.
-# If conf_syscalls_list_file parameter is specified, it will filter in only parts of these 2 files based on
-# the list of names of the syscalls in the file conf_syscalls_list_file
-# In either case, syscalls_config.h will contain list of '#define CONF_syscall_*' statements for each selected
-# syscall
-perhaps-modify-syscalls-h:
-	$(call very-quiet, mkdir -p $(out)/gen/include/osv)
-	$(call quiet, bash scripts/gen-syscalls $(out)/gen/include/osv/ $(conf_syscalls_list_file), GEN gen/include/osv/syscall_*)
-.PHONY: perhaps-modify-syscalls-h
 
 # The CONF_drivers_* macros used by source code (e.g. arch-setup.cc) are frozen
 # in the checked-in include/osv/drivers_config.h; nothing is generated here.

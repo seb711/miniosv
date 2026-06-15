@@ -23,7 +23,6 @@ conf_networking_dhcp=1
 
 # --- core ------------------------------------------------------------------
 conf_core_c_wrappers=1
-conf_core_syscall=1
 conf_core_epoll=1
 conf_core_namespaces=1
 conf_core_commands_runscript=1
@@ -45,12 +44,7 @@ conf_fs_buffer_cache_size=256
 # --- threads / stacks ------------------------------------------------------
 conf_threads_default_kernel_stack_size=65536
 conf_threads_default_pthread_stack_size=0x100000
-
-# --- syscalls --------------------------------------------------------------
-conf_syscall_stack_size=0x800
 conf_interrupt_stack_size=0x1000
-# empty = build the full syscall table (no filtering)
-conf_syscalls_list_file=
 
 # --- device drivers (former drivers_profile=all) ---------------------------
 # Used by the main Makefile to decide which driver objects to link; the matching
