@@ -174,7 +174,7 @@ start64_continue:
     rep stosb
     mov $OSV_KERNEL_BASE, %rbp
     mov %rbp, elf_header
-    # %ebx is set by boot16.S before running the loader
+    # %ebx is the multiboot info pointer set by the boot loader (QEMU/GRUB)
     mov %rbx, osv_multiboot_info
     lea init_stack_top, %rsp
     call premain

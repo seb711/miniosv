@@ -114,8 +114,8 @@ void read_partition_table(struct device *dev)
 	}
 
 	sched_lock();
-	// A real partition table (MBR) ends in the two bytes 0x55, 0xAA (see
-	// arch/x64/boot16.S on where we put those on the OSv image). If we
+	// A real partition table (MBR) ends in the two bytes 0x55, 0xAA (written
+	// into the disk image by scripts/imgedit.py / scripts/disk.bin). If we
 	// don't find those, this is an unpartitioned disk.
 	if (((unsigned char*)bp->b_data)[510] == 0x55 &&
 	    ((unsigned char*)bp->b_data)[511] == 0xAA)
