@@ -36,7 +36,7 @@
 	pushq_cfi %r15
 
         mov $0, %r14          #Use callee-saved register to know that we need to switch FS base to app TCB
-        mov %gs:16, %r12      #Fetch this thread kernel TCB address
+        mov %gs:0, %r12       #Fetch this thread kernel TCB address
         cmpq %fs:0, %r12      #Check if kernel TCB equal to current TCB
         je 2f
 

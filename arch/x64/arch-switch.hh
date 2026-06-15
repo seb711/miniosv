@@ -12,44 +12,8 @@
 #include <osv/barrier.hh>
 #include <osv/kernel_config_preempt.h>
 #include <osv/kernel_config_threads_default_kernel_stack_size.h>
-#include <osv/kernel_config_syscall_stack_size.h>
 #include <string.h>
 #include "tls-switch.hh"
-
-//
-// The last 16 bytes of the syscall stack are reserved for -
-// tiny/large indicator and extra 8 bytes to make it 16 bytes aligned
-// as Linux x64 ABI mandates.
-#define SYSCALL_STACK_RESERVED_SPACE_SIZE (2 * 8)
-//
-// The tiny stack has to be large enough to allow for execution of
-// thread::setup_large_syscall_stack() that allocates and sets up
-// large syscall stack and to save FPU state. It was measured that as
-// of this writing setup_large_syscall_stack() needs a little over 750
-// bytes of stack to properly operate. The FPU state is 850 bytes in size.
-// This makes 2048 bytes to be an adequate size of tiny stack.
-// In case both become larger in future, we add simple canary check
-// to detect potential tiny stack overflow.
-// All application threads pre-allocate tiny syscall stack so there
-// is a tiny penalty with this solution.
-#define TINY_SYSCALL_STACK_SIZE CONF_syscall_stack_size
-#define TINY_SYSCALL_STACK_DEPTH (TINY_SYSCALL_STACK_SIZE - SYSCALL_STACK_RESERVED_SPACE_SIZE)
-//
-// The large syscall stack is setup and switched to on first
-// execution of SYSCALL instruction for given application thread.
-#define LARGE_SYSCALL_STACK_SIZE (16 * PAGE_SIZE)
-#define LARGE_SYSCALL_STACK_DEPTH (LARGE_SYSCALL_STACK_SIZE - SYSCALL_STACK_RESERVED_SPACE_SIZE)
-
-#define SET_SYSCALL_STACK_TYPE_INDICATOR(value) \
-*reinterpret_cast<long*>(_state._syscall_stack_descriptor.stack_top) = value;
-
-#define GET_SYSCALL_STACK_TYPE_INDICATOR() \
-*reinterpret_cast<long*>(_state._syscall_stack_descriptor.stack_top)
-
-#define TINY_SYSCALL_STACK_INDICATOR 0l
-#define LARGE_SYSCALL_STACK_INDICATOR 1l
-
-#define STACK_CANARY 0xdeadbeafdeadbeaf
 
 extern "C" {
 void thread_main(void);
@@ -95,14 +59,8 @@ void thread::switch_to()
     barrier();
     auto c = _detached_state->_cpu;
     old->_state.exception_stack = c->arch.get_exception_stack();
-    // save the old thread SYSCALL caller stack pointer in the syscall stack descriptor
-    old->_state._syscall_stack_descriptor.caller_stack_pointer = c->arch._current_syscall_stack_descriptor.caller_stack_pointer;
     c->arch.set_interrupt_stack(&_arch);
     c->arch.set_exception_stack(_state.exception_stack);
-    // set this cpu current thread syscall stack descriptor to the values copied from the new thread syscall stack descriptor
-    // so that the syscall handler can reference the current thread syscall stack top using the GS register
-    c->arch._current_syscall_stack_descriptor.caller_stack_pointer = _state._syscall_stack_descriptor.caller_stack_pointer;
-    c->arch._current_syscall_stack_descriptor.stack_top = _state._syscall_stack_descriptor.stack_top;
     // set this cpu current thread kernel TCB address to TCB address of the new thread
     // we are switching to
     c->arch._current_thread_kernel_tcb = reinterpret_cast<u64>(_tcb);
@@ -178,25 +136,6 @@ void thread::init_stack()
     _state.rip = reinterpret_cast<void*>(thread_main);
     _state.rsp = stacktop;
     _state.exception_stack = _arch.exception_stack + sizeof(_arch.exception_stack);
-
-    if (is_app()) {
-        //
-        // Allocate TINY syscall call stack
-        char* tiny_syscall_stack_begin = static_cast<char*>(malloc(TINY_SYSCALL_STACK_SIZE));
-        assert(tiny_syscall_stack_begin);
-        //
-        // The top of the stack needs to be 16 bytes lower to make space for
-        // OSv syscall stack type indicator and extra 8 bytes to make it 16-bytes aligned
-        _state._syscall_stack_descriptor.stack_top = tiny_syscall_stack_begin + TINY_SYSCALL_STACK_DEPTH;
-        SET_SYSCALL_STACK_TYPE_INDICATOR(TINY_SYSCALL_STACK_INDICATOR);
-        //
-        // Set a canary value at the bottom of the tiny stack to catch potential overflow
-        // caused by setup_large_syscall_stack()
-        *reinterpret_cast<u64*>(tiny_syscall_stack_begin) = STACK_CANARY;
-    }
-    else {
-        _state._syscall_stack_descriptor.stack_top = 0;
-    }
 }
 
 void thread::setup_tcb()
@@ -257,81 +196,10 @@ void thread::setup_tcb()
     _tcb->app_tcb = 0;
 }
 
-void thread::setup_large_syscall_stack()
-{
-    // Save FPU state and restore it at the end of this function
-    sched::fpu_lock fpu;
-    SCOPE_LOCK(fpu);
-
-    assert(is_app());
-    assert(GET_SYSCALL_STACK_TYPE_INDICATOR() == TINY_SYSCALL_STACK_INDICATOR);
-    //
-    // Allocate LARGE syscall stack
-    char* large_syscall_stack_begin = static_cast<char*>(malloc(LARGE_SYSCALL_STACK_SIZE));
-    char* large_syscall_stack_top = large_syscall_stack_begin + LARGE_SYSCALL_STACK_DEPTH;
-    //
-    // Copy all of the tiny stack to the are of last 1024 bytes of large stack.
-    // This way we do not have to pop and push the same registers to be saved again.
-    // Also the caller stack pointer is also copied.
-    // We could have copied only last 128 (registers) + 16 bytes (2 fields) instead
-    // of all of the stack but copying 1024 is simpler and happens
-    // only once per thread.
-    char* tiny_syscall_stack_top = _state._syscall_stack_descriptor.stack_top;
-    memcpy(large_syscall_stack_top - TINY_SYSCALL_STACK_DEPTH,
-           tiny_syscall_stack_top - TINY_SYSCALL_STACK_DEPTH, TINY_SYSCALL_STACK_SIZE);
-    //
-    // Check if the tiny stack has not been overflowed
-    assert(*reinterpret_cast<u64*>(_state._syscall_stack_descriptor.stack_top - TINY_SYSCALL_STACK_DEPTH) == STACK_CANARY);
-    //
-    // Save beginning of tiny stack at the bottom of LARGE stack so
-    // that we can deallocate it in free_tiny_syscall_stack
-    *((char**)large_syscall_stack_begin) = tiny_syscall_stack_top - TINY_SYSCALL_STACK_DEPTH;
-    //
-    // Switch syscall stack address value in TCB to the top of the LARGE one
-    _state._syscall_stack_descriptor.stack_top = large_syscall_stack_top;
-    SET_SYSCALL_STACK_TYPE_INDICATOR(LARGE_SYSCALL_STACK_INDICATOR);
-    //
-    // Switch what GS points to
-     _detached_state->_cpu->arch._current_syscall_stack_descriptor.stack_top = large_syscall_stack_top;
-}
-
-void thread::free_tiny_syscall_stack()
-{
-    // Save FPU state and restore it at the end of this function
-    sched::fpu_lock fpu;
-    SCOPE_LOCK(fpu);
-
-    assert(is_app());
-    assert(GET_SYSCALL_STACK_TYPE_INDICATOR() == LARGE_SYSCALL_STACK_INDICATOR);
-
-    char* large_syscall_stack_top = _state._syscall_stack_descriptor.stack_top;
-    char* large_syscall_stack_begin = large_syscall_stack_top - LARGE_SYSCALL_STACK_DEPTH;
-    //
-    // Lookup address of tiny stack saved by setup_large_syscall_stack()
-    // at the bottom of LARGE stack (current syscall stack)
-    char* tiny_syscall_stack_begin = *((char**)large_syscall_stack_begin);
-    free(tiny_syscall_stack_begin);
-}
-
 void thread::free_tcb()
 {
     // tls_base points at the start of the allocation made in setup_tcb().
     free(_tcb->tls_base);
-}
-
-void thread::free_syscall_stack()
-{
-    if (_state._syscall_stack_descriptor.stack_top) {
-        char* syscall_stack_begin = GET_SYSCALL_STACK_TYPE_INDICATOR() == TINY_SYSCALL_STACK_INDICATOR ?
-            _state._syscall_stack_descriptor.stack_top - TINY_SYSCALL_STACK_DEPTH :
-            _state._syscall_stack_descriptor.stack_top - LARGE_SYSCALL_STACK_DEPTH;
-        free(syscall_stack_begin);
-    }
-}
-
-char* thread::get_syscall_stack_top()
-{
-    return _state._syscall_stack_descriptor.stack_top;
 }
 
 void thread::update_dtv()
@@ -349,20 +217,6 @@ void thread_main_c(thread* t)
     processor::init_fpu();
     t->main();
     t->complete();
-}
-
-extern "C" void setup_large_syscall_stack()
-{
-    // Switch TLS register from the app to the kernel TCB and back if necessary
-    arch::tls_switch tls_switch;
-    sched::thread::current()->setup_large_syscall_stack();
-}
-
-extern "C" void free_tiny_syscall_stack()
-{
-    // Switch TLS register from the app to the kernel TCB and back if necessary
-    arch::tls_switch tls_switch;
-    sched::thread::current()->free_tiny_syscall_stack();
 }
 
 }
