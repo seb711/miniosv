@@ -1,1 +1,1 @@
-../../../../musl/arch/generic/bits/ipcstat.h
+#define IPC_STAT 2

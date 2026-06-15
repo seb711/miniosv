@@ -8,7 +8,6 @@
  */
 
 INCLUDE "loader_options.ld"
-INCLUDE "libc/aliases.ld"
 SECTIONS
 {
 	/* Set the initial program counter to one page beyond the minimal

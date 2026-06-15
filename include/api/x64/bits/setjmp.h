@@ -1,1 +1,1 @@
-../../../../musl/arch/x86_64/bits/setjmp.h
+typedef unsigned long __jmp_buf[8];

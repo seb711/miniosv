@@ -1,1 +1,1 @@
-../../../../musl/arch/generic/bits/link.h
+typedef uint32_t Elf_Symndx;

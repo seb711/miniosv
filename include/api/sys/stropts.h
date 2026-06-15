@@ -1,1 +1,1 @@
-../../../musl/include/sys/stropts.h
+#include <stropts.h>

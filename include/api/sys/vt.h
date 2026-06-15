@@ -1,1 +1,1 @@
-../../../musl/include/sys/vt.h
+#include <bits/vt.h>
