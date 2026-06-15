@@ -92,7 +92,7 @@ extern void* elf_start;
 extern boot_time_chart boot_time;
 
 // Because vmlinux_entry64 replaces start32 as a new entry of loader.elf we need a way
-// to place address of start32 so that boot16 know where to jump to. We achieve
+// to place address of start32 so that the boot stub knows where to jump to. We achieve
 // it by placing address of start32 at the known offset at memory
 // as defined by section .start32_address in loader.ld
 extern "C" void start32();
@@ -131,7 +131,7 @@ void arch_setup_free_memory()
 
     time = omb.tsc_uncompress_done_hi;
     time = (time << 32) | omb.tsc_uncompress_done;
-    boot_time.event(2, "uncompress lzloader.elf", time );
+    boot_time.event(2, "kernel placed by boot loader", time );
 
     auto c = processor::cpuid(0x80000000);
     if (c.a >= 0x80000008) {
