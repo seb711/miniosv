@@ -1,5 +1,5 @@
 #include "arch-setup.hh"
-#include <xen/interface/arch-x86/hvm/start_info.h>
+#include <osv/hvm_start_info.h>
 
 struct hvm_start_info* hvm_xen_start_info __attribute__((section(".data")));
 

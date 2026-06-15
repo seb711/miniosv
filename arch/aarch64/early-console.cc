@@ -6,7 +6,6 @@
  */
 
 #include <osv/prio.hh>
-#include <osv/xen.hh>
 
 #include "early-console.hh"
 

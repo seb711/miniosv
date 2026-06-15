@@ -21,7 +21,10 @@ public:
     random_device();
     virtual ~random_device();
 
+    // Register/unregister a hardware entropy source (e.g. virtio-rng) that the
+    // CSPRNG pulls from when reseeding.
     static void register_source(hw_rng* hwrng);
+    static void deregister_source(hw_rng* hwrng);
 };
 
 class hw_rng {

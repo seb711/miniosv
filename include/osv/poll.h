@@ -31,9 +31,8 @@
 #define _OSV_POLL_H_
 
 #include <sys/cdefs.h>
-#include <bsd/sys/sys/queue.h>
+#include <osv/bsd-queue.h>
 #include <stdbool.h>
-#include <bsd/porting/sync_stub.h>
 
 #ifdef __cplusplus
 
