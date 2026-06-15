@@ -1,164 +1,112 @@
 /*
- * Copyright (C) 2013 Cloudius Systems, Ltd.
+ * Copyright (C) 2024 OSv
  *
  * This work is open source software, licensed under the terms of the
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
+/*
+ * Minimal dynamic-linker introspection.
+ *
+ * The application is statically linked into the kernel, so there is no runtime
+ * loading of shared objects: dlopen()/dlsym() always fail. The C++ exception
+ * unwinder (in libgcc/libstdc++) still calls dl_iterate_phdr() and
+ * _dl_find_object() to locate exception-handling data, so those are implemented
+ * to report the one and only object - the kernel image itself.
+ */
+
 #include <dlfcn.h>
 #include <__dlfcn.h>
-#include <osv/elf.hh>
 #include <link.h>
-#include <osv/debug.hh>
-#include <osv/stubbing.hh>
+#include <elf.h>
+#include <string.h>
+#include <osv/export.h>
 
-static __thread char dlerror_msg[128];
-static __thread char *dlerror_ptr;
+// Published by premain() (loader.cc): the virtual address of the kernel's own
+// ELF header. The kernel is an EXEC linked at - and running at - its link
+// address, so program-header virtual addresses need no load-bias adjustment.
+void* __kernel_ehdr;
 
-static char *dlerror_set(char *val)
+static const Elf64_Phdr* kernel_phdrs(size_t& count)
 {
-    char *old = dlerror_ptr;
-
-    dlerror_ptr = val;
-
-    return old;
+    auto e = static_cast<Elf64_Ehdr*>(__kernel_ehdr);
+    count = e->e_phnum;
+    return reinterpret_cast<const Elf64_Phdr*>(
+        reinterpret_cast<char*>(e) + e->e_phoff);
 }
 
-static void dlerror_fmt(const char *fmt, ...)
+extern "C" OSV_LIBC_API
+int dl_iterate_phdr(int (*callback)(struct dl_phdr_info* info, size_t size, void* data),
+                    void* data)
 {
-    va_list args;
+    size_t n;
+    auto phdr = kernel_phdrs(n);
 
-    va_start(args, fmt);
-    vsnprintf(dlerror_msg, sizeof(dlerror_msg), fmt, args);
-    va_end(args);
-
-    dlerror_set(dlerror_msg);
+    struct dl_phdr_info info;
+    memset(&info, 0, sizeof(info));
+    info.dlpi_addr = 0; // EXEC at its link address: no load bias
+    info.dlpi_name = "kernel";
+    info.dlpi_phdr = phdr;
+    info.dlpi_phnum = n;
+    info.dlpi_adds = 1;
+    info.dlpi_subs = 0;
+    return callback(&info, sizeof(info), data);
 }
 
-void* dlopen(const char* filename, int flags)
+extern "C" OSV_LIBC_API
+int _dl_find_object(void* address, struct dl_find_object* result)
 {
-    if (!filename || !strcmp(filename, "")) {
-        // It is strange that we are returning a program while
-        // dlsym will always try to open an object. We may have to
-        // revisit this later, specially if this affect the ordering
-        // semantics of lookups. But for now this will work
-        return elf::get_program();
+    size_t n;
+    auto phdr = kernel_phdrs(n);
+
+    uintptr_t lo = ~uintptr_t(0), hi = 0;
+    void* eh_frame = nullptr;
+    for (size_t i = 0; i < n; i++) {
+        if (phdr[i].p_type == PT_LOAD) {
+            if (phdr[i].p_vaddr < lo) {
+                lo = phdr[i].p_vaddr;
+            }
+            if (phdr[i].p_vaddr + phdr[i].p_memsz > hi) {
+                hi = phdr[i].p_vaddr + phdr[i].p_memsz;
+            }
+        } else if (phdr[i].p_type == PT_GNU_EH_FRAME) {
+            eh_frame = reinterpret_cast<void*>(phdr[i].p_vaddr);
+        }
     }
 
-    std::shared_ptr<elf::object> obj =
-            elf::get_program()->get_library(filename, {}, false, true);
-    // FIXME: handle flags etc.
-    if (!obj) {
-        dlerror_fmt("dlopen: failed to open %s", filename);
-        return nullptr;
+    auto addr = reinterpret_cast<uintptr_t>(address);
+    if (addr < lo || addr >= hi) {
+        return -1;
     }
-    return new std::shared_ptr<elf::object> (std::move(obj));
-}
-
-int dlclose(void* handle)
-{
-    auto program = elf::get_program();
-    if (program != handle) {
-        delete ((std::shared_ptr<elf::object>*) handle);
-    }
+    memset(result, 0, sizeof(*result));
+    result->dlfo_map_start = reinterpret_cast<void*>(lo);
+    result->dlfo_map_end = reinterpret_cast<void*>(hi);
+    result->dlfo_eh_frame = eh_frame;
     return 0;
 }
 
-void* dlsym(void* handle, const char* name)
+extern "C" int dladdr(const void*, Dl_info* info)
 {
-    elf::symbol_module sym;
-    auto program = elf::get_program();
-    if ((program == handle) || (handle == RTLD_DEFAULT)) {
-        sym = program->lookup(name, nullptr);
-    } else if (handle == RTLD_NEXT) {
-        auto retaddr = __builtin_extract_return_addr(__builtin_return_address(0));
-        sym = program->lookup_next(name, retaddr);
-    } else {
-        auto obj = *reinterpret_cast<std::shared_ptr<elf::object>*>(handle);
-        sym = obj->lookup_symbol_deep(name);
-    }
-    if (!sym.obj || !sym.symbol) {
-        dlerror_fmt("dlsym: symbol %s not found", name);
-        return nullptr;
-    }
-    return sym.relocated_addr();
+    memset(info, 0, sizeof(*info));
+    return 0;
 }
 
-extern "C"
-void* dlvsym(void* handle, const char* name, char *version)
+extern "C" void* dlopen(const char*, int)
 {
-    WARN_ONCE("dlvsym() stubbed, ignoring version parameter");
-    return dlsym(handle, name);
+    return nullptr;
 }
 
-extern "C"
-int dl_iterate_phdr(int (*callback)(struct dl_phdr_info *info,
-                                    size_t size, void *data),
-                    void *data)
+extern "C" void* dlsym(void*, const char*)
 {
-    int ret = 0;
-    elf::get_program()->with_modules([=, &ret] (
-            const elf::program::modules_list &ml) {
-        for (auto obj : ml.objects) {
-            dl_phdr_info info;
-            info.dlpi_addr = reinterpret_cast<uintptr_t>(obj->base());
-            std::string name = obj->pathname();
-            info.dlpi_name = name.c_str();
-            auto phdrs_vectorp = obj->phdrs();
-            // Note that the callback may (as long as adds/subs don't change)
-            // keep around pointers to phdrs_array, so we assume obj->phdrs()
-            // doesn't move around or change.
-            auto phdrs_array = &((*phdrs_vectorp)[0]);
-            auto phdrs_size = phdrs_vectorp->size();
-            // hopefully, the libc and osv types match:
-            info.dlpi_phdr = reinterpret_cast<const Elf64_Phdr*>(phdrs_array);
-            info.dlpi_phnum = phdrs_size;
-            info.dlpi_adds = ml.adds;
-            info.dlpi_subs = ml.subs;
-            // FIXME: dlpi_tls_modid and dlpi_tls_data
-            ret = callback(&info, sizeof(info), data);
-            if (ret) {
-                break;
-            }
-        }
-    });
-    return ret;
+    return nullptr;
 }
 
-extern "C" int dladdr(const void *addr, Dl_info *info)
+extern "C" int dlclose(void*)
 {
-    auto ei = elf::get_program()->lookup_addr(addr);
-    info->dli_fname = ei.fname;
-    info->dli_fbase = ei.base;
-    info->dli_sname = ei.sym;
-    info->dli_saddr = ei.addr;
-    // dladdr() should return 0 only when the address is not contained in a
-    // shared object. It should return 1 when we were able to find the object
-    // (dli_fname, dli_fbase) even if we couldn't find the specific symbol
-    // (dli_sname, dli_saddr).
-    return ei.fname ? 1 : 0;
+    return 0;
 }
 
-extern "C" char *dlerror(void)
+extern "C" char* dlerror(void)
 {
-    return dlerror_set(nullptr);
-}
-
-extern "C" int _dl_find_object(void *address, dl_find_object* result)
-{   //
-    // Find ELF object with a mapping containing the passed in
-    // address and if found populate the result structure as described
-    // in http://www.gnu.org/software/libc/manual/html_node/Dynamic-Linker-Introspection.html
-    auto eo = elf::get_program()->object_containing_addr(address);
-    if (eo) {
-        result->dlfo_map_start = eo->base();
-        result->dlfo_map_end = eo->end();
-        result->dlfo_eh_frame = eo->eh_frame_addr();
-        //TODO: For now we are neglecting to populate the result->dlfo_link_map field
-        //as it is not very well documented what exactly should go there. Eventually,
-        //once we understand the purpose of this field better, we should populate it as well.
-      return 0;
-   } else {
-      return -1;
-   }
+    return const_cast<char*>("dynamic loading is not supported");
 }

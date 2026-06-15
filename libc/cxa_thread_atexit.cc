@@ -21,10 +21,8 @@
 // "Thread Specific Data" (pthread_key_create() et al.) - a portable
 // technique of running certain callbacks each time a thread ends.
 
-#include <memory>
 #include <assert.h>
 
-#include <osv/elf.hh>
 #include <osv/sched.hh>
 
 typedef void (*destructor) (void *);
@@ -33,23 +31,15 @@ struct linked_destructor {
     destructor dtor;
     void *obj;
     linked_destructor *next;
-    // When the variable, and the destructor, are in a dynamically-loadable
-    // shared object (dso), we need to make sure the dso isn't unloaded before
-    // the destructor is run. We do this by keeping a reference to the dso.
-    std::shared_ptr<elf::object> dso;
 
+    // The application is statically linked into the kernel, which is never
+    // unloaded, so (unlike upstream OSv) there is no shared object to keep
+    // alive until the thread-local destructor runs.
     linked_destructor(destructor dtor, void* obj, void* dso_symbol,
             linked_destructor *next) : dtor(dtor), obj(obj), next(next)
     {
-        auto eo = elf::get_program()->object_containing_addr(dso_symbol);
-        // dso_symbol points to the "__dso_handle" symbol in a shared object
-        // (or the main program). We don't expect not to find it.
-        assert(eo);
-
-        dso = eo->shared_from_this();
     }
-}
-;
+};
 static __thread linked_destructor *thread_local_destructors;
 
 extern "C"
