@@ -29,6 +29,8 @@ EXCLUDES=(
     ':(exclude)fastlz/'
     ':(exclude)kbuild/'
     ':(exclude)apps/'
+    ':(exclude)app/'
+    ':(exclude)test/'
     ':(exclude)modules/'
     ':(exclude)tests/'
     ':(exclude)tools/'
