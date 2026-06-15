@@ -1,0 +1,99 @@
+#!/bin/bash
+# Build LLVM libc as a no-syscall static archive for the OSv kernel.
+#
+# Phase 1 of LLVM_LIBC_PLAN.md. Produces, for the requested arch,
+#   build/llvm-libc/<arch>/libc/lib/{libc.a,libm.a}
+# built in fullbuild mode for the "baremetal" target OS (a libc that performs
+# no syscalls at all), with the entrypoint list, config overrides and
+# kernel-matching codegen flags from tools/llvm-libc/. Verifies the no-syscall
+# gate with objdump at the end.
+#
+# This script is invoked automatically by the Makefile (it is a prerequisite of
+# the kernel link when conf_llvm_libc=1); you do not need to run it by hand.
+#
+# llvm-project is pinned (see LLVM_TAG) and fetched as an untracked sparse
+# checkout under external/llvm-project; tools/llvm-libc/* are the files we
+# control (a carried "patch": llvm-libc has no upstream x86_64 baremetal config
+# yet - this script installs ours into the checkout; aarch64 baremetal is
+# upstream-supported and we overlay the same curated surface on it).
+#
+# Only x86_64 (OSv arch "x64") and aarch64 ("arm"/"aarch64") are supported.
+
+set -euo pipefail
+
+# --- arch handling: only x86 and arm ----------------------------------------
+osv_arch="${1:-x64}"
+case "$osv_arch" in
+    x64|x86_64|x86)   osv_arch=x64;      llvm_arch=x86_64 ;;
+    aarch64|arm|arm64) osv_arch=aarch64; llvm_arch=aarch64 ;;
+    *)
+        echo "build-llvm-libc.sh: unsupported arch '$osv_arch' (only x86/arm)" >&2
+        exit 2 ;;
+esac
+
+LLVM_TAG=llvmorg-22.1.7
+OSV_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LLVM_DIR="$OSV_ROOT/external/llvm-project"
+BUILD_DIR="$OSV_ROOT/build/llvm-libc/$osv_arch"
+CONFIG_SRC="$OSV_ROOT/tools/llvm-libc"
+
+# 1. fetch (pinned, sparse: libc + runtimes + cmake support)
+if [ ! -d "$LLVM_DIR/libc" ]; then
+    git clone --depth 1 --branch "$LLVM_TAG" --filter=blob:none --sparse \
+        https://github.com/llvm/llvm-project.git "$LLVM_DIR"
+    git -C "$LLVM_DIR" sparse-checkout set libc runtimes cmake llvm/cmake llvm/utils
+fi
+actual_tag=$(git -C "$LLVM_DIR" describe --tags 2>/dev/null || true)
+if [ "$actual_tag" != "$LLVM_TAG" ]; then
+    echo "warning: external/llvm-project is at '$actual_tag', expected $LLVM_TAG" >&2
+fi
+
+# 2. install our baremetal config (entrypoints/headers/config) into the checkout
+ARCH_CONF="$LLVM_DIR/libc/config/baremetal/$llvm_arch"
+mkdir -p "$ARCH_CONF"
+cp "$CONFIG_SRC/entrypoints.txt" "$ARCH_CONF/entrypoints.txt"
+cp "$CONFIG_SRC/headers.txt"     "$ARCH_CONF/headers.txt"
+cp "$CONFIG_SRC/config.json"     "$ARCH_CONF/config.json"
+
+# 3. configure + build
+# Codegen must match the kernel (see COMMON in the top-level Makefile):
+# non-PIE, no stack protector, local-exec TLS, keep frame pointers.
+KERNEL_FLAGS="-fno-pie -fno-stack-protector -ftls-model=local-exec -fno-omit-frame-pointer"
+
+mkdir -p "$BUILD_DIR"
+cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=clang \
+    -DCMAKE_CXX_COMPILER=clang++ \
+    -DLLVM_ENABLE_RUNTIMES=libc \
+    -DLLVM_LIBC_FULL_BUILD=ON \
+    -DLIBC_TARGET_TRIPLE="$llvm_arch-none-elf" \
+    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+    -DCMAKE_C_FLAGS="$KERNEL_FLAGS" \
+    -DCMAKE_CXX_FLAGS="$KERNEL_FLAGS" \
+    > "$BUILD_DIR-configure.log" 2>&1 || {
+        echo "configure failed, see $BUILD_DIR-configure.log"; exit 1; }
+
+# fullbuild packages the math entrypoints into a separate libm.a
+make -C "$BUILD_DIR" -j"$(nproc)" libc libm > "$BUILD_DIR-build.log" 2>&1 || {
+        echo "build failed, see $BUILD_DIR-build.log"; exit 1; }
+
+# x86 uses the `syscall` instruction; arm uses `svc`. Gate against both so the
+# archive is guaranteed free of any direct kernel-entry instruction.
+case "$llvm_arch" in
+    x86_64)  entry_insns='$NF=="syscall" || $NF=="sysenter"' ;;
+    aarch64) entry_insns='$1=="svc"' ;;
+esac
+
+for name in libc.a libm.a; do
+    ARCHIVE=$(find "$BUILD_DIR" -name "$name" | head -1)
+    if [ -z "$ARCHIVE" ]; then
+        echo "error: $name not produced" >&2; exit 1
+    fi
+    nsyscall=$(objdump -d "$ARCHIVE" | awk "$entry_insns" | wc -l)
+    if [ "$nsyscall" -ne 0 ]; then
+        echo "GATE FAILED: $nsyscall kernel-entry instructions in $ARCHIVE" >&2
+        exit 1
+    fi
+    echo "OK: $ARCHIVE ($(du -h "$ARCHIVE" | cut -f1)), zero syscall instructions"
+done

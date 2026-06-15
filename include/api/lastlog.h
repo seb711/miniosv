@@ -1,1 +1,1 @@
-../../musl/include/lastlog.h
+#include <utmp.h>

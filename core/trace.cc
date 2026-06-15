@@ -11,7 +11,6 @@
 #include <osv/mutex.h>
 #include "arch.hh"
 #include <atomic>
-#include <regex.h>
 #include <unordered_map>
 #include <boost/range/algorithm/remove.hpp>
 #include <sys/types.h>
@@ -135,9 +134,49 @@ static bool global_backtrace_enabled;
 
 typeof(tracepoint_base::tp_list) tracepoint_base::tp_list __attribute__((init_priority((int)init_prio::tracepoint_base)));
 
+// Tracepoint patterns are wildcards: '*' matches any sequence, '?' any
+// one character, applied anywhere in the name - the same substring
+// semantics the regcomp/regexec implementation had. Hand-rolled so the
+// kernel needs no regex engine (and thus no wide-ctype family).
+//
+// The matcher itself is the classic two-pointer full-string glob with
+// star backtracking; the substring behavior comes from matching a
+// pattern pre-wrapped as "*<pattern>*" (wrap_wildcard).
+static bool wildcard_match(const std::string& wrapped, const char* name)
+{
+    const char* p = wrapped.c_str();
+    const char* s = name;
+    const char* star_p = nullptr;
+    const char* star_s = nullptr;
+
+    while (*s) {
+        if (*p == '?' || *p == *s) {
+            p++;
+            s++;
+        } else if (*p == '*') {
+            star_p = ++p;
+            star_s = s;
+        } else if (star_p) {
+            p = star_p;
+            s = ++star_s;
+        } else {
+            return false;
+        }
+    }
+    while (*p == '*') {
+        p++;
+    }
+    return *p == '\0';
+}
+
+static std::string wrap_wildcard(const std::string& pattern)
+{
+    return "*" + pattern + "*";
+}
+
 // Note: the definition of this list is: "expressions from command line",
 // and its only use is to deal with late initialization of tp:s
-std::vector<regex_t> enabled_tracepoint_regexs;
+std::vector<std::string> enabled_tracepoint_wildcards;
 
 void enable_trace()
 {
@@ -174,16 +213,8 @@ void ensure_log_initialized()
 
 void enable_tracepoint(std::string wildcard)
 {
-    std::string pattern(wildcard);
-    osv::replace_all(pattern, std::string("*"), std::string(".*"));
-    osv::replace_all(pattern, std::string("?"), std::string("."));
-    regex_t re;
-    if (regcomp(&re, pattern.c_str(), REG_NOSUB) == 0) {
-        trace::set_event_state(&re, true);
-        enabled_tracepoint_regexs.push_back(re);
-    } else {
-        throw std::runtime_error("Failed to compile regular expression '" + wildcard + "'");
-    }
+    trace::set_event_state_matching(wildcard, true);
+    enabled_tracepoint_wildcards.push_back(wrap_wildcard(wildcard));
 }
 
 void enable_backtraces(bool backtrace) {
@@ -315,8 +346,8 @@ void tracepoint_base::run_probes() {
 
 void tracepoint_base::try_enable()
 {
-    for (auto& re : enabled_tracepoint_regexs) {
-        if (regexec(&re, name, 0, nullptr, 0) == 0) {
+    for (auto& wrapped : enabled_tracepoint_wildcards) {
+        if (wildcard_match(wrapped, name)) {
             // keep the same semantics for command line enabled
             // tp:s as before individually controlled points.
             backtrace(global_backtrace_enabled);
@@ -454,13 +485,14 @@ trace::get_event_info()
 }
 
 std::vector<trace::event_info>
-trace::get_event_info(const regex_t * ex)
+trace::get_event_info_matching(const std::string & wildcard)
 {
     std::vector<event_info> res;
+    const auto wrapped = wrap_wildcard(wildcard);
 
     WITH_LOCK(trace_control_lock) {
         for (auto & tp : tracepoint_base::tp_list) {
-            if (regexec(ex, tp.name, 0, nullptr, 0) == 0) {
+            if (wildcard_match(wrapped, tp.name)) {
                 res.emplace_back(tp);
             }
         }
@@ -470,14 +502,15 @@ trace::get_event_info(const regex_t * ex)
 }
 
 std::vector<trace::event_info>
-trace::set_event_state(const regex_t * ex, bool enable, bool backtrace) {
+trace::set_event_state_matching(const std::string & wildcard, bool enable, bool backtrace) {
     std::vector<event_info> res;
+    const auto wrapped = wrap_wildcard(wildcard);
 
     // Note: expressions sent here are only treated as instantaneous requests.
     // unlike command line, which is "persisted" and queried on a late tp init.
     WITH_LOCK(trace_control_lock) {
         for (auto & tp : tracepoint_base::tp_list) {
-            if (regexec(ex, tp.name, 0, nullptr, 0) == 0) {
+            if (wildcard_match(wrapped, tp.name)) {
                 res.emplace_back(tp);
                 tp.enable(enable);
                 tp.backtrace(backtrace);
@@ -548,416 +581,3 @@ trace::remove_symbol_callback(generator_id id) {
     }
 }
 
-//The code below will be compiled out with conf_hide_symbols=1 as create_trace_dump() is
-//not in the list of the symbols to be exported and is ONLY used
-//by full API httpserver-api module
-#if HIDE_SYMBOLS < 1
-#include <fstream>
-// Helper type to build trace dump binary files
-class trace_out: public std::ofstream {
-public:
-    std::string path;
-
-    trace_out() {
-        for (;;) {
-            std::unique_ptr<char> tmp(::tempnam(nullptr, nullptr));
-            if (tmp) {
-                auto f = ::open(tmp.get(), O_EXCL | O_CREAT);
-                if (f != -1) {
-                    ofstream::open(tmp.get(), ios::out|ios::binary);
-                    path = tmp.get();
-                    ::close(f);
-                    break;
-                }
-            }
-        }
-    }
-    trace_out & align(size_t a) {
-        while (tellp() & (a - 1)) {
-            put(0);
-        }
-        return *this;
-    }
-    template<typename T> trace_out & align() {
-        return align(std::alignment_of<T>::value);
-    }
-
-    using std::ofstream::write;
-
-    template<typename T> trace_out & write(T && t) {
-        align<T>();
-        write(reinterpret_cast<const char_type*>(&t), sizeof(t));
-        return *this;
-    }
-    template<typename T> trace_out & twrite(const char *& s) {
-        const auto a = object_serializer<T>().alignment();
-        s = align_up(s, a);
-        align(a);
-        write(s, sizeof(T));
-        s += sizeof(T);
-        return *this;
-    }
-    template<typename T> trace_out & twrite(const char *& s, size_t n) {
-        while (n-- > 0) {
-            twrite<T>(s);
-        }
-        return *this;
-    }
-    trace_out & swrite(const char * s) {
-        size_t len = s != nullptr ? strlen(s) : 0;
-        write(u16(len));
-        write(s, len);
-        return *this;
-    }
-    trace_out & swrite(const std::string & s) {
-        write(u16(s.size()));
-        write(s.c_str(), s.size());
-        return *this;
-    }
-};
-
-template<typename T = uint32_t>
-struct length {
-public:
-    length(trace_out & out, T v = T()) :
-            value(v), _out(out), _pos(out.tellp()) {
-        out.write(T());
-    }
-    ~length() {
-        auto p = _out.tellp();
-        _out.seekp(_pos);
-        _out.write(value);
-        _out.seekp(p);
-    }
-    T value;
-private:
-    trace_out & _out;
-    trace_out::pos_type _pos;
-};
-
-/*
-  Format (please keep in sync with doc/wiki)
-
-Note: All chunks are aligned on eight (8, sizeof(uint64_t)).
-Otherwise data is aligned on their "natural" alignment.
-Semi-structs such as string are aligned on the first member.
-
-Chunks are typed with a 32-bit FOURCC tag, written in native
-endian, i.e. 'ROCK' on LE becomes the string "KCOR".
-Size is a somewhat overzealeous uint64_t value, thus in effect
-there is a "reserved" 32-bit value between tag and size.
-
-Any chunk type may appear more than once, and in no particular order,
-except that actual trace data chunks should appear last.
-
-string = {
-  uint16_t len;
-  char data[len];
-};
-
-dump = <chunk> {
-  uint32_t tag = ‘OSVT’;
-  uint64_t size = <dump size>;
-  uint32_t format_version;
-
-  trace_dictionary = <chunk, align 8> {
-    uint32_t tag = 'TRCD';
-    uint64_t size = <cs>;
-    uint32_t backtrace_len; // how long are all backtraces
-    // array of trace point definitions
-    uint32_t n_types;
-    struct {
-      uint64_t tag;
-      string id;
-      string name;
-      string prov;
-      string format;
-      // array of arguments
-      uint32_t n_args;
-      struct {
-        string name;
-        char type;
-      } [n_args];
-    } [n_types];
-  } +; // one or more, may repeat
-
-  loaded_moduled = <chunk, align 8> {
-    uint32_t tag = ‘MODS’;
-    uint64_t size = <chunk size>;
-    // array of module info
-    uint32_t n_modules;
-    struct {
-      string path;
-      uint64_t base;
-      // array of loaded segments
-      uint32_t n_segments;
-      struct {
-        string name;
-        uint32_t type;
-        uint32_t info
-        uint64_t flags;
-        uint64_t address;
-        uint64_t offset;
-        uint64_t size;
-      } [n_segments];
-    } [n_modules];
-  } *; // zero or more, may repeat
-
-  symbol_table = <chunk, align 8> {
-    uint32_t tag = 'SYMB';
-    uint32_t size = <cs>;
-    // array of symbol entries
-    uint32_t n_symbols;
-    struct {
-      string name;
-      uint64_t address;
-      uint64_t size;
-      string filename;
-      uint32_t n_locations;
-      struct {
-          uint32_t offset;
-          int32_t line;
-      } [n_locations];
-    } [n_symbols];
-  } *; // zero or more, may repeat
-
-  trace_data = <chunk, align 8> {
-    uint32_t tag = ‘TRCS’;
-    uint64_t size = <chunk size>;
-    <align 8>
-    //<raw traces, but with gaps removed>
-  } +; // 1 or more
-};
-
- */
-std::string
-trace::create_trace_dump()
-{
-    semaphore signal(0);
-    std::vector<trace_buf> copies(sched::cpus.size());
-
-    auto is_valid_tracepoint = [](const tracepoint_base * tp_test) {
-        for (auto & tp : tracepoint_base::tp_list) {
-            if (&tp == tp_test) {
-                return true;
-            }
-        }
-        return false;
-    };
-
-    // Copy the trace buffers from each cpu, locking out trace generation
-    // during the extraction (disable preemption, just like trace write)
-    unsigned i = 0;
-    for (auto & cpu : sched::cpus) {
-        std::unique_ptr<sched::thread> t(sched::thread::make([&, i]() {
-            arch::irq_flag_notrace irq;
-            irq.save();
-            arch::irq_disable_notrace();
-            auto * tbp = percpu_trace_buffer.for_cpu(cpu);
-            copies[i] = trace_buf(*tbp);
-            irq.restore();
-            signal.post();
-        }, sched::thread::attr().pin(cpu)));
-        t->start();
-        t->join();
-        ++i;
-    }
-    // Redundant. But just to verify.
-    signal.wait(sched::cpus.size());
-
-    // Dealing with 'FOUR' fourcc tags
-    struct tag {
-        tag(const char (&s)[5]) :
-            _val((s[0] << 24) | (s[1] << 16) | (s[2] << 8) | s[3])
-        {}
-        operator uint32_t() const {
-            return _val;
-        }
-        const uint32_t _val;
-    };
-
-    // RIFF-like chunk (see file format description).
-    // Always aligned on 8
-    class chunk {
-    public:
-        chunk(trace_out & out, const tag & tt) :
-                _out(out) {
-            out.align(8);
-            out.write(uint32_t(tt));
-            out.align(8);
-            _pos = out.tellp();
-            out.write(uint64_t(0));
-        }
-        ~chunk() {
-            auto p = _out.tellp();
-            _out.seekp(_pos);
-            _out.write(uint64_t(p - _pos - sizeof(uint64_t)));
-            _out.seekp(p);
-        }
-    private:
-        trace_out & _out;
-        trace_out::pos_type _pos;
-    };
-
-    static const int tf_version_major = 0;
-    static const int tf_version_minor = 1;
-
-    trace_out out;
-
-    // Want early fail
-    out.exceptions(trace_out::failbit);
-
-    {
-        chunk osvt(out, "OSVT"); // magic
-        out.write(uint32_t(1)); // endian (verify)
-        out.write(uint32_t((tf_version_major << 16) | tf_version_minor)); // version
-
-        // Trace dictionary
-        {
-            chunk dict(out, "TRCD");
-
-            out.write(uint32_t(tracepoint_base::backtrace_len));
-            out.write(uint32_t(tracepoint_base::tp_list.size()));
-
-            for (auto & tp : tracepoint_base::tp_list) {
-                out.write(reinterpret_cast<uint64_t>(&tp)); // tag/ptr
-                out.swrite(tp.name); // id
-                out.swrite(tp.name); // name (TODO: useful names)
-                out.swrite("OSv"); // provider
-                out.swrite(tp.format); // print format (?)
-                out.write<uint32_t>(strlen(tp.sig));
-                int n = 0;
-                auto s = tp.sig;
-                while (*s) {
-                    out.swrite(std::to_string(n++)); // no arg names
-                    out.write(*s);
-                    ++s;
-                }
-            }
-        }
-
-        { // Module list
-            // The application is statically linked into the kernel and the ELF
-            // symbol table is no longer kept around, so there are no modules or
-            // symbols to emit for host-side symbolization.
-            chunk mods(out, "MODS");
-            out.write(uint32_t(0));
-        }
-
-
-        {
-            // Symbol tables
-            WITH_LOCK(symbol_func_mutex) {
-                for (auto & p : symbol_functions) {
-                    chunk symb(out, "SYMB");
-                    length<> len(out);
-                    p.second([&](const symbol & s) {
-                        ++len.value;
-                        out.swrite(s.name);
-                        out.write(uint64_t(s.addr));
-                        out.write(uint64_t(s.size));
-                        out.swrite(s.filename);
-                        out.write(s.n_locations);
-                        for (uint32_t i = 0; i < s.n_locations; ++i) {
-                            auto loc = s.location(i);
-                            out.write(loc.first);
-                            out.write(loc.second);
-                        }
-                    });
-                }
-            }
-        }
-
-        // Trace data, one chunk for each cpu buffer
-        for (auto & buf : copies) {
-            const auto last = buf.last();
-            const auto pivot = align_up(last, trace_page_size);
-            const auto regs = { std::make_pair(buf._base.get() + pivot,
-                    buf._base.get() + buf._size), std::make_pair(
-                    buf._base.get(), buf._base.get() + last) };
-
-            chunk trcs(out, "TRCS");
-
-            out.align(8);
-
-            for (auto & r : regs) {
-                const char * s = r.first;
-                const char * e = r.second;
-
-                while (s < e) {
-                    auto * tr = reinterpret_cast<const trace_record*>(s);
-                    if (tr->tp == nullptr) {
-                        // alignment up to 8 is fine on the pointer itself.
-                        // page alignment we must do per offset.
-                        size_t off = s - r.first;
-                        s = r.first + align_up(off + 1, trace_page_size);
-                        continue;
-                    }
-                    if (tr->tp == trace_buf::invalid_trace_point) {
-                        break;
-                    }
-
-                    assert(is_valid_tracepoint(tr->tp));
-
-                    out.twrite<trace_record>(s);
-
-                    if (tr->backtrace) {
-                        out.twrite<void *>(s, tracepoint_base::backtrace_len);
-                    }
-                    auto sig = tr->tp->sig;
-                    while (*sig != 0) {
-                        switch (*sig++) {
-                        case 'c':
-                            out.twrite<char>(s);
-                            break;
-                        case 'b':
-                        case 'B':
-                            out.twrite<u8>(s);
-                            break;
-                        case 'h':
-                        case 'H':
-                            out.twrite<u16>(s);
-                            break;
-                        case 'i':
-                        case 'I':
-                        case 'f':
-                            out.twrite<u32>(s);
-                            break;
-                        case 'q':
-                        case 'Q':
-                        case 'd':
-                        case 'P':
-                            out.twrite<u64>(s);
-                            break;
-                        case '?':
-                            out.twrite<bool>(s);
-                            break;
-                        case 'p': {
-                            out.twrite<char>(s,
-                                    object_serializer<const char*>::max_len);
-                            break;
-                        }
-                        case '*': {
-                            s = align_up(s, sizeof(u16));
-                            auto len = *reinterpret_cast<const u16*>(s);
-                            s += 2;
-                            out.write(len);
-                            out.twrite<char>(s, len);
-                            break;
-                        }
-                        default:
-                            assert(0 && "should not reach");
-                        }
-                    }
-                    s = align_up(s, sizeof(long));
-                }
-            }
-        }
-
-    }
-    out.flush();
-    out.close();
-
-    return std::move(out.path);
-}
-#endif

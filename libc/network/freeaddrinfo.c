@@ -1,1 +1,7 @@
-../../musl_0.9.12/src/network/freeaddrinfo.c
+#include <stdlib.h>
+#include <netdb.h>
+
+void freeaddrinfo(struct addrinfo *p)
+{
+	free(p);
+}

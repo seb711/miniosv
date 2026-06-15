@@ -114,15 +114,6 @@ endif
 
 ###########################################################################
 
-# We need some external git modules to have been downloaded, because the
-# default "make" depends on the following directories:
-#   musl/ -  for some of the header files (symbolic links in include/api) and
-#            some of the source files ($(musl) below).
-# Additional submodules are need when certain make parameters are used.
-ifeq (,$(wildcard musl/include))
-    $(error Missing musl/ directory. Please run "git submodule update --init --recursive")
-endif
-
 # This makefile wraps all commands with the $(quiet) or $(very-quiet) macros
 # so that instead of half-a-screen-long command lines we short summaries
 # like "CC file.cc". These macros also keep the option of viewing the
@@ -203,44 +194,36 @@ local-includes =
 INCLUDES = $(local-includes) -Iarch/$(arch) -I. -Iinclude  -Iarch/common
 INCLUDES += -isystem include/glibc-compat
 #
-# Let us detect presence of standard C++ headers
-CXX_INCLUDES = $(shell $(CXX) -E -xc++ - -v </dev/null 2>&1 | awk '/^End/ {exit} /^ \// && /c\+\+/ {print "-isystem" $$0}')
-ifeq ($(CXX_INCLUDES),)
-  ifeq ($(CROSS_PREFIX),aarch64-linux-gnu-)
-    # We are on distribution where the aarch64-linux-gnu package does not come with C++ headers
-    # So let use point it to the expected location
-    aarch64_gccbase = build/downloaded_packages/aarch64/gcc/install
-    ifeq (,$(wildcard $(aarch64_gccbase)))
-     $(error Missing $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
-    endif
-
-    gcc-inc-base := $(dir $(shell find $(aarch64_gccbase)/ -name vector | grep -v -e debug/vector$$ -e profile/vector$$ -e experimental/vector$$))
-    ifeq (,$(gcc-inc-base))
-      $(error Could not find C++ headers under $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
-    endif
-
-    gcc-inc-base3 := $(dir $(shell dirname `find $(aarch64_gccbase)/ -name c++config.h | grep -v /32/`))
-    ifeq (,$(gcc-inc-base3))
-      $(error Could not find C++ headers under $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
-    endif
-    CXX_INCLUDES = -isystem $(gcc-inc-base) -isystem $(gcc-inc-base3)
-
-    gcc-inc-base2 := $(dir $(shell find $(aarch64_gccbase)/ -name unwind.h))
-    ifeq (,$(gcc-inc-base2))
-      $(error Could not find standard gcc headers like "unwind.h" under $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
-    endif
-    STANDARD_GCC_INCLUDES = -isystem $(gcc-inc-base2)
-
-    gcc-sysroot = --sysroot $(aarch64_gccbase)
-    standard-includes-flag = -nostdinc
-  else
-    $(error Could not find standard C++ headers. Please run "sudo ./scripts/setup.py")
+# C++ standard headers come from our own libc++ (CXX_INCLUDES is set below,
+# overriding anything here). The aarch64 cross-build still needs a sysroot and
+# the target toolchain's standard C headers (e.g. unwind.h) for the freestanding
+# bits; the native x86 build needs nothing extra.
+ifeq ($(CROSS_PREFIX),aarch64-linux-gnu-)
+  aarch64_gccbase = build/downloaded_packages/aarch64/gcc/install
+  ifeq (,$(wildcard $(aarch64_gccbase)))
+   $(error Missing $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
   endif
+  cross-inc-base := $(dir $(shell find $(aarch64_gccbase)/ -name unwind.h))
+  ifeq (,$(cross-inc-base))
+    $(error Could not find standard headers like "unwind.h" under $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
+  endif
+  STANDARD_GCC_INCLUDES = -isystem $(cross-inc-base)
+  gcc-sysroot = --sysroot $(aarch64_gccbase)
+  standard-includes-flag = -nostdinc
 else
-  # If gcc can find C++ headers it also means it can find standard libc headers, so no need to add them specifically
   STANDARD_GCC_INCLUDES =
   standard-includes-flag =
 endif
+
+# --- libc++ replaces GNU libstdc++ (LLVM_LIBC_PLAN.md, Phase 8) ---
+# Compile the entire C++ surface (kernel + app + vendored boost) against our
+# localization-free libc++ headers instead of the system GNU C++ headers; the
+# libc++ c++/v1 dir itself is added C++-only in CXXFLAGS (with -nostdinc++), so
+# it does not shadow C headers (e.g. its wchar.h wrapper) for C compiles.
+# libunwind's unwind.h/libunwind.h are needed by backtrace.cc (C++ only, but
+# harmless for C) and libc++abi's cxxabi.h is installed alongside under c++/v1.
+CXX_INCLUDES = -isystem external/llvm-project/libunwind/include
+libcxx-includes = -nostdinc++ -isystem build/libcxx/$(arch)/include/c++/v1
 
 ifeq ($(arch),aarch64)
 libfdt_base = external/$(arch)/libfdt
@@ -262,8 +245,6 @@ INCLUDES += $(STANDARD_GCC_INCLUDES)
 INCLUDES += -isystem $(out)/gen/include
 INCLUDES += $(post-includes-bsd)
 
-
-$(out)/musl/%.o: pre-include-api = -isystem include/api/internal_musl_headers -isystem musl/src/include
 
 ifneq ($(werror),0)
 	CFLAGS_WERROR = -Werror
@@ -290,12 +271,10 @@ source-dialects = -D_GNU_SOURCE
 
 # libc has its own source dialect control
 $(out)/libc/%.o: source-dialects =
-$(out)/musl/%.o: source-dialects =
 
-# do not hide symbols in musl/libc because it has it's own hiding mechanism
+# do not hide symbols in libc because it has its own hiding mechanism
 $(out)/libc/%.o: cc-hide-flags =
 $(out)/libc/%.o: cxx-hide-flags =
-$(out)/musl/%.o: cc-hide-flags =
 
 kernel-defines = -D_KERNEL $(source-dialects) $(cc-hide-flags) $(gc-flags)
 
@@ -354,19 +333,17 @@ gcc-opt-Og := $(call compiler-flag, -Og, -Og, compiler/empty.cc)
 # immediate offsets resolved at link time rather than GOT-based TPOFF64 dynamic
 # relocations that would need processing at boot.
 tls-model = -ftls-model=local-exec
-CXXFLAGS = -std=$(conf_cxx_level) $(COMMON) $(cxx-hide-flags) $(tls-model)
+CXXFLAGS = -std=$(conf_cxx_level) $(libcxx-includes) $(COMMON) $(cxx-hide-flags) $(tls-model)
 CFLAGS = -std=gnu99 $(COMMON) $(tls-model)
 
 # should be limited to files under libc/ eventually
 CFLAGS += -I libc/stdio -I libc/internal -I libc/arch/$(arch) \
 	-Wno-missing-braces -Wno-parentheses -Wno-unused-but-set-variable
 # musl uses "str"+int idiom to skip first character conditionally
-$(out)/musl/%.o: CFLAGS += -Wno-string-plus-int
 $(out)/libc/%.o: CFLAGS += -Wno-string-plus-int
 # musl calls fabs() on a long double in a few spots; suppress Clang's narrowing
 # warning rather than patch the vendored musl source (probed; GCC lacks the flag)
 wno-absolute-value := $(call compiler-flag, -Wno-absolute-value, -Wno-absolute-value, compiler/empty.cc)
-$(out)/musl/%.o: CFLAGS += $(wno-absolute-value)
 $(out)/libc/%.o: CFLAGS += $(wno-absolute-value)
 
 ASFLAGS = -g $(autodepend) -D__ASSEMBLY__
@@ -742,15 +719,7 @@ objects += core/string_utils.o
 #include $(src)/libc/build.mk:
 libc =
 libc_to_hide =
-musl =
 environ_libc =
-environ_musl =
-
-ifeq ($(arch),x64)
-musl_arch = x86_64
-else
-musl_arch = aarch64
-endif
 
 libc += internal/_chk_fail.o
 libc_to_hide += internal/_chk_fail.o
@@ -759,332 +728,35 @@ libc += internal/intscan.o
 libc += internal/libc.o
 libc += internal/shgetc.o
 
-musl += ctype/__ctype_get_mb_cur_max.o
-musl += ctype/__ctype_tolower_loc.o
-musl += ctype/__ctype_toupper_loc.o
-musl += ctype/isalnum.o
-musl += ctype/isalpha.o
-musl += ctype/isascii.o
-musl += ctype/isblank.o
-musl += ctype/iscntrl.o
-musl += ctype/isdigit.o
-musl += ctype/isgraph.o
-musl += ctype/islower.o
-musl += ctype/isprint.o
-musl += ctype/ispunct.o
-musl += ctype/isspace.o
-musl += ctype/isupper.o
-musl += ctype/iswalnum.o
-musl += ctype/iswalpha.o
-musl += ctype/iswblank.o
-musl += ctype/iswcntrl.o
-musl += ctype/iswctype.o
-musl += ctype/iswdigit.o
-musl += ctype/iswgraph.o
-musl += ctype/iswlower.o
-musl += ctype/iswprint.o
-musl += ctype/iswpunct.o
-musl += ctype/iswspace.o
-musl += ctype/iswupper.o
-musl += ctype/iswxdigit.o
-musl += ctype/isxdigit.o
-musl += ctype/toascii.o
-musl += ctype/tolower.o
-musl += ctype/toupper.o
-musl += ctype/towctrans.o
-musl += ctype/wcswidth.o
-musl += ctype/wctrans.o
-musl += ctype/wcwidth.o
 
-musl += dirent/alphasort.o
-musl += dirent/scandir.o
 
 libc += env/__environ.o
-musl += env/clearenv.o
-musl += env/getenv.o
 libc += env/secure_getenv.o
-musl += env/putenv.o
-musl += env/setenv.o
-musl += env/unsetenv.o
 
 environ_libc += env/__environ.c
-environ_musl += env/clearenv.c
-environ_musl += env/getenv.c
+environ_libc += env/clearenv.c
+environ_libc += env/getenv.c
 environ_libc += env/secure_getenv.c
-environ_musl += env/putenv.c
-environ_musl += env/setenv.c
-environ_musl += env/unsetenv.c
-environ_musl += string/strchrnul.c
+environ_libc += env/putenv.c
+environ_libc += env/setenv.c
+environ_libc += env/unsetenv.c
+environ_libc += string/strchrnul.c
 
-musl += ctype/__ctype_b_loc.o
 
-musl += errno/strerror.o
 libc += errno/strerror.o
 
-musl += locale/catclose.o
-musl += locale/__mo_lookup.o
-$(out)/musl/src/locale/__mo_lookup.o: CFLAGS += $(cc-hide-flags-$(conf_hide_symbols))
-musl += locale/pleval.o
-musl += locale/catgets.o
 libc += locale/catopen.o
 libc += locale/duplocale.o
 libc += locale/freelocale.o
 libc += locale/intl.o
 libc += locale/langinfo.o
-musl += locale/localeconv.o
 libc += locale/setlocale.o
-musl += locale/strcoll.o
-musl += locale/strfmon.o
 libc += locale/strtod_l.o
 libc += locale/strtof_l.o
 libc += locale/strtold_l.o
-musl += locale/strxfrm.o
 libc += locale/uselocale.o
-musl += locale/wcscoll.o
-musl += locale/wcsxfrm.o
 
-musl += math/__cos.o
-musl += math/__cosdf.o
-musl += math/__cosl.o
-musl += math/__expo2.o
-musl += math/__expo2f.o
-musl += math/__fpclassify.o
-musl += math/__fpclassifyf.o
-musl += math/__fpclassifyl.o
-musl += math/__invtrigl.o
-musl += math/__polevll.o
-musl += math/__rem_pio2.o
-musl += math/__rem_pio2_large.o
-$(out)/musl/src/math/__rem_pio2_large.o: CFLAGS += $(wno-maybe-uninitialized)
-musl += math/__rem_pio2f.o
-musl += math/__rem_pio2l.o
-musl += math/__signbit.o
-musl += math/__signbitf.o
-musl += math/__signbitl.o
-musl += math/__sin.o
-musl += math/__sindf.o
-musl += math/__sinl.o
-musl += math/__tan.o
-musl += math/__tandf.o
-musl += math/__tanl.o
-musl += math/__math_oflow.o
-musl += math/__math_oflowf.o
-musl += math/__math_xflow.o
-musl += math/__math_xflowf.o
-musl += math/__math_uflow.o
-musl += math/__math_uflowf.o
-musl += math/__math_divzero.o
-musl += math/__math_divzerof.o
-musl += math/__math_invalid.o
-musl += math/__math_invalidf.o
-musl += math/acos.o
-musl += math/acosf.o
-musl += math/acosh.o
-musl += math/acoshf.o
-musl += math/acoshl.o
-musl += math/acosl.o
-musl += math/asin.o
-musl += math/asinf.o
-musl += math/asinh.o
-musl += math/asinhf.o
-musl += math/asinhl.o
-musl += math/asinl.o
-musl += math/atan.o
-musl += math/atan2.o
-musl += math/atan2f.o
-musl += math/atan2l.o
-musl += math/atanf.o
-musl += math/atanh.o
-musl += math/atanhf.o
-musl += math/atanhl.o
-musl += math/atanl.o
-musl += math/cbrt.o
-musl += math/cbrtf.o
-musl += math/cbrtl.o
-musl += math/ceil.o
-musl += math/ceilf.o
-musl += math/ceill.o
-musl += math/copysign.o
-musl += math/copysignf.o
-musl += math/copysignl.o
-musl += math/cos.o
-musl += math/cosf.o
-musl += math/cosh.o
-musl += math/coshf.o
-musl += math/coshl.o
-musl += math/cosl.o
-musl += math/erf.o
-musl += math/erff.o
-musl += math/erfl.o
-musl += math/exp.o
-musl += math/exp_data.o
-musl += math/exp10.o
-musl += math/exp10f.o
-musl += math/exp10l.o
-musl += math/exp2.o
-musl += math/exp2f.o
-musl += math/exp2f_data.o
-musl += math/exp2l.o
-$(out)/musl/src/math/exp2l.o: CFLAGS += -Wno-unused-variable
-musl += math/expf.o
-musl += math/expl.o
-musl += math/expm1.o
-musl += math/expm1f.o
-musl += math/expm1l.o
-musl += math/fabs.o
-musl += math/fabsf.o
-musl += math/fabsl.o
-musl += math/fdim.o
-musl += math/fdimf.o
-musl += math/fdiml.o
-musl += math/floor.o
-musl += math/floorf.o
-musl += math/floorl.o
-#musl += math/fma.o
-#musl += math/fmaf.o
-#musl += math/fmal.o
-musl += math/fmax.o
-musl += math/fmaxf.o
-musl += math/fmaxl.o
-musl += math/fmin.o
-musl += math/fminf.o
-musl += math/fminl.o
-musl += math/fmod.o
-musl += math/fmodf.o
-musl += math/fmodl.o
-musl += math/finite.o
-musl += math/finitef.o
 libc += math/finitel.o
-musl += math/frexp.o
-musl += math/frexpf.o
-musl += math/frexpl.o
-musl += math/hypot.o
-musl += math/hypotf.o
-musl += math/hypotl.o
-musl += math/ilogb.o
-$(out)/musl/src/math/ilogb.o: CFLAGS += -Wno-unknown-pragmas
-musl += math/ilogbf.o
-$(out)/musl/src/math/ilogbf.o: CFLAGS += -Wno-unknown-pragmas
-musl += math/ilogbl.o
-$(out)/musl/src/math/ilogbl.o: CFLAGS += -Wno-unknown-pragmas
-musl += math/j0.o
-musl += math/j0f.o
-musl += math/j1.o
-musl += math/j1f.o
-musl += math/jn.o
-musl += math/jnf.o
-musl += math/ldexp.o
-musl += math/ldexpf.o
-musl += math/ldexpl.o
-musl += math/lgamma.o
-musl += math/lgamma_r.o
-$(out)/musl/src/math/lgamma_r.o: CFLAGS += $(wno-maybe-uninitialized)
-musl += math/lgammaf.o
-musl += math/lgammaf_r.o
-$(out)/musl/src/math/lgammaf_r.o: CFLAGS += $(wno-maybe-uninitialized)
-musl += math/lgammal.o
-$(out)/musl/src/math/lgammal.o: CFLAGS += $(wno-maybe-uninitialized)
-#musl += math/llrint.o
-#musl += math/llrintf.o
-#musl += math/llrintl.o
-musl += math/llround.o
-musl += math/llroundf.o
-musl += math/llroundl.o
-musl += math/log.o
-musl += math/log_data.o
-musl += math/log10.o
-musl += math/log10f.o
-musl += math/log10l.o
-musl += math/log1p.o
-musl += math/log1pf.o
-musl += math/log1pl.o
-musl += math/log2.o
-musl += math/log2_data.o
-musl += math/log2f.o
-musl += math/log2f_data.o
-musl += math/log2l.o
-musl += math/logb.o
-musl += math/logbf.o
-musl += math/logbl.o
-musl += math/logf.o
-musl += math/logf_data.o
-musl += math/logl.o
-musl += math/lrint.o
-#musl += math/lrintf.o
-#musl += math/lrintl.o
-musl += math/lround.o
-musl += math/lroundf.o
-musl += math/lroundl.o
-musl += math/modf.o
-musl += math/modff.o
-musl += math/modfl.o
-musl += math/nan.o
-musl += math/nanf.o
-musl += math/nanl.o
-musl += math/nearbyint.o
-$(out)/musl/src/math/nearbyint.o: CFLAGS += -Wno-unknown-pragmas
-musl += math/nearbyintf.o
-$(out)/musl/src/math/nearbyintf.o: CFLAGS += -Wno-unknown-pragmas
-musl += math/nearbyintl.o
-$(out)/musl/src/math/nearbyintl.o: CFLAGS += -Wno-unknown-pragmas
-musl += math/nextafter.o
-musl += math/nextafterf.o
-musl += math/nextafterl.o
-musl += math/nexttoward.o
-musl += math/nexttowardf.o
-musl += math/nexttowardl.o
-musl += math/pow.o
-musl += math/pow_data.o
-musl += math/powf.o
-musl += math/powf_data.o
-musl += math/powl.o
-musl += math/remainder.o
-musl += math/remainderf.o
-musl += math/remainderl.o
-musl += math/remquo.o
-musl += math/remquof.o
-musl += math/remquol.o
-musl += math/rint.o
-musl += math/rintf.o
-musl += math/rintl.o
-musl += math/round.o
-musl += math/roundf.o
-musl += math/roundl.o
-musl += math/scalb.o
-musl += math/scalbf.o
-musl += math/scalbln.o
-musl += math/scalblnf.o
-musl += math/scalblnl.o
-musl += math/scalbn.o
-musl += math/scalbnf.o
-musl += math/scalbnl.o
-musl += math/signgam.o
-musl += math/significand.o
-musl += math/significandf.o
-musl += math/sin.o
-musl += math/sincos.o
-musl += math/sincosf.o
-msul += math/sincosl.o
-musl += math/sinf.o
-musl += math/sinh.o
-musl += math/sinhf.o
-musl += math/sinhl.o
-musl += math/sinl.o
-musl += math/sqrt.o
-musl += math/sqrtf.o
-musl += math/sqrtl.o
-musl += math/tan.o
-musl += math/tanf.o
-musl += math/tanh.o
-musl += math/tanhf.o
-musl += math/tanhl.o
-musl += math/tanl.o
-musl += math/tgamma.o
-musl += math/tgammaf.o
-musl += math/tgammal.o
-musl += math/trunc.o
-musl += math/truncf.o
-musl += math/truncl.o
 
 # Issue #867: Gcc 4.8.4 has a bug where it optimizes the trivial round-
 # related functions incorrectly - it appears to convert calls to any
@@ -1093,21 +765,8 @@ musl += math/truncl.o
 # None of the specific "-fno-*" options disable this buggy optimization,
 # unfortunately. The simplest workaround is to just disable optimization
 # for the affected files.
-$(out)/musl/src/math/lround.o: conf_compiler_opt := $(conf_compiler_opt) -O0
-$(out)/musl/src/math/lroundf.o: conf_compiler_opt := $(conf_compiler_opt) -O0
-$(out)/musl/src/math/lroundl.o: conf_compiler_opt := $(conf_compiler_opt) -O0
-$(out)/musl/src/math/llround.o: conf_compiler_opt := $(conf_compiler_opt) -O0
-$(out)/musl/src/math/llroundf.o: conf_compiler_opt := $(conf_compiler_opt) -O0
-$(out)/musl/src/math/llroundl.o: conf_compiler_opt := $(conf_compiler_opt) -O0
 
-musl += misc/a64l.o
-musl += misc/basename.o
-musl += misc/dirname.o
 libc += misc/error.o
-musl += misc/ffs.o
-musl += misc/ffsl.o
-musl += misc/ffsll.o
-musl += misc/get_current_dir_name.o
 ifeq ($(conf_networking_stack),1)
 libc += misc/gethostid.o
 endif
@@ -1115,115 +774,35 @@ libc += misc/getopt.o
 libc_to_hide += misc/getopt.o
 libc += misc/getopt_long.o
 libc_to_hide += misc/getopt_long.o
-musl += misc/getsubopt.o
 libc += misc/realpath.o
 libc += misc/backtrace.o
 libc += misc/uname.o
 libc += misc/lockf.o
-musl += misc/nftw.o
 libc += misc/__longjmp_chk.o
 
-musl += signal/killpg.o
-musl += signal/siginterrupt.o
-musl += signal/sigrtmin.o
-musl += signal/sigrtmax.o
 
-musl += multibyte/btowc.o
-musl += multibyte/internal.o
-musl += multibyte/mblen.o
-musl += multibyte/mbrlen.o
-musl += multibyte/mbrtowc.o
-musl += multibyte/mbsinit.o
-musl += multibyte/mbsnrtowcs.o
 libc += multibyte/__mbsnrtowcs_chk.o
-musl += multibyte/mbsrtowcs.o
 libc += multibyte/__mbsrtowcs_chk.o
-musl += multibyte/mbstowcs.o
 libc += multibyte/__mbstowcs_chk.o
-musl += multibyte/mbtowc.o
-musl += multibyte/wcrtomb.o
-musl += multibyte/wcsnrtombs.o
-musl += multibyte/wcsrtombs.o
-musl += multibyte/wcstombs.o
-musl += multibyte/wctob.o
-musl += multibyte/wctomb.o
 
-$(out)/libc/multibyte/mbsrtowcs.o: CFLAGS += -Imusl/src/multibyte
 
-musl += network/htonl.o
-musl += network/htons.o
-musl += network/ntohl.o
-musl += network/ntohs.o
 ifeq ($(conf_networking_stack),1)
 libc += network/gethostbyname_r.o
-musl += network/gethostbyname2_r.o
-musl += network/gethostbyaddr_r.o
-musl += network/gethostbyaddr.o
-musl += network/resolvconf.o
-musl += network/res_msend.o
-$(out)/musl/src/network/res_msend.o: CFLAGS += $(wno-maybe-uninitialized) --include libc/syscall_to_function.h --include libc/internal/pthread_stubs.h $(cc-hide-flags-$(conf_hide_symbols))
-$(out)/libc/multibyte/mbsrtowcs.o: CFLAGS += -Imusl/src/multibyte
-musl += network/lookup_ipliteral.o
 libc += network/getaddrinfo.o
 libc += network/freeaddrinfo.o
-musl += network/res_mkquery.o
-musl += network/dns_parse.o
-musl += network/in6addr_any.o
-musl += network/in6addr_loopback.o
-musl += network/lookup_name.o
-musl += network/lookup_serv.o
 libc += network/getnameinfo.o
 libc += network/__dns.o
 libc_to_hide += network/__dns.o
 libc += network/__ipparse.o
 libc_to_hide += network/__ipparse.o
-musl += network/inet_addr.o
-musl += network/inet_aton.o
-musl += network/inet_pton.o
-musl += network/inet_ntop.o
-musl += network/proto.o
-musl += network/if_indextoname.o
-$(out)/musl/src/network/if_indextoname.o: CFLAGS += --include libc/syscall_to_function.h --include libc/network/__socket.h $(wno-stringop-truncation)
-musl += network/if_nametoindex.o
-$(out)/musl/src/network/if_nametoindex.o: CFLAGS += --include libc/syscall_to_function.h --include libc/network/__socket.h $(wno-stringop-truncation)
-musl += network/gai_strerror.o
-musl += network/h_errno.o
-musl += network/getservbyname_r.o
-musl += network/getservbyname.o
-musl += network/getservbyport_r.o
-musl += network/getservbyport.o
-musl += network/getifaddrs.o
-musl += network/if_nameindex.o
-musl += network/if_freenameindex.o
-musl += network/netlink.o
-$(out)/musl/src/network/netlink.o: CFLAGS += --include libc/syscall_to_function.h --include libc/network/__netlink.h
 endif
-musl += network/dn_expand.o
-musl += network/res_init.o
 
-musl += prng/rand.o
-musl += prng/rand_r.o
 libc += prng/random.o
-musl += prng/__rand48_step.o
-musl += prng/__seed48.o
-musl += prng/drand48.o
-musl += prng/lcong48.o
-musl += prng/lrand48.o
-musl += prng/mrand48.o
-musl += prng/seed48.o
-$(out)/musl/src/prng/seed48.o: CFLAGS += -Wno-array-parameter
-musl += prng/srand48.o
 libc += random.o
 
 libc += process/execve.o
-musl += process/execle.o
-musl += process/execv.o
-musl += process/execl.o
 libc += process/waitpid.o
-musl += process/wait.o
 
-musl += setjmp/$(musl_arch)/setjmp.o
-musl += setjmp/$(musl_arch)/longjmp.o
 libc += arch/$(arch)/setjmp/sigsetjmp.o
 libc += signal/block.o
 libc += signal/siglongjmp.o
@@ -1238,162 +817,113 @@ libc += string/memmove.o
 endif
 endif
 
-musl += search/tfind.o
-musl += search/tsearch.o
 
-musl += stdio/__fclose_ca.o
+# stdio is OSv-owned: the FILE struct (libc/stdio/stdio_impl.h) is ours and the
+# write path goes through OSv's console (__stdout_write), so it cannot come from
+# llvm-libc (whose FILE has no OSv console backend). The musl-derived sources
+# were vendored into libc/stdio/ (Phase 8.11). tmpfile/tmpnam/tempnam were
+# dropped: they create/stat files (dead with no filesystem, and unreferenced).
+libc += stdio/__fclose_ca.o
 libc += stdio/__fdopen.o
 $(out)/libc/stdio/__fdopen.o: CFLAGS += --include libc/syscall_to_function.h
-musl += stdio/__fmodeflags.o
+libc += stdio/__fmodeflags.o
 libc += stdio/__fopen_rb_ca.o
 libc += stdio/__fprintf_chk.o
 libc += stdio/__lockfile.o
-musl += stdio/__overflow.o
-musl += stdio/__stdio_close.o
-$(out)/musl/src/stdio/__stdio_close.o: CFLAGS += --include libc/syscall_to_function.h
-musl += stdio/__stdio_exit.o
+libc += stdio/__overflow.o
+libc += stdio/__stdio_close.o
+$(out)/libc/stdio/__stdio_close.o: CFLAGS += --include libc/syscall_to_function.h
+libc += stdio/__stdio_exit.o
 libc += stdio/__stdio_read.o
-musl += stdio/__stdio_seek.o
-$(out)/musl/src/stdio/__stdio_seek.o: CFLAGS += --include libc/syscall_to_function.h
-musl += stdio/__stdio_write.o
-$(out)/musl/src/stdio/__stdio_write.o: CFLAGS += --include libc/syscall_to_function.h
+libc += stdio/__stdio_seek.o
+$(out)/libc/stdio/__stdio_seek.o: CFLAGS += --include libc/syscall_to_function.h
+libc += stdio/__stdio_write.o
+$(out)/libc/stdio/__stdio_write.o: CFLAGS += --include libc/syscall_to_function.h
 libc += stdio/__stdout_write.o
-musl += stdio/__string_read.o
-musl += stdio/__toread.o
-musl += stdio/__towrite.o
-musl += stdio/__uflow.o
+libc += stdio/__string_read.o
+libc += stdio/__toread.o
+libc += stdio/__towrite.o
+libc += stdio/__uflow.o
 libc += stdio/__vfprintf_chk.o
 libc += stdio/ofl.o
-musl += stdio/ofl_add.o
-musl += stdio/asprintf.o
-musl += stdio/clearerr.o
-musl += stdio/dprintf.o
-musl += stdio/ext.o
-musl += stdio/ext2.o
-musl += stdio/fclose.o
-musl += stdio/feof.o
-musl += stdio/ferror.o
-musl += stdio/fflush.o
+libc += stdio/ofl_add.o
+libc += stdio/asprintf.o
+libc += stdio/clearerr.o
+libc += stdio/dprintf.o
+libc += stdio/ext.o
+libc += stdio/ext2.o
+libc += stdio/fclose.o
+libc += stdio/feof.o
+libc += stdio/ferror.o
+libc += stdio/fflush.o
 libc += stdio/fgetc.o
-musl += stdio/fgetln.o
-musl += stdio/fgetpos.o
-musl += stdio/fgets.o
-musl += stdio/fgetwc.o
-musl += stdio/fgetws.o
-musl += stdio/fileno.o
+libc += stdio/fgetln.o
+libc += stdio/fgetpos.o
+libc += stdio/fgets.o
+libc += stdio/fileno.o
 libc += stdio/flockfile.o
 libc += stdio/fmemopen.o
-musl += stdio/fopen.o
-$(out)/musl/src/stdio/fopen.o: CFLAGS += --include libc/syscall_to_function.h
-musl += stdio/fprintf.o
+libc += stdio/fopen.o
+$(out)/libc/stdio/fopen.o: CFLAGS += --include libc/syscall_to_function.h
+libc += stdio/fprintf.o
 libc += stdio/fputc.o
-musl += stdio/fputs.o
-musl += stdio/fputwc.o
-musl += stdio/fputws.o
-musl += stdio/fread.o
+libc += stdio/fputs.o
+libc += stdio/fread.o
 libc += stdio/__fread_chk.o
-musl += stdio/freopen.o
-$(out)/musl/src/stdio/freopen.o: CFLAGS += --include libc/syscall_to_function.h
-musl += stdio/fscanf.o
-musl += stdio/fseek.o
-musl += stdio/fsetpos.o
-musl += stdio/ftell.o
+libc += stdio/freopen.o
+$(out)/libc/stdio/freopen.o: CFLAGS += --include libc/syscall_to_function.h
+libc += stdio/fscanf.o
+libc += stdio/fseek.o
+libc += stdio/fsetpos.o
+libc += stdio/ftell.o
 libc += stdio/ftrylockfile.o
 libc += stdio/funlockfile.o
-musl += stdio/fwide.o
-musl += stdio/fwprintf.o
-musl += stdio/fwrite.o
-musl += stdio/fwscanf.o
+libc += stdio/fwrite.o
 libc += stdio/getc.o
-musl += stdio/getc_unlocked.o
+libc += stdio/getc_unlocked.o
 libc += stdio/getchar.o
-musl += stdio/getchar_unlocked.o
-musl += stdio/getdelim.o
-musl += stdio/getline.o
-musl += stdio/gets.o
-musl += stdio/getw.o
-musl += stdio/getwc.o
-musl += stdio/getwchar.o
+libc += stdio/getchar_unlocked.o
+libc += stdio/getdelim.o
+libc += stdio/getline.o
+libc += stdio/gets.o
+libc += stdio/getw.o
 libc += stdio/open_memstream.o
-libc += stdio/open_wmemstream.o
-musl += stdio/perror.o
-musl += stdio/printf.o
+libc += stdio/perror.o
+libc += stdio/printf.o
 libc += stdio/putc.o
-musl += stdio/putc_unlocked.o
+libc += stdio/putc_unlocked.o
 libc += stdio/putchar.o
-musl += stdio/putchar_unlocked.o
-musl += stdio/puts.o
-musl += stdio/putw.o
-musl += stdio/putwc.o
-musl += stdio/putwchar.o
+libc += stdio/putchar_unlocked.o
+libc += stdio/puts.o
+libc += stdio/putw.o
 libc += stdio/remove.o
-musl += stdio/rewind.o
-musl += stdio/scanf.o
-musl += stdio/setbuf.o
-musl += stdio/setbuffer.o
-musl += stdio/setlinebuf.o
+libc += stdio/rewind.o
+libc += stdio/scanf.o
+libc += stdio/setbuf.o
+libc += stdio/setbuffer.o
+libc += stdio/setlinebuf.o
 libc += stdio/setvbuf.o
-musl += stdio/snprintf.o
-musl += stdio/sprintf.o
+libc += stdio/snprintf.o
+libc += stdio/sprintf.o
 libc += stdio/sscanf.o
 libc += stdio/stderr.o
 libc += stdio/stdin.o
 libc += stdio/stdout.o
-musl += stdio/swprintf.o
-musl += stdio/swscanf.o
-musl += stdio/tempnam.o
-$(out)/musl/src/stdio/tempnam.o: CFLAGS += --include libc/syscall_to_function.h
-musl += stdio/tmpfile.o
-$(out)/musl/src/stdio/tmpfile.o: CFLAGS += --include libc/syscall_to_function.h
-musl += stdio/tmpnam.o
-$(out)/musl/src/stdio/tmpnam.o: CFLAGS += --include libc/syscall_to_function.h
-musl += stdio/ungetc.o
-musl += stdio/ungetwc.o
-musl += stdio/vasprintf.o
+libc += stdio/ungetc.o
+libc += stdio/vasprintf.o
 libc += stdio/vdprintf.o
 libc += stdio/vfprintf.o
 $(out)/libc/stdio/vfprintf.o: COMMON += $(wno-maybe-uninitialized)
-musl += stdio/vfscanf.o
-$(out)/musl/src/stdio/vfscanf.o: COMMON += $(wno-maybe-uninitialized)
-musl += stdio/vfwprintf.o
-musl += stdio/vfwscanf.o
-$(out)/musl/src/stdio/vfwscanf.o: COMMON += $(wno-maybe-uninitialized)
-musl += stdio/vprintf.o
-musl += stdio/vscanf.o
+libc += stdio/vfscanf.o
+$(out)/libc/stdio/vfscanf.o: COMMON += $(wno-maybe-uninitialized)
+libc += stdio/vprintf.o
+libc += stdio/vscanf.o
 libc += stdio/vsnprintf.o
-musl += stdio/vsprintf.o
+libc += stdio/vsprintf.o
 libc += stdio/vsscanf.o
-libc += stdio/vswprintf.o
-libc += stdio/vswscanf.o
-musl += stdio/vwprintf.o
-musl += stdio/vwscanf.o
-musl += stdio/wprintf.o
-musl += stdio/wscanf.o
 libc += stdio/printf-hooks.o
 
-musl += stdlib/abs.o
-musl += stdlib/atof.o
-musl += stdlib/atoi.o
-musl += stdlib/atol.o
-musl += stdlib/atoll.o
-musl += stdlib/bsearch.o
-musl += stdlib/div.o
-musl += stdlib/ecvt.o
-musl += stdlib/fcvt.o
-musl += stdlib/gcvt.o
-musl += stdlib/imaxabs.o
-musl += stdlib/imaxdiv.o
-musl += stdlib/labs.o
-musl += stdlib/ldiv.o
-musl += stdlib/llabs.o
-musl += stdlib/lldiv.o
-musl += stdlib/qsort.o
-$(out)/musl/src/stdlib/qsort.o: COMMON += $(wno-dangling-pointer)
-libc += stdlib/qsort_r.o
 $(out)/libc/stdlib/qsort_r.o: COMMON += $(wno-dangling-pointer)
-libc += stdlib/strtol.o
-libc += stdlib/strtod.o
-libc += stdlib/wcstol.o
 ifeq ($(arch),x64)
 libc += stdlib/unimplemented.o
 endif
@@ -1401,140 +931,37 @@ endif
 libc += string/__memcpy_chk.o
 libc += string/explicit_bzero.o
 libc += string/__explicit_bzero_chk.o
-musl += string/bcmp.o
-musl += string/bcopy.o
-musl += string/bzero.o
-musl += string/index.o
-musl += string/memccpy.o
-musl += string/memchr.o
-musl += string/memcmp.o
 ifeq ($(conf_memory_optimize),1)
 libc += string/memcpy.o
 libc_to_hide += string/memcpy.o
 else
-musl += string/memcpy.o
-musl += string/memset.o
-musl += string/memmove.o
 endif
-musl += string/memmem.o
-musl += string/mempcpy.o
-musl += string/memrchr.o
 libc += string/__memmove_chk.o
 libc += string/memset.o
 libc_to_hide += string/memset.o
 libc += string/__memset_chk.o
 libc += string/rawmemchr.o
-musl += string/rindex.o
-musl += string/stpcpy.o
 libc += string/__stpcpy_chk.o
-musl += string/stpncpy.o
-musl += string/strcasecmp.o
-musl += string/strcasestr.o
-musl += string/strcat.o
 libc += string/__strcat_chk.o
-musl += string/strchr.o
-musl += string/strchrnul.o
-musl += string/strcmp.o
-musl += string/strcpy.o
 libc += string/__strcpy_chk.o
-musl += string/strcspn.o
-musl += string/strdup.o
 libc += string/strerror_r.o
-musl += string/strlcat.o
-musl += string/strlcpy.o
-musl += string/strlen.o
-musl += string/strncasecmp.o
-musl += string/strncat.o
 libc += string/__strncat_chk.o
-musl += string/strncmp.o
-musl += string/strncpy.o
 libc += string/__strncpy_chk.o
-musl += string/strndup.o
-musl += string/strnlen.o
-musl += string/strpbrk.o
-musl += string/strrchr.o
-musl += string/strsep.o
 libc += string/stresep.o
 libc_to_hide += string/stresep.o
-musl += string/strsignal.o
-musl += string/strspn.o
-musl += string/strstr.o
-musl += string/strtok.o
-musl += string/strtok_r.o
-musl += string/strverscmp.o
-musl += string/swab.o
-musl += string/wcpcpy.o
-musl += string/wcpncpy.o
-musl += string/wcscasecmp.o
-musl += string/wcscasecmp_l.o
-musl += string/wcscat.o
-musl += string/wcschr.o
-musl += string/wcscmp.o
-musl += string/wcscpy.o
 libc += string/__wcscpy_chk.o
-musl += string/wcscspn.o
-musl += string/wcsdup.o
-musl += string/wcslen.o
-musl += string/wcsncasecmp.o
-musl += string/wcsncasecmp_l.o
-musl += string/wcsncat.o
-musl += string/wcsncmp.o
-musl += string/wcsncpy.o
 libc += string/__wcsncpy_chk.o
-musl += string/wcsnlen.o
-musl += string/wcspbrk.o
-musl += string/wcsrchr.o
-musl += string/wcsspn.o
-musl += string/wcsstr.o
-musl += string/wcstok.o
-musl += string/wcswcs.o
-musl += string/wmemchr.o
-musl += string/wmemcmp.o
-musl += string/wmemcpy.o
 libc += string/__wmemcpy_chk.o
-musl += string/wmemmove.o
 libc += string/__wmemmove_chk.o
-musl += string/wmemset.o
 libc += string/__wmemset_chk.o
 
-musl += temp/__randname.o
-musl += temp/mkdtemp.o
-musl += temp/mkstemp.o
-musl += temp/mktemp.o
-musl += temp/mkostemp.o
-musl += temp/mkostemps.o
 
-musl += time/__map_file.o
-$(out)/musl/src/time/__map_file.o: CFLAGS += --include libc/syscall_to_function.h
-musl += time/__month_to_secs.o
-musl += time/__secs_to_tm.o
-musl += time/__tm_to_secs.o
 libc += time/__tz.o
-$(out)/libc/time/__tz.o: pre-include-api = -isystem include/api/internal_musl_headers -isystem musl/src/include
+$(out)/libc/time/__tz.o: pre-include-api = -isystem include/api/internal_musl_headers
 libc += time/__year_to_secs.o
-musl += time/asctime.o
-musl += time/asctime_r.o
-musl += time/ctime.o
-musl += time/ctime_r.o
-musl += time/difftime.o
-musl += time/getdate.o
-musl += time/gmtime.o
-musl += time/gmtime_r.o
-musl += time/localtime.o
-musl += time/localtime_r.o
-musl += time/mktime.o
-musl += time/strftime.o
-musl += time/strptime.o
-musl += time/time.o
-musl += time/timegm.o
-musl += time/wcsftime.o
-musl += time/ftime.o
 $(out)/libc/time/ftime.o: CFLAGS += -Ilibc/include
 
-musl += termios/tcflow.o
 
-musl += unistd/sleep.o
-musl += unistd/gethostname.o
 libc += unistd/sethostname.o
 libc += unistd/sync.o
 libc += unistd/getpgid.o
@@ -1543,20 +970,7 @@ libc += unistd/getpgrp.o
 libc += unistd/getppid.o
 libc += unistd/getsid.o
 libc += unistd/ttyname_r.o
-musl += unistd/ttyname.o
-musl += unistd/tcgetpgrp.o
-musl += unistd/tcsetpgrp.o
-musl += unistd/setpgrp.o
 
-musl += regex/fnmatch.o
-musl += regex/glob.o
-musl += regex/regcomp.o
-$(out)/musl/src/regex/regcomp.o: CFLAGS += -UNDEBUG
-musl += regex/regexec.o
-$(out)/musl/src/regex/regexec.o: CFLAGS += -UNDEBUG
-musl += regex/regerror.o
-musl += regex/tre-mem.o
-$(out)/musl/src/regex/tre-mem.o: CFLAGS += -UNDEBUG
 
 libc += pthread.o
 libc_to_hide += pthread.o
@@ -1584,64 +998,23 @@ libc += mallopt.o
 
 libc += linux/makedev.o
 
-musl += fenv/fegetexceptflag.o
-musl += fenv/feholdexcept.o
-musl += fenv/fesetexceptflag.o
-musl += fenv/fesetround.o
-musl += fenv/$(musl_arch)/fenv.o
 
-musl += crypt/crypt_blowfish.o
-musl += crypt/crypt.o
-musl += crypt/crypt_des.o
-musl += crypt/crypt_md5.o
-musl += crypt/crypt_r.o
-musl += crypt/crypt_sha256.o
-musl += crypt/crypt_sha512.o
-musl += crypt/encrypt.o
 
 # There is no filesystem: the kernel has no VFS, no fd table and no on-disk or
 # in-memory file systems. Minimal console-backed stdio lives in libc/io.cc.
 objects += $(addprefix libc/, $(libc))
-objects += $(addprefix musl/src/, $(musl))
 
 libc_objects_to_hide = $(addprefix $(out)/libc/, $(libc_to_hide))
 $(libc_objects_to_hide): cc-hide-flags = $(cc-hide-flags-$(conf_hide_symbols))
 $(libc_objects_to_hide): cxx-hide-flags = $(cxx-hide-flags-$(conf_hide_symbols))
 
-libstdc++.a := $(shell $(CXX) -print-file-name=libstdc++.a)
-ifeq ($(filter /%,$(libstdc++.a)),)
-ifeq ($(arch),aarch64)
-    libstdc++.a := $(shell find $(aarch64_gccbase)/ -name libstdc++.a)
-    ifeq ($(libstdc++.a),)
-        $(error Error: libstdc++.a needs to be installed.)
-    endif
-else
-    $(error Error: libstdc++.a needs to be installed.)
-endif
-endif
-
-libgcc.a := $(shell $(CC) -print-libgcc-file-name)
-ifeq ($(filter /%,$(libgcc.a)),)
-ifeq ($(arch),aarch64)
-    libgcc.a := $(shell find $(aarch64_gccbase)/ -name libgcc.a |  grep -v /32/)
-    ifeq ($(libgcc.a),)
-        $(error Error: libgcc.a needs to be installed.)
-    endif
-else
-    $(error Error: libgcc.a needs to be installed.)
-endif
-endif
-
-libgcc_eh.a := $(shell $(CC) -print-file-name=libgcc_eh.a)
-ifeq ($(filter /%,$(libgcc_eh.a)),)
-ifeq ($(arch),aarch64)
-    libgcc_eh.a := $(shell find $(aarch64_gccbase)/ -name libgcc_eh.a |  grep -v /32/)
-    ifeq ($(libgcc_eh.a),)
-        $(error Error: libgcc_eh.a needs to be installed.)
-    endif
-else
-    $(error Error: libgcc_eh.a needs to be installed.)
-endif
+# Compiler builtins (soft-int helpers like __umodti3) come from LLVM compiler-rt,
+# not GNU libgcc - no GCC anywhere in the toolchain. The C++ exception unwinder
+# that used to come from libgcc_eh.a is now libunwind (Phase 8.7), and the C++
+# runtime that used to come from libstdc++.a is now libc++/libc++abi (Phase 8.7).
+compiler_rt_builtins := $(shell $(CC) --rtlib=compiler-rt --print-libgcc-file-name)
+ifeq ($(filter /%,$(compiler_rt_builtins)),)
+    $(error Error: LLVM compiler-rt builtins not found. Install the clang/compiler-rt runtime.)
 endif
 
 #Allow user specify non-default location of boost
@@ -1696,19 +1069,80 @@ ifneq ($(shell cmp $(out)/version_script $(out)/default_version_script),)
 $(shell cp $(out)/default_version_script $(out)/version_script)
 endif
 endif
-linker_archives_options = --no-whole-archive $(libstdc++.a) $(libgcc.a) $(libgcc_eh.a) $(boost-libs) \
-  --exclude-libs libstdc++.a --gc-sections
+linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group \
+  $(compiler_rt_builtins) $(boost-libs) --gc-sections
 ifneq ($(shell grep -c iconv $(out)/version_script),0)
-musl += locale/iconv.o
-musl += locale/iconv_close.o
 else
 libc += locale/iconv_stubs.o
 endif
 else
-linker_archives_options = --whole-archive $(libstdc++.a) $(libgcc_eh.a) $(boost-libs) --no-whole-archive $(libgcc.a)
-musl += locale/iconv.o
-musl += locale/iconv_close.o
+# The C++ runtime (libc++ / libc++abi / libunwind) is linked on demand inside a
+# --start-group, not whole-archived: the slim kernel links its single app at
+# build time and exports no dynamic C++ ABI, so only referenced runtime objects
+# are needed. The group resolves the libc++ <-> libc++abi cycle, and pulling
+# each symbol once avoids the multiple-definition clash from the libunwind
+# objects that the build bundles into all three archives.
+linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group $(boost-libs) $(compiler_rt_builtins)
 endif
+
+# LLVM libc (LLVM_LIBC_PLAN.md): llvm-libc is the generic libc, linked trailing
+# so it supplies any symbol the kernel and the OSv libc objects do not define.
+# The archive is a no-syscall baremetal libc built automatically by
+# scripts/build-llvm-libc.sh (x86/arm only, no manual step). The functions
+# llvm-libc 22.1.7 lacks (the stdio FILE glue, x87 long-double helpers, a few
+# env/time/string/multibyte leaves) are now OSv-owned, musl-derived sources
+# under libc/ - the musl submodule was deleted in Phase 8.13.
+llvm_libc_libdir = build/llvm-libc/$(arch)/libc/lib
+llvm_libc_archives = $(llvm_libc_libdir)/libc.a $(llvm_libc_libdir)/libm.a
+$(out)/.llvm-libc-built: scripts/build-llvm-libc.sh tools/llvm-libc/entrypoints.txt tools/llvm-libc/config.json tools/llvm-libc/headers.txt
+	$(call quiet, scripts/build-llvm-libc.sh $(arch), LLVM-LIBC $(arch))
+	$(call very-quiet, touch $@)
+$(llvm_libc_archives): $(out)/.llvm-libc-built
+llvm_libc_dep = $(llvm_libc_archives)
+# compiler-rt builtins repeat after the llvm-libc archives: their members need
+# its soft-int helpers (e.g. __umodti3), and ld resolves archives in order.
+linker_archives_options += $(llvm_libc_archives) $(compiler_rt_builtins)
+
+# libc++ / libc++abi / libunwind replace the host GNU libstdc++.a and the libgcc
+# exception unwinder (LLVM_LIBC_PLAN.md, Phase 8). Built by scripts/build-libcxx.sh
+# (x86/arm only, no manual step) from the same pinned llvm-project, localization
+# OFF. They are linked (in the --start-group in linker_archives_options above) in
+# place of libstdc++.a/libgcc_eh.a; libunwind supplies the C++ exception unwinder
+# (OSv uses C++ exceptions) and locates the kernel's .eh_frame via OSv's
+# dl_iterate_phdr.
+libcxx_libdir = build/libcxx/$(arch)/lib
+libcxx_archives = $(libcxx_libdir)/libc++.a $(libcxx_libdir)/libc++abi.a $(libcxx_libdir)/libunwind.a
+$(out)/.libcxx-built: scripts/build-libcxx.sh
+	$(call quiet, scripts/build-libcxx.sh $(arch), LIBCXX $(arch))
+	$(call very-quiet, touch $@)
+$(libcxx_archives): $(out)/.libcxx-built
+libcxx_dep = $(libcxx_archives)
+
+# Former musl gaps, now resolved (Phase 8.12). Most are supplied by llvm-libc
+# (the narrow ctype family, and the bulk of <time.h>: asctime/ctime/gmtime/
+# localtime/mktime/strftime/difftime and the _r variants) - just deleting the
+# `musl +=` lines lets the trailing archive fill them. The handful llvm-libc
+# lacks were vendored into libc/ below. Dropped as dead/unreferenced: the
+# __ctype_*_loc glibc table accessors, the whole temp/ family (mkstemp/mkdtemp/
+# mktemp/__randname - no filesystem), and time/{strptime,timegm,getdate,ftime,
+# __secs_to_tm,__tm_to_secs}.
+libc += math/__fpclassifyl.o     # x87 long-double classify (vfprintf %Lf)
+libc += math/__signbitl.o
+libc += time/__month_to_secs.o
+libc += time/time.o              # time() -> OSv clock_gettime
+libc += multibyte/mbsinit.o      # vfscanf
+libc += string/strchrnul.o       # provides strchrnul + hidden __strchrnul (env)
+libc += string/strsignal.o
+libc += env/getenv.o
+libc += env/setenv.o
+libc += env/putenv.o
+libc += env/unsetenv.o
+libc += env/clearenv.o
+# env + strchrnul use the musl-internal decls (__environ, __putenv, __strchrnul)
+# that live in OSv's internal_musl_headers (the kernel build does not otherwise
+# put that dir on the path, unlike the libenviron.so build).
+$(out)/libc/env/%.o: pre-include-api = -isystem include/api/internal_musl_headers
+$(out)/libc/string/strchrnul.o: pre-include-api = -isystem include/api/internal_musl_headers
 
 ifeq ($(arch),aarch64)
 def_symbols = --defsym=OSV_KERNEL_VM_BASE=$(kernel_vm_base)
@@ -1718,10 +1152,10 @@ def_symbols = --defsym=OSV_KERNEL_BASE=$(kernel_base) \
               --defsym=OSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 endif
 
-$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file)
+$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file) $(llvm_libc_dep) $(libcxx_dep)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
 		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -L$(out)/arch/$(arch) \
-            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep),$^))) \
+            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep),$^))) \
 	    $(linker_archives_options) $(conf_linker_extra_options), \
 		LINK loader.elf)
 	@# Build libosv.so matching this loader.elf. This is not a separate
@@ -1736,9 +1170,8 @@ $(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(ou
 
 
 environ_sources = $(addprefix libc/, $(environ_libc))
-environ_sources += $(addprefix musl/src/, $(environ_musl))
 
-$(out)/libenviron.so: pre-include-api = -isystem include/api/internal_musl_headers -isystem musl/src/include
+$(out)/libenviron.so: pre-include-api = -isystem include/api/internal_musl_headers
 $(out)/libenviron.so: source-dialects =
 
 $(out)/libenviron.so: $(environ_sources)
@@ -1761,11 +1194,6 @@ $(bootfs_manifest_dep): phony
 		echo -n $(bootfs_manifest) > $(bootfs_manifest_dep) ; \
 	fi
 
-libgcc_s_dir := $(dir $(shell $(CC) -print-file-name=libgcc_s.so.1))
-ifeq ($(filter /%,$(libgcc_s_dir)),)
-libgcc_s_dir := ../../$(aarch64_gccbase)/lib64
-endif
-
 bootfs_dep := scripts/mkbootfs.py $(bootfs_manifest) $(bootfs_manifest_dep) $(out)/libenviron.so
 ifeq ($(fs),ext)
 bootfs_dep += $(out)/modules/libext/libext.so
@@ -1781,20 +1209,6 @@ $(out)/libvdso-stripped.so: $(out)/libvdso.so
 
 $(out)/libvdso-content.o: $(out)/libvdso-stripped.so
 $(out)/libvdso-content.o: ASFLAGS += -I$(out)
-
-# Standard C++ library
-libstd_dir := $(dir $(shell $(CXX) -print-file-name=libstdc++.so))
-ifeq ($(filter /%,$(libstd_dir)),)
-ifeq ($(arch),aarch64)
-    libstd_dir := $(dir $(shell find $(aarch64_gccbase)/ -name libstdc++.so))
-    ifeq ($(libstd_dir),)
-        $(error Error: libstdc++.so needs to be installed.)
-    endif
-    LDFLAGS := -L$(libstd_dir)
-else
-    $(error Error: libstdc++.so needs to be installed.)
-endif
-endif
 
 
 ################################################################################

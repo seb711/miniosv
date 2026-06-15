@@ -164,7 +164,12 @@ typedef void (*destructor_t)(void *);
 static std::map<void *, std::vector<std::pair<destructor_t,void*>>> destructors;
 static mutex destructors_mutex;
 namespace __cxxabiv1 {
-int __cxa_atexit(destructor_t destructor, void *arg, void *dso)
+// These are the Itanium C++ ABI entry points and must have C linkage: the
+// compiler emits calls to the C symbols __cxa_atexit / __cxa_finalize. (gcc's
+// <cxxabi.h> declared them extern "C" inside __cxxabiv1; libc++abi's does not,
+// so we must spell it out here or the definitions get C++ linkage - mangled
+// names - leaving the C symbols undefined and pulling libc's atexit instead.)
+extern "C" int __cxa_atexit(destructor_t destructor, void *arg, void *dso)
 {
     // As explained above, don't remember the kernel's own destructors.
     if (dso == &__dso_handle)
@@ -174,7 +179,7 @@ int __cxa_atexit(destructor_t destructor, void *arg, void *dso)
     return 0;
 }
 
-void __cxa_finalize(void *dso)
+extern "C" void __cxa_finalize(void *dso)
 {
     if (!dso || dso == &__dso_handle) {
         debug("__cxa_finalize() running kernel's destructors not supported\n");
@@ -602,7 +607,9 @@ int sysctl(int *, int, void *, size_t *, void *, size_t)
 extern "C" OSV_LIBC_API
 char *tmpnam_r(char *s)
 {
-    return s ? tmpnam(s) : NULL;
+    // No filesystem (Phase 6), so temp-file naming cannot succeed. tmpnam and
+    // its friends were dropped; report failure.
+    return NULL;
 }
 
 OSV_LIBC_API
