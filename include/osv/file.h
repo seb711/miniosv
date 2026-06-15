@@ -39,7 +39,7 @@
 #include <osv/mutex.h>
 #include <osv/uio.h>
 
-#include <bsd/sys/sys/queue.h>
+#include <osv/bsd-queue.h>
 #include <osv/dentry.h>
 
 #if defined(__cplusplus) && !defined(USE_C_INTERFACE)

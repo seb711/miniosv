@@ -9,7 +9,7 @@
 #define _OSV_DENTRY_H 1
 
 #include <osv/mutex.h>
-#include <bsd/sys/sys/queue.h>
+#include <osv/bsd-queue.h>
 
 struct vnode;
 

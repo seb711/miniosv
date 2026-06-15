@@ -13,9 +13,6 @@
 #include <osv/debug.h>
 #include <osv/prio.hh>
 #include "processor.hh"
-#if CONF_drivers_xen
-#include <osv/xen.hh>
-#endif
 
 #include "acpi.hh"
 
@@ -272,9 +269,5 @@ void early_init()
 
 void __attribute__((constructor(init_prio::acpi))) acpi_init_early()
 {
-#if CONF_drivers_xen
-    XENPV_ALTERNATIVE({ acpi::early_init(); }, {});
-#else
     acpi::early_init();
-#endif
 }

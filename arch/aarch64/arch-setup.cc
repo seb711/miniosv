@@ -18,9 +18,6 @@
 #include <osv/boot.hh>
 #include <osv/debug.hh>
 #include <osv/commands.hh>
-#if CONF_drivers_xen
-#include <osv/xen.hh>
-#endif
 
 #include "arch-mmu.hh"
 #include "arch-dtb.hh"
@@ -187,9 +184,6 @@ void arch_init_premain()
 #if CONF_drivers_virtio_blk
 #include "drivers/virtio-blk.hh"
 #endif
-#if CONF_drivers_virtio_scsi
-#include "drivers/virtio-scsi.hh"
-#endif
 #if CONF_networking_stack
 #if CONF_drivers_virtio_net
 #include "drivers/virtio-net.hh"
@@ -245,9 +239,6 @@ void arch_init_drivers()
 #if CONF_drivers_virtio_blk
     drvman->register_driver(virtio::blk::probe);
 #endif
-#if CONF_drivers_virtio_scsi
-    drvman->register_driver(virtio::scsi::probe);
-#endif
 #if CONF_networking_stack
 #if CONF_drivers_virtio_net
     drvman->register_driver(virtio::net::probe);
@@ -267,14 +258,6 @@ void arch_init_drivers()
 void arch_init_early_console()
 {
     console::mmio_isa_serial_console::_phys_mmio_address = 0;
-
-#if CONF_drivers_xen
-    if (is_xen()) {
-        new (&console::aarch64_console.xen) console::XEN_Console();
-        console::arch_early_console = console::aarch64_console.xen;
-        return;
-    }
-#endif
 
     int irqid;
     u64 mmio_serial_address = dtb_get_mmio_serial_console(&irqid);

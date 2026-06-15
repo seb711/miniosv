@@ -8,7 +8,7 @@
 #ifndef OSV_INTR_RANDOM_HH
 #define OSV_INTR_RANDOM_HH
 
-#include <sys/sys/random.h>
+#include <osv/random.h>
 
 struct intr_entropy
 {
