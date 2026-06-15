@@ -34,7 +34,7 @@ class tls_switch {
     thread_control_block *_kernel_tcb;
 public:
     tls_switch() {
-        asm volatile ( "movq %%gs:16, %0\n\t" : "=r"(_kernel_tcb));
+        asm volatile ( "movq %%gs:0, %0\n\t" : "=r"(_kernel_tcb));
 
         //Switch to kernel tcb if app tcb present
         if (_kernel_tcb->app_tcb) {

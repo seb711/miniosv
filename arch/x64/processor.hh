@@ -394,8 +394,6 @@ inline void init_fpu()
     asm volatile ("ldmxcsr %0" : : "m" (csr));
 }
 
-void init_syscall();
-
 inline void lfence()
 {
     asm volatile("lfence");
