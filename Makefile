@@ -361,8 +361,13 @@ gc-flags = $(gc-flags-$(conf_hide_symbols))
 
 gcc-opt-Og := $(call compiler-flag, -Og, -Og, compiler/empty.cc)
 
-CXXFLAGS = -std=$(conf_cxx_level) $(COMMON) $(cxx-hide-flags)
-CFLAGS = -std=gnu99 $(COMMON)
+# The kernel (with the app statically linked in) is a single fixed-address
+# executable, so use the local-exec TLS model: thread-local accesses become
+# immediate offsets resolved at link time rather than GOT-based TPOFF64 dynamic
+# relocations that would need processing at boot.
+tls-model = -ftls-model=local-exec
+CXXFLAGS = -std=$(conf_cxx_level) $(COMMON) $(cxx-hide-flags) $(tls-model)
+CFLAGS = -std=gnu99 $(COMMON) $(tls-model)
 
 # should be limited to files under libc/ eventually
 CFLAGS += -I libc/stdio -I libc/internal -I libc/arch/$(arch) \
