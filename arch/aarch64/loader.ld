@@ -7,7 +7,6 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
-INCLUDE "loader_options.ld"
 SECTIONS
 {
 	/* Set the initial program counter to one page beyond the minimal
@@ -115,10 +114,6 @@ SECTIONS
     /* do not align tdata, tbss with .tdata : ALIGN (64),
        or the linker will offset the TLS loads accordingly! */
     .tdata : {
-        HIDDEN(_pie_static_tls_start = .);
-        /* This is a reserve intended for executables' (pie or non-pie) TLS block */
-        . = . + APP_LOCAL_EXEC_TLS_SIZE;
-        HIDDEN(_pie_static_tls_end = .);
         *(.tdata .tdata.* .gnu.linkonce.td.*)
     } : tls : text
     .tbss : {
