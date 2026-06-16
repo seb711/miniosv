@@ -211,20 +211,16 @@ or [Fedora](https://hub.docker.com/repository/docker/osvunikernel/osv-fedora-31-
 that get published to DockerHub upon every commit. This should speed up building the final images
 as all necessary packages are installed as part of the base images.
 
-Alternatively, you can manually clone the OSv repo and use [setup.py](https://github.com/cloudius-systems/osv/blob/master/scripts/setup.py)
 to install all required packages and libraries, as long as it supports your Linux distribution, and you have both git 
 and python 3 installed on your machine:
 ```bash
 git clone https://github.com/cloudius-systems/osv.git
 cd osv && git submodule update --init --recursive
-./scripts/setup.py
 ```
 
-The `setup.py` recognizes and installs packages for a number of Linux distributions including Fedora, Ubuntu,
 [Debian](https://github.com/cloudius-systems/osv/wiki/Building-OSv-on-Debian-stable), LinuxMint and RedHat ones 
 (Scientific Linux, NauLinux, CentOS Linux, Red Hat Enterprise Linux, Oracle Linux). Please note that we actively
 maintain and test only Ubuntu and Fedora, so your mileage with other distributions may vary. The support of CentOS 7
-has also been recently added and tested so it should work as well. The `setup.py`
 is used by Docker files internally to achieve the same result. 
 
 ### IDEs

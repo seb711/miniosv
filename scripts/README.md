@@ -4,7 +4,6 @@ This directory contains number of scripts aimed to help **build, run and test** 
 Please look at the creation date as a good indicator. When in doubt on how to use any of them post a question on [OSV mailing list](https://groups.google.com/forum/#!forum/osv-dev).
 
 # Setup
-* **setup.py** - Python script that detects the type of Linux distribution and installs all necessary packages to build and run OSv; currently following Linux distributions are supported:
   * Debian
   * Fedora
   * Ubuntu
