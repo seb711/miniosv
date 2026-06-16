@@ -299,9 +299,6 @@ void arch_init_drivers()
 
 #include "drivers/console.hh"
 #include "drivers/isa-serial.hh"
-#if CONF_drivers_vga
-#include "drivers/vga.hh"
-#endif
 #include "early-console.hh"
 
 void arch_init_early_console()
@@ -311,21 +308,9 @@ void arch_init_early_console()
 
 bool arch_setup_console(std::string opt_console)
 {
-#if CONF_drivers_vga
-    hw::driver_manager* drvman = hw::driver_manager::instance();
-#endif
-
-    if (opt_console.compare("serial") == 0) {
+    // Serial-only console (no VGA). "vga" is no longer a valid choice.
+    if (opt_console.compare("serial") == 0 || opt_console.compare("all") == 0) {
         console::console_driver_add(&console::arch_early_console);
-#if CONF_drivers_vga
-    } else if (opt_console.compare("vga") == 0) {
-        drvman->register_driver(console::VGAConsole::probe);
-#endif
-    } else if (opt_console.compare("all") == 0) {
-        console::console_driver_add(&console::arch_early_console);
-#if CONF_drivers_vga
-        drvman->register_driver(console::VGAConsole::probe);
-#endif
     } else {
         return false;
     }

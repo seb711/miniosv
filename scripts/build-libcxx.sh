@@ -40,6 +40,24 @@ if [ ! -d "$LLVM_DIR/libcxx" ]; then
         llvm/cmake llvm/utils
 fi
 
+# OSv has no syscall ABI. libc++abi's __cxa_guard uses the mutex (not futex)
+# implementation here, but its thread-id helper (used only for recursive-init
+# detection) still calls syscall(SYS_gettid). Force the no-syscall nullptr
+# branch so libc++abi references no syscall() at all. Idempotent.
+GUARD="$LLVM_DIR/libcxxabi/src/cxa_guard_impl.h"
+if grep -q '^#elif defined(SYS_gettid) && _LIBCPP_HAS_THREAD_API_PTHREAD' "$GUARD"; then
+    sed -i 's@^#elif defined(SYS_gettid) && _LIBCPP_HAS_THREAD_API_PTHREAD@#elif 0 // OSv: no gettid syscall; force PlatformThreadID = nullptr@' "$GUARD"
+fi
+
+# Same reason on the unwinder: on aarch64 (et al.) libunwind enables Linux
+# sigreturn-frame detection, which calls syscall() to read the trampoline. OSv
+# has no Linux signal frames on the stack to unwind through, and no syscall ABI,
+# so disable it - the generic setInfoForSigReturn() returns false (no syscall).
+UNWCURSOR="$LLVM_DIR/libunwind/src/UnwindCursor.hpp"
+if grep -q '^#define _LIBUNWIND_CHECK_LINUX_SIGRETURN 1' "$UNWCURSOR"; then
+    sed -i 's@^#define _LIBUNWIND_CHECK_LINUX_SIGRETURN 1@// OSv: no Linux signal frames / no syscall ABI - disable sigreturn unwinding@' "$UNWCURSOR"
+fi
+
 # 2. configure + build (static, no localization, exceptions+RTTI on, llvm unwinder)
 # Codegen must match the kernel (see COMMON in the top-level Makefile).
 #

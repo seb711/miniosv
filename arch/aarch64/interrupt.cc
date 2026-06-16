@@ -7,8 +7,7 @@
 
 #include <osv/interrupt.hh>
 #include <osv/sched.hh>
-#include <osv/kernel_config_lazy_stack.h>
-#include <osv/kernel_config_lazy_stack_invariant.h>
+#include <osv/kernel_config.h>
 
 /* Software-Generated Interrupts */
 sgi_interrupt::sgi_interrupt(enum ipi_id id, std::function<void ()> handler)

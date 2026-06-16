@@ -27,8 +27,7 @@
 #include <osv/clock.hh>
 #include <osv/timer-set.hh>
 #include <osv/export.h>
-#include <osv/kernel_config_lazy_stack.h>
-#include <osv/kernel_config_lazy_stack_invariant.h>
+#include <osv/kernel_config.h>
 #include <string.h>
 
 typedef float runtime_t;
@@ -816,10 +815,6 @@ private:
     bool _app;
 public:
     void destroy();
-#ifdef __x86_64__
-    unsigned long get_app_tcb() { return _tcb->app_tcb; }
-    void set_app_tcb(unsigned long tcb) { _tcb->app_tcb = tcb; }
-#endif
 private:
 #ifdef __aarch64__
     friend void ::destroy_current_cpu_terminating_thread();

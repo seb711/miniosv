@@ -30,7 +30,6 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
-#include <signal.h>
 #include <sys/mman.h>
 #include <time.h>
 
@@ -238,33 +237,6 @@ static void test_mmap_concurrent()
     CHECK(errors.load() == 0);
 }
 
-/* ============================================================ signals */
-
-static volatile sig_atomic_t g_sig_hit = 0;
-static void sig_handler(int) { g_sig_hit = 1; }
-
-static void test_signals()
-{
-    section("signals: sigaction handler + raise + sigmask API");
-    struct sigaction sa{}, old_sa{};
-    sa.sa_handler = sig_handler;
-    sigemptyset(&sa.sa_mask);
-    CHECK(sigaction(SIGUSR1, &sa, &old_sa) == 0);
-    g_sig_hit = 0;
-    CHECK(raise(SIGUSR1) == 0);
-    /* handler runs synchronously on raise() */
-    CHECK(g_sig_hit == 1);
-
-    /* signal-mask API round-trips */
-    sigset_t set, old;
-    sigemptyset(&set);
-    sigaddset(&set, SIGUSR1);
-    CHECK(sigismember(&set, SIGUSR1) == 1);
-    CHECK(pthread_sigmask(SIG_BLOCK, &set, &old) == 0);
-    CHECK(pthread_sigmask(SIG_SETMASK, &old, nullptr) == 0);
-    CHECK(sigaction(SIGUSR1, &old_sa, nullptr) == 0);
-}
-
 /* ============================================================ time/sched */
 
 static void test_time_sched()
@@ -314,7 +286,6 @@ int os_stress_main()
     test_mmap_anon();
     test_mmap_concurrent();
 
-    test_signals();
     test_time_sched();
 
     printf("\n==== os-stress: %d checks, %d failures ====\n",

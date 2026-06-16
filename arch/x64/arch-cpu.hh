@@ -14,7 +14,7 @@
 #include "osv/pagealloc.hh"
 #include <xmmintrin.h>
 #include "msr.hh"
-#include <osv/kernel_config_interrupt_stack_size.h>
+#include <osv/kernel_config.h>
 
 struct init_stack {
     char stack[4096] __attribute__((aligned(16)));

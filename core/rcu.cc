@@ -16,9 +16,7 @@
 #include <osv/migration-lock.hh>
 #include <osv/wait_record.hh>
 #include <osv/mempool.hh>
-#include <osv/kernel_config_core_rcu_defer_queue_size.h>
-#include <osv/kernel_config_lazy_stack.h>
-#include <osv/kernel_config_lazy_stack_invariant.h>
+#include <osv/kernel_config.h>
 
 namespace osv {
 
