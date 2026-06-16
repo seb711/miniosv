@@ -1,1 +1,0 @@
-../../../../../../tests/src/main/java/io/osv/BasicTest.java

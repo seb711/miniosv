@@ -110,10 +110,8 @@ fi
 for i
 do
 	case $i in
-	clean)	# "build clean" is like "make clean" to clean the kernel,
-		# plus additional cleanups of all modules.
-		set -x
-		OSV_BASE=`pwd` ./scripts/module.py clean -q
+	clean)	# "make clean" already cleaned the kernel above; there are no
+		# modules to clean.
 		exit;;
 	esac
 done
@@ -238,14 +236,6 @@ then
 	no_required_arg="--no-required"
 fi
 
-if [[ ${vars[append_manifest]} == "true" && $modules == "!default" ]]; then
-	modules="empty"
-fi
-
-if [[ "$fs_type" == "ext" || "$fs_type" == "rofs_with_ext" ]]; then
-	modules="$modules,libext"
-fi
-
 CC=gcc
 if [[ "$host_arch" == "x86_64" && "$arch" == 'aarch64' ]]; then
     CC=${CROSS_PREFIX:-aarch64-linux-gnu-}gcc
@@ -261,25 +251,14 @@ if [[ "$libgcc_s_path" == "libgcc_s.so.1" ]]; then
 fi
 libgcc_s_dir=$(dirname $(readlink -f ${libgcc_s_path}))
 
-# The parentheses start a subshell. Whatever is exported there, doesn't affect the external shell
-(
-	# Note: the double-quotes and almost everything in the line below is important to correctly allow spaces
-	# This specifically allows us to pass extra arguments to the modules/apps makefiles
-	for i in "${args[@]}"
-	do
-		case $i in
-		*=*)
-			# again, the double-quotes is important in case the variable's value contains spaces
-			export "$i" ;;
-		esac
-	done
-	# Export the variables we already have. This makes it unnecessary to do "fs__type=$fstype ..."
-	export fs_type mode OSV_BUILD_PATH libgcc_s_dir
-	# Other variables we wanted to rename, I don't know why
-	export ARCH=$arch OSV_BASE=$SRC
-	# Run what we wanted to run. It will inherit everything we exported above.
-	scripts/module.py $j_arg build -c "$modules" $usrskel_arg $no_required_arg
-)
+# The application is statically linked into the kernel (app/ by default, or
+# test/ via "app=tests"), so there are no modules to build. The rofs manifest is
+# just the static skel (the mount points + libenviron.so); the kernel command
+# line is empty because the in-kernel app runs via osv_app_main(), not loaded
+# from the image.
+skel=${usrskel_arg#--usrskel }
+cp "$SRC/$skel" "$OSV_BUILD_PATH/usr.manifest"
+: > "$OSV_BUILD_PATH/cmdline"
 
 if [[ ${vars[append_manifest]} == "true" && -f "$OSV_BUILD_PATH/append.manifest" ]]; then
 	cat "$OSV_BUILD_PATH/append.manifest" >> "$OSV_BUILD_PATH/usr.manifest"

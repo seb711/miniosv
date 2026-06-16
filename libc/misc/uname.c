@@ -18,7 +18,7 @@
 #include <linux/version.h>
 _Static_assert(KERNEL_VERSION(LINUX_MAJOR, LINUX_MINOR, LINUX_PATCH)
         == LINUX_VERSION_CODE,
-        "LINUX_VERSION_CODE in include/glibc-compat/linux/version.h "
+        "LINUX_VERSION_CODE in include/api/linux/version.h "
         "does not match version in libc/misc/uname.c");
 
 #define str(s) #s
