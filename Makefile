@@ -665,7 +665,6 @@ libc += env/secure_getenv.o
 
 
 
-libc += math/finitel.o
 
 # Issue #867: Gcc 4.8.4 has a bug where it optimizes the trivial round-
 # related functions incorrectly - it appears to convert calls to any
@@ -748,10 +747,6 @@ libc += string/__wmemmove_chk.o
 libc += string/__wmemset_chk.o
 
 
-libc += time/__tz.o
-$(out)/libc/time/__tz.o: pre-include-api = -isystem include/api/internal_musl_headers
-libc += time/__year_to_secs.o
-$(out)/libc/time/ftime.o: CFLAGS += -Ilibc/include
 
 
 libc += unistd/sync.o
@@ -898,23 +893,15 @@ libcxx_dep = $(libcxx_archives)
 # __ctype_*_loc glibc table accessors, the whole temp/ family (mkstemp/mkdtemp/
 # mktemp/__randname - no filesystem), and time/{strptime,timegm,getdate,ftime,
 # __secs_to_tm,__tm_to_secs}.
-libc += math/__fpclassifyl.o     # x87 long-double classify (vfprintf %Lf)
-libc += math/__signbitl.o
-libc += time/__month_to_secs.o
-libc += time/time.o              # time() -> OSv clock_gettime
-libc += multibyte/mbsinit.o      # vfscanf
-libc += string/strchrnul.o       # provides strchrnul + hidden __strchrnul (env)
+# x87/binary128 long-double survivors llvm-libc lacks (__fpclassifyl/__signbitl
+# for vfprintf %Lf, logl). strchrnul + mbsinit now come from the llvm-libc
+# archive (entrypoints libc.src.string.strchrnul / libc.src.wchar.mbsinit).
+libc += math/longdouble.o
 libc += string/strsignal.o
-libc += env/getenv.o
-libc += env/setenv.o
-libc += env/putenv.o
-libc += env/unsetenv.o
-libc += env/clearenv.o
-# env + strchrnul use the musl-internal decls (__environ, __putenv, __strchrnul)
-# that live in OSv's internal_musl_headers, so put that dir on the include path
-# for these objects only.
-$(out)/libc/env/%.o: pre-include-api = -isystem include/api/internal_musl_headers
-$(out)/libc/string/strchrnul.o: pre-include-api = -isystem include/api/internal_musl_headers
+# OSv-owned env management (getenv/setenv/putenv/unsetenv) - getenv on baremetal
+# is OS-coupled, so llvm-libc cannot supply it. time() routes to OSv's clock.
+libc += env/env.o
+libc += time/time_shims.o
 
 ifeq ($(arch),aarch64)
 def_symbols = --defsym=OSV_KERNEL_VM_BASE=$(kernel_vm_base)
