@@ -92,9 +92,9 @@ def start_osv_qemu(options):
         "-nodefaults", "-no-user-config", "-no-reboot", "-global", "virtio-mmio.force-legacy=off"]
 
     # Optional emulated NVMe drive (e.g. a backing store for the in-kernel app).
-    if options.second_nvme_image:
+    if options.emulated_nvme:
         args += [
-        "-drive", "file=%s,if=none,id=nvm1" % options.second_nvme_image,
+        "-drive", "file=%s,if=none,id=nvm1" % options.emulated_nvme,
         "-device", "nvme,serial=deadbeef,drive=nvm1"]
 
     # PCI passthrough: one -device per address. The devices must be bound to
@@ -209,8 +209,8 @@ if __name__ == "__main__":
                         help="path to the kernel. defaults to build/$mode/loader-stripped.elf (loader.img on aarch64)")
     parser.add_argument("--arch", action="store", choices=["x86_64", "aarch64"], default=host_arch,
                         help="specify QEMU architecture: x86_64, aarch64")
-    parser.add_argument("--second-nvme-image", action="store",
-                        help="path to a disk image to attach as an emulated NVMe device")
+    parser.add_argument("--emulated-nvme", action="store", metavar="IMAGE",
+                        help="path to a raw disk image to attach as an emulated NVMe device")
     parser.add_argument("--pass-pci", action="store", nargs='+', metavar="ADDR",
                         help="passthrough one or more PCI devices (bound to vfio-pci), e.g. 0000:01:00.0")
     parser.add_argument("--gic-version", action="store", default="max",
