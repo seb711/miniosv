@@ -9,8 +9,6 @@
 #define _INTERNAL_ATOMIC_H
 
 #include <stdint.h>
-#include <bsd/sys/cddl/compat/opensolaris/sys/types.h>
-#include <machine/atomic.h>
 
 static inline int a_ctz_64(register uint64_t x)
 {
@@ -26,7 +24,9 @@ static inline int a_ctz_l(unsigned long x)
 
 static inline int a_fetch_add(volatile int *x, int v)
 {
-    return atomic_fetchadd_int((unsigned int *)x, (unsigned int)v);
+    // was FreeBSD's atomic_fetchadd_int (bsd/ removed in Phase 7); use the
+    // portable compiler builtin instead.
+    return __atomic_fetch_add(x, v, __ATOMIC_SEQ_CST);
 }
 
 static inline void a_crash()

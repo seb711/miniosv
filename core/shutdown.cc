@@ -4,10 +4,6 @@
 #include <osv/sched.hh>
 #include <osv/strace.hh>
 #include <osv/kernel_config_tracepoints_strace.h>
-#include <osv/kernel_config_networking_dhcp.h>
-#if CONF_networking_dhcp
-#include <osv/dhcp.hh>
-#endif
 
 namespace osv {
 
@@ -15,9 +11,6 @@ void shutdown()
 {
 #if CONF_tracepoints_strace
     wait_strace_complete();
-#endif
-#if CONF_networking_dhcp
-    dhcp_release();
 #endif
 
     // Stop all other application threads before powering off, so they cannot

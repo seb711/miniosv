@@ -192,7 +192,6 @@ cscope:
 
 local-includes =
 INCLUDES = $(local-includes) -Iarch/$(arch) -I. -Iinclude  -Iarch/common
-INCLUDES += -isystem include/glibc-compat
 #
 # C++ standard headers come from our own libc++ (CXX_INCLUDES is set below,
 # overriding anything here). The aarch64 cross-build still needs a sysroot and
@@ -767,9 +766,6 @@ libc += math/finitel.o
 # for the affected files.
 
 libc += misc/error.o
-ifeq ($(conf_networking_stack),1)
-libc += misc/gethostid.o
-endif
 libc += misc/getopt.o
 libc_to_hide += misc/getopt.o
 libc += misc/getopt_long.o
@@ -785,17 +781,6 @@ libc += multibyte/__mbsnrtowcs_chk.o
 libc += multibyte/__mbsrtowcs_chk.o
 libc += multibyte/__mbstowcs_chk.o
 
-
-ifeq ($(conf_networking_stack),1)
-libc += network/gethostbyname_r.o
-libc += network/getaddrinfo.o
-libc += network/freeaddrinfo.o
-libc += network/getnameinfo.o
-libc += network/__dns.o
-libc_to_hide += network/__dns.o
-libc += network/__ipparse.o
-libc_to_hide += network/__ipparse.o
-endif
 
 libc += prng/random.o
 libc += random.o
@@ -1195,9 +1180,6 @@ $(bootfs_manifest_dep): phony
 	fi
 
 bootfs_dep := scripts/mkbootfs.py $(bootfs_manifest) $(bootfs_manifest_dep) $(out)/libenviron.so
-ifeq ($(fs),ext)
-bootfs_dep += $(out)/modules/libext/libext.so
-endif
 $(out)/bootfs.bin: $(bootfs_dep)
 	$(call quiet, olddir=`pwd`; cd $(out); "$$olddir"/scripts/mkbootfs.py -o bootfs.bin -d bootfs.bin.d -m "$$olddir"/$(bootfs_manifest), MKBOOTFS $@)
 

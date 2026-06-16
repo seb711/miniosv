@@ -1,47 +1,38 @@
 /*
- * OS-interaction stress tests for OSv (C++).
+ * OS-interaction stress tests for the slim OSv kernel (C++).
  *
- * A self-contained, dynamically-linked C++ program that hammers the parts of
- * OSv that involve the kernel: thread scheduling/synchronization, the VFS and
- * file I/O (incl. concurrent and mmap'd), pipes/sockets/eventfd, poll/epoll,
- * signals, and virtual memory. Built dynamic so threading/syscalls resolve
- * against OSv's own libc + kernel at run time.
+ * Hammers the parts of the slim kernel that involve the scheduler and memory:
+ * thread scheduling/synchronization, anonymous virtual memory, signals, and
+ * time. It is deliberately concurrent and repetitive (many threads, many
+ * iterations) to shake out races and leaks.
  *
- * It is deliberately concurrent and repetitive (many threads, many iterations,
- * large files) to shake out races and resource leaks. Each CHECK keeps running
- * on failure; main() returns non-zero if anything failed. Worker threads never
- * call CHECK directly - they report via atomics/return values and the main
- * thread asserts after joining.
+ * The filesystem, the fd table, networking and the fd-based IPC/event
+ * facilities (pipes, sockets, eventfd, poll/epoll) were removed from the slim
+ * kernel (Phases 5-9), so the tests that exercised them are gone - what remains
+ * is the surface the in-kernel application can actually use.
+ *
+ * Each CHECK keeps running on failure; os_stress_main() returns non-zero if
+ * anything failed. Worker threads never call CHECK directly - they report via
+ * atomics/return values and the main thread asserts after joining.
  */
 #include <atomic>
 #include <thread>
 #include <mutex>
-#include <shared_mutex>
 #include <condition_variable>
 #include <future>
 #include <vector>
 #include <queue>
-#include <numeric>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
 
 #include <unistd.h>
-#include <fcntl.h>
 #include <errno.h>
 #include <pthread.h>
-#include <poll.h>
 #include <signal.h>
-#include <dirent.h>
-#include <sys/stat.h>
 #include <sys/mman.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <sys/eventfd.h>
-#include <sys/epoll.h>
-#include <sys/select.h>
-#include <sys/wait.h>
+#include <time.h>
 
 static std::atomic<int> g_checks{0};
 static std::atomic<int> g_fails{0};
@@ -205,134 +196,7 @@ static void test_rwlock()
     pthread_rwlock_destroy(&rw);
 }
 
-/* ============================================================ files */
-
-static bool write_pattern(int fd, size_t n, unsigned seed)
-{
-    std::vector<unsigned char> buf(65536);
-    size_t written = 0;
-    unsigned x = seed;
-    while (written < n) {
-        size_t chunk = std::min(buf.size(), n - written);
-        for (size_t i = 0; i < chunk; i++) { x = x * 1103515245u + 12345u; buf[i] = x >> 16; }
-        ssize_t w = write(fd, buf.data(), chunk);
-        if (w != (ssize_t)chunk) return false;
-        written += chunk;
-    }
-    return true;
-}
-static bool verify_pattern(int fd, size_t n, unsigned seed)
-{
-    std::vector<unsigned char> buf(65536);
-    size_t rd = 0;
-    unsigned x = seed;
-    while (rd < n) {
-        size_t chunk = std::min(buf.size(), n - rd);
-        ssize_t r = read(fd, buf.data(), chunk);
-        if (r != (ssize_t)chunk) return false;
-        for (size_t i = 0; i < chunk; i++) { x = x * 1103515245u + 12345u; if (buf[i] != (unsigned char)(x >> 16)) return false; }
-        rd += chunk;
-    }
-    return true;
-}
-
-static void test_files_large()
-{
-    section("files: large file write/read/verify + fsync");
-    const char *path = "/tmp/osstress_big.bin";
-    const size_t SZ = 16 * 1024 * 1024;
-    int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
-    CHECK(fd >= 0);
-    if (fd < 0) return;
-    CHECK(write_pattern(fd, SZ, 0xdeadbeef));
-    CHECK(fsync(fd) == 0);
-    struct stat st;
-    CHECK(fstat(fd, &st) == 0 && (size_t)st.st_size == SZ);
-    CHECK(lseek(fd, 0, SEEK_SET) == 0);
-    CHECK(verify_pattern(fd, SZ, 0xdeadbeef));
-    close(fd);
-    CHECK(unlink(path) == 0);
-}
-
-static void test_files_concurrent()
-{
-    section("files: concurrent independent files (16 threads)");
-    const int NT = 16;
-    const size_t SZ = 512 * 1024;
-    std::atomic<int> errors{0};
-    std::vector<std::thread> ts;
-    for (int i = 0; i < NT; i++)
-        ts.emplace_back([i, &errors] {
-            char path[64];
-            snprintf(path, sizeof path, "/tmp/osstress_c%d.bin", i);
-            int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
-            if (fd < 0) { errors++; return; }
-            unsigned seed = 0x1000 + i;
-            if (!write_pattern(fd, SZ, seed)) errors++;
-            if (lseek(fd, 0, SEEK_SET) != 0) errors++;
-            if (!verify_pattern(fd, SZ, seed)) errors++;
-            close(fd);
-            if (unlink(path) != 0) errors++;
-        });
-    for (auto &t : ts) t.join();
-    CHECK(errors.load() == 0);
-}
-
-static void test_files_pwrite_concurrent()
-{
-    section("files: concurrent pwrite to disjoint offsets of one file");
-    const char *path = "/tmp/osstress_pw.bin";
-    const int NT = 16;
-    const size_t BLK = 64 * 1024;
-    int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
-    CHECK(fd >= 0);
-    if (fd < 0) return;
-    CHECK(ftruncate(fd, NT * BLK) == 0);
-    std::atomic<int> errors{0};
-    std::vector<std::thread> ts;
-    for (int i = 0; i < NT; i++)
-        ts.emplace_back([fd, i, &errors] {
-            std::vector<unsigned char> blk(BLK, (unsigned char)i);
-            if (pwrite(fd, blk.data(), BLK, (off_t)i * BLK) != (ssize_t)BLK) errors++;
-        });
-    for (auto &t : ts) t.join();
-    CHECK(errors.load() == 0);
-    /* read back: each block should be filled with its index */
-    for (int i = 0; i < NT; i++) {
-        std::vector<unsigned char> blk(BLK);
-        CHECK(pread(fd, blk.data(), BLK, (off_t)i * BLK) == (ssize_t)BLK);
-        CHECK(blk.front() == (unsigned char)i && blk.back() == (unsigned char)i);
-    }
-    close(fd);
-    unlink(path);
-}
-
-static void test_mmap_file()
-{
-    section("vm: mmap a file, modify via mapping, msync, verify");
-    const char *path = "/tmp/osstress_mmap.bin";
-    const size_t SZ = 1024 * 1024;
-    int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
-    CHECK(fd >= 0);
-    if (fd < 0) return;
-    CHECK(ftruncate(fd, SZ) == 0);
-    void *p = mmap(nullptr, SZ, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-    CHECK(p != MAP_FAILED);
-    if (p != MAP_FAILED) {
-        unsigned char *m = (unsigned char *)p;
-        for (size_t i = 0; i < SZ; i += 4096) m[i] = (unsigned char)(i / 4096);
-        CHECK(msync(p, SZ, MS_SYNC) == 0);
-        CHECK(munmap(p, SZ) == 0);
-        /* read back through normal I/O */
-        std::vector<unsigned char> buf(SZ);
-        CHECK(pread(fd, buf.data(), SZ, 0) == (ssize_t)SZ);
-        bool ok = true;
-        for (size_t i = 0; i < SZ; i += 4096) if (buf[i] != (unsigned char)(i / 4096)) ok = false;
-        CHECK(ok);
-    }
-    close(fd);
-    unlink(path);
-}
+/* ============================================================ virtual memory */
 
 static void test_mmap_anon()
 {
@@ -351,167 +215,27 @@ static void test_mmap_anon()
     CHECK(munmap(p, SZ) == 0);
 }
 
-static void test_dir_ops()
+static void test_mmap_concurrent()
 {
-    section("files: directory tree create/readdir/cleanup");
-    const char *root = "/tmp/osstress_dir";
-    rmdir(root);
-    CHECK(mkdir(root, 0755) == 0);
-    const int NF = 50;
-    for (int i = 0; i < NF; i++) {
-        char p[80];
-        snprintf(p, sizeof p, "%s/f%02d", root, i);
-        int fd = open(p, O_CREAT | O_WRONLY, 0644);
-        CHECK(fd >= 0);
-        if (fd >= 0) { write(fd, "x", 1); close(fd); }
-    }
-    DIR *d = opendir(root);
-    CHECK(d != nullptr);
-    int count = 0;
-    if (d) {
-        struct dirent *de;
-        while ((de = readdir(d)) != nullptr)
-            if (strcmp(de->d_name, ".") && strcmp(de->d_name, "..")) count++;
-        closedir(d);
-    }
-    CHECK(count == NF);
-    for (int i = 0; i < NF; i++) {
-        char p[80];
-        snprintf(p, sizeof p, "%s/f%02d", root, i);
-        CHECK(unlink(p) == 0);
-    }
-    CHECK(rmdir(root) == 0);
-}
-
-/* ============================================================ ipc / events */
-
-static void test_pipe_threads()
-{
-    section("ipc: pipe transfer between threads");
-    int fds[2];
-    CHECK(pipe(fds) == 0);
-    const int N = 100000;
-    std::thread writer([&] {
-        for (int i = 0; i < N; i++) {
-            int v = i;
-            if (write(fds[1], &v, sizeof v) != sizeof v) break;
-        }
-        close(fds[1]);
-    });
-    long sum = 0;
-    int v, got = 0;
-    while (read(fds[0], &v, sizeof v) == (ssize_t)sizeof v) { sum += v; got++; }
-    close(fds[0]);
-    writer.join();
-    CHECK(got == N);
-    CHECK(sum == (long)N * (N - 1) / 2);
-}
-
-static void test_socketpair()
-{
-    section("ipc: AF_LOCAL socketpair bidirectional + shutdown");
-    int sv[2];
-    CHECK(socketpair(AF_LOCAL, SOCK_STREAM, 0, sv) == 0);
-    std::thread echo([&] {
-        char buf[256];
-        ssize_t n;
-        while ((n = read(sv[1], buf, sizeof buf)) > 0)
-            if (write(sv[1], buf, n) != n) break;
-        close(sv[1]);
-    });
-    const char *msg = "ping-pong-over-unix-socket";
-    CHECK(write(sv[0], msg, strlen(msg)) == (ssize_t)strlen(msg));
-    char rb[256] = {0};
-    ssize_t got = read(sv[0], rb, sizeof rb);
-    CHECK(got == (ssize_t)strlen(msg) && memcmp(rb, msg, got) == 0);
-    CHECK(shutdown(sv[0], SHUT_WR) == 0);
-    close(sv[0]);
-    echo.join();
-
-    /* unsupported address family -> EAFNOSUPPORT, not a crash */
-    int dummy[2];
-    errno = 0;
-    CHECK(socketpair(AF_INET, SOCK_STREAM, 0, dummy) == -1 && errno == EAFNOSUPPORT);
-}
-
-static void test_eventfd()
-{
-    section("ipc: eventfd cross-thread signaling");
-    int efd = eventfd(0, 0);
-    CHECK(efd >= 0);
-    if (efd < 0) return;
-    const int N = 1000;
-    std::thread signaller([&] {
-        for (int i = 0; i < N; i++) { uint64_t one = 1; if (write(efd, &one, 8) != 8) break; }
-    });
-    uint64_t total = 0;
-    while (total < (uint64_t)N) { uint64_t v; if (read(efd, &v, 8) != 8) break; total += v; }
-    signaller.join();
-    CHECK(total == (uint64_t)N);
-    close(efd);
-}
-
-static void test_poll_select()
-{
-    section("events: poll + select on a pipe");
-    int fds[2];
-    CHECK(pipe(fds) == 0);
-
-    /* nothing written yet -> not readable */
-    struct pollfd pfd = { fds[0], POLLIN, 0 };
-    CHECK(poll(&pfd, 1, 0) == 0);
-
-    CHECK(write(fds[1], "z", 1) == 1);
-    pfd.revents = 0;
-    CHECK(poll(&pfd, 1, 1000) == 1 && (pfd.revents & POLLIN));
-
-    fd_set rs;
-    FD_ZERO(&rs); FD_SET(fds[0], &rs);
-    struct timeval tv = {1, 0};
-    CHECK(select(fds[0] + 1, &rs, nullptr, nullptr, &tv) == 1 && FD_ISSET(fds[0], &rs));
-
-    char c;
-    CHECK(read(fds[0], &c, 1) == 1 && c == 'z');
-    close(fds[0]); close(fds[1]);
-}
-
-static void test_epoll()
-{
-    section("events: epoll on pipe + eventfd, cross-thread wakeups");
-    int ep = epoll_create1(0);
-    CHECK(ep >= 0);
-    if (ep < 0) return;
-    int pfds[2];
-    CHECK(pipe(pfds) == 0);
-    int efd = eventfd(0, EFD_NONBLOCK);
-    CHECK(efd >= 0);
-
-    struct epoll_event ev{};
-    ev.events = EPOLLIN; ev.data.fd = pfds[0];
-    CHECK(epoll_ctl(ep, EPOLL_CTL_ADD, pfds[0], &ev) == 0);
-    ev.data.fd = efd;
-    CHECK(epoll_ctl(ep, EPOLL_CTL_ADD, efd, &ev) == 0);
-
-    std::thread waker([&] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        uint64_t one = 1; (void)!write(efd, &one, 8);
-        (void)!write(pfds[1], "x", 1);
-    });
-
-    int seen_pipe = 0, seen_event = 0;
-    for (int i = 0; i < 2; i++) {
-        struct epoll_event out[4];
-        int n = epoll_wait(ep, out, 4, 2000);
-        for (int k = 0; k < n; k++) {
-            if (out[k].data.fd == pfds[0]) { char c; (void)!read(pfds[0], &c, 1); seen_pipe++; }
-            if (out[k].data.fd == efd)     { uint64_t v; (void)!read(efd, &v, 8);  seen_event++; }
-        }
-        if (seen_pipe && seen_event) break;
-    }
-    waker.join();
-    CHECK(seen_pipe >= 1);
-    CHECK(seen_event >= 1);
-    close(ep); close(efd); close(pfds[0]); close(pfds[1]);
+    section("vm: concurrent anonymous mmap/touch/munmap (16 threads)");
+    const int NT = 16;
+    const size_t SZ = 1024 * 1024;
+    std::atomic<int> errors{0};
+    std::vector<std::thread> ts;
+    for (int i = 0; i < NT; i++)
+        ts.emplace_back([i, &errors] {
+            for (int r = 0; r < 32; r++) {
+                void *p = mmap(nullptr, SZ, PROT_READ | PROT_WRITE,
+                               MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                if (p == MAP_FAILED) { errors++; continue; }
+                unsigned char *m = (unsigned char *)p;
+                for (size_t o = 0; o < SZ; o += 4096) m[o] = (unsigned char)(i + r);
+                for (size_t o = 0; o < SZ; o += 4096) if (m[o] != (unsigned char)(i + r)) errors++;
+                if (munmap(p, SZ) != 0) errors++;
+            }
+        });
+    for (auto &t : ts) t.join();
+    CHECK(errors.load() == 0);
 }
 
 /* ============================================================ signals */
@@ -539,9 +263,6 @@ static void test_signals()
     CHECK(pthread_sigmask(SIG_BLOCK, &set, &old) == 0);
     CHECK(pthread_sigmask(SIG_SETMASK, &old, nullptr) == 0);
     CHECK(sigaction(SIGUSR1, &old_sa, nullptr) == 0);
-
-    /* Note: OSv stubs pthread_kill (no directed thread signals), so
-     * cross-thread sigwait delivery is intentionally not exercised. */
 }
 
 /* ============================================================ time/sched */
@@ -590,18 +311,8 @@ int os_stress_main()
     test_pthread_barrier();
     test_rwlock();
 
-    test_files_large();
-    test_files_concurrent();
-    test_files_pwrite_concurrent();
-    test_mmap_file();
     test_mmap_anon();
-    test_dir_ops();
-
-    test_pipe_threads();
-    test_socketpair();
-    test_eventfd();
-    test_poll_select();
-    test_epoll();
+    test_mmap_concurrent();
 
     test_signals();
     test_time_sched();
