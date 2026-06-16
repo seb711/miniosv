@@ -41,10 +41,6 @@ def format_args(args):
 
     return ' '.join(map(format_arg, args))
 
-def find_qemu_tap_guest_ip_address(qemu_tap_ip_address):
-    fields = re.search(r'(\d+)\.(\d+)\.(\d+)\.(\d+)', qemu_tap_ip_address)
-    return "%s.%s.%s.%d" % (fields.group(1), fields.group(2), fields.group(3), int(fields.group(4)) + 1)
-
 def set_imgargs(options):
     execute = options.execute
     if options.image and not execute:
@@ -79,13 +75,6 @@ def set_imgargs(options):
 
     if options.mount_fs:
         execute = ' '.join('--mount-fs=%s' % m for m in options.mount_fs) + ' ' + execute
-
-    if options.networking and options.tap and hasattr(options, 'qemu_tap_ip_address'):
-        qemu_tap_guest_ip_address = find_qemu_tap_guest_ip_address(options.qemu_tap_ip_address)
-        execute = '--ip=eth0,%s,255.255.255.252 --defaultgw=%s --nameserver=%s %s' % \
-           (qemu_tap_guest_ip_address, options.qemu_tap_ip_address, options.qemu_tap_ip_address, execute)
-    elif options.ip:
-        execute = ' '.join('--ip=%s' % i for i in options.ip) + ' ' + execute
 
     if options.bootchart:
         execute = '--bootchart ' + execute
@@ -210,52 +199,8 @@ def start_osv_qemu(options):
     if options.wait:
         args += ["-S"]
 
-    for idx in range(int(options.nics)):
-        if options.vmxnet3:
-            net_device_options = ['vmxnet3']
-        elif options.hypervisor == 'qemu_microvm':
-            net_device_options = ['virtio-net-device']
-        else:
-            net_device_options = ['virtio-net-pci']
-
-        if options.mac:
-            net_device_options.append('mac=%s' % options.mac)
-
-        if options.networking:
-            if options.tap:
-                args += ["-netdev", "tap,id=hn%d,ifname=%s,script=no,downscript=no" % (idx, options.tap)]
-            elif options.vhost:
-                args += ["-netdev", "tap,id=hn%d,script=%s,vhost=on" % (idx, os.path.join(osv_base, "scripts/qemu-ifup.sh"))]
-            else:
-                for bridge_helper_dir in ['/usr/libexec', '/usr/lib/qemu']:
-                    bridge_helper = bridge_helper_dir + '/qemu-bridge-helper'
-                    if os.path.exists(bridge_helper):
-                       break
-                else:
-                    print("Unable to find qemu-bridge-helper program", file=sys.stderr)
-                    return
-                args += ["-netdev", "bridge,id=hn%d,br=%s,helper=%s" % (idx, options.bridge, bridge_helper)]
-            net_device_options.extend(['netdev=hn%d' % idx, 'id=nic%d' % idx])
-        else:
-            if options.api:
-                forward_options = ',hostfwd=tcp::8000-:8000'
-            else:
-                forward_options = ''
-
-            for rule in options.forward:
-                forward_options += ',hostfwd=%s' % rule
-
-            args += ["-netdev", "user,id=un%d,net=192.168.122.0/24,host=192.168.122.1%s" % (idx, forward_options)]
-            net_device_options.append("netdev=un%d" % idx)
-
-        net_device_options_str = ','.join(net_device_options)
-        if not options.vmxnet3:
-            net_device_options_str = net_device_options_str + options.virtio_device_suffix
-
-        args += ["-device", net_device_options_str]
-
-    if int(options.nics) == 0:
-         args += ["-nic", "none"]
+    # Networking was removed from the slim kernel (Phase 9.2): no NIC at all.
+    args += ["-nic", "none"]
 
     if options.hypervisor != 'qemu_microvm':
         args += ["-device", "virtio-rng-pci%s" % options.virtio_device_suffix]
@@ -310,7 +255,6 @@ def start_osv_qemu(options):
         # Launch qemu
         qemu_env = os.environ.copy()
 
-        qemu_env['OSV_BRIDGE'] = options.bridge
         qemu_path = options.qemu_path or qemu_env.get('QEMU_PATH') or ('qemu-system-%s' % options.arch)
         cmdline = [qemu_path] + args
         if options.dry_run:
@@ -396,14 +340,6 @@ def start_osv_xen(options):
         "on_crash='preserve'"
     ]
 
-    if options.networking:
-       net_device_options = "bridge=%s" % options.bridge
-       if options.mac:
-          net_device_options += ",mac=%s" % options.mac
-       if options.script:
-           net_device_options += ",script=%s" % options.script
-       args += ["vif=['%s']" % (net_device_options)]
-
     # Using xm would allow us to get away with creating the file, but it comes
     # with its set of problems as well. Stick to xl.
     xenfile = tempfile.NamedTemporaryFile(mode="w")
@@ -441,10 +377,6 @@ def start_osv_vmware(options):
         'scsi0.present = "TRUE"',
         'scsi0.virtualDev = "pvscsi"',
         'scsi0:0.fileName = "osv.vmdk"',
-        'ethernet0.present = "TRUE"',
-        'ethernet0.connectionType = "nat"',
-        'ethernet0.virtualDev = "vmxnet3"',
-        'ethernet0.addressType = "generated"',
         'pciBridge0.present = "TRUE"',
         'pciBridge4.present = "TRUE"',
         'pciBridge4.virtualDev = "pcieRootPort"',
@@ -523,13 +455,9 @@ def start_osv(options):
         print("Unrecognized hypervisor selected", file=sys.stderr)
         return
 
-def choose_hypervisor(external_networking, arch):
+def choose_hypervisor(arch):
     if os.path.exists('/dev/kvm') and arch == host_arch:
         return 'kvm'
-    if (os.path.exists('/proc/xen/capabilities')
-        and 'control_d' in open('/proc/xen/capabilities', 'r').read()
-        and external_networking):
-        return 'xen'
     return 'qemu'
 
 def main(options):
@@ -553,16 +481,6 @@ if __name__ == "__main__":
                         help="use AHCI instead of virtio-blk")
     parser.add_argument("-I", "--ide", action="store_true", default=False,
                         help="use ide instead of virtio-blk")
-    parser.add_argument("-3", "--vmxnet3", action="store_true", default=False,
-                        help="use vmxnet3 instead of virtio-net")
-    parser.add_argument("-n", "--networking", action="store_true",
-                        help="needs root. tap networking, specify interface")
-    parser.add_argument("-b", "--bridge", action="store", default="virbr0",
-                        help="bridge name for tap networking")
-    parser.add_argument("-v", "--vhost", action="store_true",
-                        help="needs root. tap networking and vhost")
-    parser.add_argument("-t", "--tap", action="store",
-                        help="tap interface name")
     parser.add_argument("-m", "--memsize", action="store", default="2G",
                         help="specify memory: ex. 1G, 2G, ...")
     parser.add_argument("-c", "--vcpus", action="store", default="4",
@@ -583,20 +501,14 @@ if __name__ == "__main__":
                         help="Enable graphics mode.")
     parser.add_argument("-V", "--verbose", action="store_true",
                         help="pass --verbose to OSv, to display more debugging information on the console")
-    parser.add_argument("--forward", metavar="RULE", action="append", default=[],
-                        help="add network forwarding RULE (QEMU syntax)")
     parser.add_argument("--dry-run", action="store_true",
                         help="do not run, just print the command line")
     parser.add_argument("--jvm-debug", action="store_true",
                         help="start JVM with a debugger server")
     parser.add_argument("--jvm-suspend", action="store_true",
                         help="start JVM with a suspended debugger server")
-    parser.add_argument("--mac", action="store",
-                        help="set MAC address for NIC")
     parser.add_argument("--vnc", action="store", default=":1",
                         help="specify vnc port number")
-    parser.add_argument("--api", action="store_true",
-                        help="redirect the API port (8000) for user-mode networking")
     parser.add_argument("--pass-args", action="append",
                         help="pass arguments to underlying hypervisor (e.g. qemu)")
     parser.add_argument("--trace", default=[], action='append',
@@ -607,16 +519,12 @@ if __name__ == "__main__":
                         help="start sampling profiler. optionally specify sampling frequency in Hz")
     parser.add_argument("--qemu-path", action="store",
                         help="specify qemu command path")
-    parser.add_argument("--nics", action="store", default="1",
-                        help="number of NICs configured for the VM")
     parser.add_argument("--novnc", action="store_true",
                         help="disable vnc")
     parser.add_argument("--nogdb", action="store_true",
                         help="disable gdb")
     parser.add_argument("--gdb", action="store", default="1234",
                         help="specify gdb port number")
-    parser.add_argument("--script", action="store",
-                        help="XEN define configuration script for vif")
     parser.add_argument("--second-disk-image", action="store",
                         help="Path to the optional second disk image that should be attached to the instance")
     parser.add_argument("--cloud-init-image", action="store",
@@ -637,8 +545,6 @@ if __name__ == "__main__":
                         help="DAX window size for virtio-fs device (disabled if not specified)")
     parser.add_argument("--mount-fs", default=[], action="append",
                         help="extra mounts (forwarded to respective kernel command line option)")
-    parser.add_argument("--ip", default=[], action="append",
-                        help="static ip addresses (forwarded to respective kernel command line option)")
     parser.add_argument("--bootchart", action="store_true",
                         help="bootchart mode (forwarded to respective kernel command line option")
     parser.add_argument("--second-nvme-image", action="store",
@@ -678,7 +584,7 @@ if __name__ == "__main__":
         raise Exception('Directory %s to be exposed through virtio-fs does not exist.' % cmdargs.virtio_fs_dir)
 
     if cmdargs.hypervisor == "auto":
-        cmdargs.hypervisor = choose_hypervisor(cmdargs.networking,cmdargs.arch)
+        cmdargs.hypervisor = choose_hypervisor(cmdargs.arch)
 
     if cmdargs.virtio == "legacy":
         cmdargs.virtio_device_suffix = ",disable-legacy=off,disable-modern=on"
@@ -686,23 +592,6 @@ if __name__ == "__main__":
         cmdargs.virtio_device_suffix = ",disable-legacy=on,disable-modern=off"
     else:
         cmdargs.virtio_device_suffix = ""
-
-    if cmdargs.networking and cmdargs.tap and (cmdargs.execute == None or '--ip=' not in cmdargs.execute):
-        process = subprocess.run(["ip", "address", "show", cmdargs.tap], stdout=subprocess.PIPE)
-        if process.returncode != 0:
-            print("Please create tap device by calling", file=sys.stderr)
-            print(" ./scripts/create_tap_device.sh natted %s <ip_address>\n" % cmdargs.tap, file=sys.stderr)
-            raise Exception("Could not find the tap device %s" % cmdargs.tap)
-        output_lines = process.stdout.decode('utf-8').split('\n')
-        inet_line = next(filter(lambda line: "inet" in line, output_lines), None)
-        if inet_line and cmdargs.tap in inet_line:
-            ip_address = re.search(r'\d+\.\d+\.\d+\.\d+', inet_line)
-            if ip_address:
-                cmdargs.qemu_tap_ip_address = ip_address.group(0)
-            else:
-                raise Exception("Unable to find tap device %s with assigned IP address." % cmdargs.tap)
-        else:
-            raise Exception("Unable to find tap device %s with assigned IP address." % cmdargs.tap)
 
     # Call main
     main(cmdargs)
