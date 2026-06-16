@@ -6,7 +6,6 @@ conf_debug_memory=0
 conf_logger_debug=0
 
 conf_debug_elf=0
-conf_hide_symbols=0
 conf_linker_extra_options=
 conf_cxx_level=gnu++20
 
