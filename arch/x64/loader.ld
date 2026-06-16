@@ -31,7 +31,6 @@ SECTIONS
         *(.start32_from_vmlinuz_address)
     KEEP(*(.start32_from_vmlinuz_address)) }
     . = OSV_KERNEL_VM_BASE + 0x1000;
-    .dynamic : AT(ADDR(.dynamic) - OSV_KERNEL_VM_SHIFT) { *(.dynamic) } :dynamic :text
     .text : AT(ADDR(.text) - OSV_KERNEL_VM_SHIFT) {
         HIDDEN(text_start = .);
         *(.text.hot .text.hot.*)
@@ -74,6 +73,12 @@ SECTIONS
     KEEP(*(.tracepoint_patch_sites)) } : text
     .data.rel.ro : AT(ADDR(.data.rel.ro) - OSV_KERNEL_VM_SHIFT) { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } : text
     .data : AT(ADDR(.data) - OSV_KERNEL_VM_SHIFT) { *(.data) *(.data.*) } :text
+    . = ALIGN(8);
+    HIDDEN(__rela_iplt_start = .);
+    .rela.iplt : AT(ADDR(.rela.iplt) - OSV_KERNEL_VM_SHIFT) {
+        *(.rela.iplt) *(.rela.dyn) *(.rela.plt)
+    } :text
+    HIDDEN(__rela_iplt_end = .);
     HIDDEN(_init_array_start = .);
     .init_array : AT(ADDR(.init_array) - OSV_KERNEL_VM_SHIFT) {
         *(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*))
@@ -129,7 +134,6 @@ SECTIONS
 PHDRS {
 	text PT_LOAD FILEHDR PHDRS;
 	tls PT_TLS;
-	dynamic PT_DYNAMIC;
 	eh_frame PT_GNU_EH_FRAME;
 	note PT_NOTE;
 }

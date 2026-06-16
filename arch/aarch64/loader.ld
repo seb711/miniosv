@@ -23,9 +23,12 @@ SECTIONS
 	 */
     . = OSV_KERNEL_VM_BASE + 0x10000 + 0x1000;
 
-    .dynamic : ALIGN(16) { *(.dynamic) } : dynamic : text
-
-    .rela.dyn : ALIGN(4096) {
+    /* Static, fixed-address kernel: no .dynamic section. The only relocations
+       are RELATIVE and the IRELATIVE ifunc resolvers, applied at boot from the
+       __rela_iplt_start/_end range by arch/aarch64/relocate.cc. */
+    . = ALIGN(16);
+    HIDDEN(__rela_iplt_start = .);
+    .rela.dyn : ALIGN(8) {
       *(.rela.init)
       *(.rela.text .rela.text.* .rela.gnu.linkonce.t.*)
       *(.rela.fini)
@@ -38,18 +41,14 @@ SECTIONS
       *(.rela.got)
       *(.rela.bss .rela.bss.* .rela.gnu.linkonce.b.*)
       *(.rela.ifunc)
-     } : dynamic : text
-
-     .rela.plt : ALIGN(4096) {
       *(.rela.plt)
-      __rela_iplt_start = .;
       *(.rela.iplt)
-      __rela_iplt_end = .;
-     } : dynamic : text
+     } : text
+    HIDDEN(__rela_iplt_end = .);
 
-    .plt : ALIGN (4096) { *(.plt) *(.iplt) } : dynamic : text
-    .got : ALIGN (4096) { *(.got) *(.igot) } : dynamic : text
-    .got.plt : ALIGN (4096) { *(.got.plt) *(.igot.plt) } : dynamic : text
+    .plt : ALIGN (4096) { *(.plt) *(.iplt) } : text
+    .got : ALIGN (4096) { *(.got) *(.igot) } : text
+    .got.plt : ALIGN (4096) { *(.got.plt) *(.igot.plt) } : text
 
     .text : ALIGN (16) {
         HIDDEN(text_start = .);
@@ -146,7 +145,6 @@ SECTIONS
 PHDRS {
 	text PT_LOAD FILEHDR PHDRS;
 	tls PT_TLS;
-	dynamic PT_DYNAMIC;
 	eh_frame PT_GNU_EH_FRAME;
 	note PT_NOTE;
 }

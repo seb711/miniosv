@@ -351,9 +351,6 @@ $(out)/fs/vfs/main.o: CXXFLAGS += -Wno-sign-compare -Wno-write-strings
 
 
 makedir = $(call very-quiet, mkdir -p $(dir $@))
-EXTRA_LDFLAGS =
-build-so = $(CC) $(CFLAGS) -o $@ $^ $(EXTRA_LDFLAGS) $(EXTRA_LIBS)
-q-build-so = $(call quiet, $(build-so), LINK $@)
 
 
 # Order-only dep on the libc++ build: every C++ TU includes our libc++ headers
@@ -376,13 +373,6 @@ $(out)/%.o: %.s
 	$(makedir)
 	$(call quiet, $(ASCOMPILE) $(ASFLAGS) -c -o $@ $<, AS $*.s)
 
-%.so: EXTRA_FLAGS = -fPIC
-# -nostartfiles: kernel-space .so's need no CRT, and the aarch64 cross build has
-# no GNU sysroot to supply crti.o/crtn.o/Scrt1.o.
-%.so: EXTRA_LDFLAGS = -shared -nostartfiles -Wl,-z,relro -Wl,-z,lazy
-%.so: %.o
-	$(makedir)
-	$(q-build-so)
 
 autodepend = -MD -MT $@ -MP
 
@@ -872,18 +862,7 @@ boost-libs :=
 # default was changed to use -fpie, so we need to undo this default by explicitly specifying -fno-pie.
 $(objects:%=$(out)/%) $(drivers:%=$(out)/%) $(out)/arch/$(arch)/boot.o $(out)/loader.o $(out)/runtime.o: COMMON += -fno-pie
 
-# ld has a known bug (https://sourceware.org/bugzilla/show_bug.cgi?id=6468)
-# where if the executable doesn't use shared libraries, its .dynamic section is
-# dropped, even with --export-dynamic. We need .dynamic: OSv self-relocates at
-# boot via .rela.dyn / DT_RELA (removing this makes the kernel reboot-loop -
-# empirically verified). The workaround is to link loader.elf against a
-# do-nothing shared library.
-# -nostartfiles: this do-nothing .so needs no CRT init/fini, and the aarch64
-# cross build has no GNU sysroot to supply crti.o/crtn.o/Scrt1.o.
-$(out)/dummy-shlib.so: $(out)/dummy-shlib.o
-	$(call quiet, $(CXX) -nodefaultlibs -nostartfiles -shared $(gcc-sysroot) -o $@ $^, LINK $@)
-
-stage1_targets = $(out)/arch/$(arch)/boot.o $(out)/loader.o $(out)/runtime.o $(drivers:%=$(out)/%) $(objects:%=$(out)/%) $(out)/dummy-shlib.so
+stage1_targets = $(out)/arch/$(arch)/boot.o $(out)/loader.o $(out)/runtime.o $(drivers:%=$(out)/%) $(objects:%=$(out)/%)
 stage1: $(stage1_targets) links
 .PHONY: stage1
 
@@ -971,7 +950,7 @@ endif
 
 $(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(loader_options_dep) $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
-		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -L$(out)/arch/$(arch) \
+		-static --eh-frame-hdr -L$(out)/arch/$(arch) \
             $(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep),$^)) \
 	    $(linker_archives_options) $(conf_linker_extra_options), \
 		LINK loader.elf)
