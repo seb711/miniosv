@@ -1,6 +1,5 @@
 #include <signal.h>
 #include <string.h>
-#include "locale_impl.h"
 
 #if (SIGHUP == 1) && (SIGINT == 2) && (SIGQUIT == 3) && (SIGILL == 4) \
  && (SIGTRAP == 5) && (SIGABRT == 6) && (SIGBUS == 7) && (SIGFPE == 8) \
@@ -112,5 +111,6 @@ char *strsignal(int signum)
 
 	for (; signum--; s++) for (; *s; s++);
 
-	return (char *)LCTRANS_CUR(s);
+	/* No message translation (single static "C" locale). */
+	return (char *)s;
 }

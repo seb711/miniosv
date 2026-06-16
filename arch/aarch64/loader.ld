@@ -92,6 +92,16 @@ SECTIONS
      * boot. This was layout-sensitive: it only fired when .data's size made
      * the gap appear (e.g. after removing other objects). */
     . = ALIGN(16);
+    /* Deferred constructors - see the matching block in arch/x64/loader.ld and
+     * _init_array_late in loader.cc. libc++'s init_priority(100) standard-stream
+     * initializer is captured here, outside _init_array_start.._init_array_end,
+     * so premain() skips it and it runs later once the runtime is up. */
+    HIDDEN(_init_array_late_start = .);
+    .init_array_late : {
+        KEEP(*(.init_array.100))
+    } : text
+    HIDDEN(_init_array_late_end = .);
+    . = ALIGN(16);
     HIDDEN(_init_array_start = .);
     .init_array : {
         *(SORT_BY_NAME(.preinit_array.*) .preinit_array)
