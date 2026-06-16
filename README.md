@@ -1,6 +1,6 @@
 # miniosv
 
-A radically slimmed-down hard fork of the [OSv](https://github.com/cloudius-systems/osv) unikernel.
+A radically slimmed-down hard fork of the [OSv](https://github.com/cloudius-systems/osv) unikernel. Mostly done by [Claude Opus 4.8](https://www.anthropic.com/claude/opus).
 
 ## Motivation
 
