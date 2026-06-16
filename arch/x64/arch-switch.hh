@@ -12,7 +12,6 @@
 #include <osv/barrier.hh>
 #include <osv/kernel_config.h>
 #include <string.h>
-#include "tls-switch.hh"
 
 extern "C" {
 void thread_main(void);
@@ -139,39 +138,13 @@ void thread::init_stack()
 
 void thread::setup_tcb()
 {   //
-    // Most importantly this method allocates TLS memory region and
-    // sets up TCB (Thread Control Block) that points to that allocated
-    // memory region. The TLS memory region is designated to a specific thread
-    // and holds thread local variables (with __thread modifier) defined
-    // in OSv kernel and the application ELF objects including dependant ones
-    // through DT_NEEDED tag.
+    // This method allocates the per-thread TLS memory region and sets up the
+    // TCB (Thread Control Block) that points to it. The region holds the
+    // thread-local variables (with __thread modifier) defined in the kernel
+    // and the statically-linked application.
     //
-    // Each ELF object and OSv kernel gets its own TLS block with offsets
-    // specified in DTV structure (the offsets get calculated as ELF is loaded and symbols
-    // resolved before we get to this point).
-    //
-    // Because both OSv kernel and position-in-dependant (pie) or position-dependant
-    // executable (non library) are compiled to use local-exec mode to access the thread
-    // local variables, we need to setup the offsets and TLS blocks in a special way
-    // to avoid any collisions. Specifically we define OSv TLS segment
-    // (see arch/x64/loader.ld for specifics) with an extra buffer at
-    // the end of the kernel TLS to accommodate TLS block of pies and
-    // position-dependant executables.
-    //
-    // Please note that the TLS layout conforms to the variant II (2),
-    // which means for example that all variable offsets are negative.
-    // It also means that individual objects are laid out from the right to the left.
-
-    // (1) - TLS memory area layout with app shared library
-    // |-----|-----|-----|--------------|------|
-    // |SO_3 |SO_2 |SO_1 |KERNEL        |<NONE>|
-    // |-----|-----|-----|--------------|------|
-
-    // (2) - TLS memory area layout with pie or
-    // position dependant executable
-    //       |-----|-----|---------------------|
-    //       |SO_3 |SO_2 |KERNEL        | EXE  |
-    //       |-----|-----|--------------|------|
+    // The TLS layout conforms to variant II (2), which means all variable
+    // offsets are negative (the block is laid out to the left of the TCB).
 
     assert(sched::tls.size);
 
@@ -191,8 +164,6 @@ void thread::setup_tcb()
     _tcb = reinterpret_cast<thread_control_block*>(p + kernel_tls_size);
     _tcb->self = _tcb;
     _tcb->tls_base = p;
-
-    _tcb->app_tcb = 0;
 }
 
 void thread::free_tcb()

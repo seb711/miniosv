@@ -815,10 +815,6 @@ private:
     bool _app;
 public:
     void destroy();
-#ifdef __x86_64__
-    unsigned long get_app_tcb() { return _tcb->app_tcb; }
-    void set_app_tcb(unsigned long tcb) { _tcb->app_tcb = tcb; }
-#endif
 private:
 #ifdef __aarch64__
     friend void ::destroy_current_cpu_terminating_thread();
