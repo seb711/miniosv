@@ -5,14 +5,14 @@
 #   build/llvm-libc/<arch>/libc/lib/{libc.a,libm.a}
 # built in fullbuild mode for the "baremetal" target OS (a libc that performs
 # no syscalls at all), with the entrypoint list, config overrides and
-# kernel-matching codegen flags from tools/llvm-libc/. Verifies the no-syscall
+# kernel-matching codegen flags from external/llvm-libc-config/. Verifies the no-syscall
 # gate with objdump at the end.
 #
 # This script is invoked automatically by the Makefile (it is a prerequisite of
 # the kernel link when conf_llvm_libc=1); you do not need to run it by hand.
 #
 # llvm-project is pinned (see LLVM_TAG) and fetched as an untracked sparse
-# checkout under external/llvm-project; tools/llvm-libc/* are the files we
+# checkout under external/llvm-project; external/llvm-libc-config/* are the files we
 # control (a carried "patch": llvm-libc has no upstream x86_64 baremetal config
 # yet - this script installs ours into the checkout; aarch64 baremetal is
 # upstream-supported and we overlay the same curated surface on it).
@@ -35,7 +35,7 @@ LLVM_TAG=llvmorg-22.1.7
 OSV_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LLVM_DIR="$OSV_ROOT/external/llvm-project"
 BUILD_DIR="$OSV_ROOT/build/llvm-libc/$osv_arch"
-CONFIG_SRC="$OSV_ROOT/tools/llvm-libc"
+CONFIG_SRC="$OSV_ROOT/external/llvm-libc-config"
 
 # 1. fetch (pinned, sparse: libc + runtimes + cmake support)
 if [ ! -d "$LLVM_DIR/libc" ]; then

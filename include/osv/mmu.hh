@@ -19,8 +19,7 @@
 #include <osv/mmu-defs.hh>
 #include <osv/align.hh>
 #include <osv/trace.hh>
-#include <osv/kernel_config_memory_debug.h>
-#include <osv/kernel_config_memory_jvm_balloon.h>
+#include <osv/kernel_config.h>
 
 struct exception_frame;
 #if CONF_memory_jvm_balloon

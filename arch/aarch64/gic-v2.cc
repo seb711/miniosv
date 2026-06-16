@@ -8,7 +8,7 @@
 
 #include <osv/mmio.hh>
 #include <osv/mmu.hh>
-#include <osv/kernel_config_logger_debug.h>
+#include <osv/kernel_config.h>
 #include <drivers/pci-function.hh>
 
 #include "processor.hh"

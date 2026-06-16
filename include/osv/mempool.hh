@@ -23,7 +23,7 @@
 #include <osv/contiguous_alloc.hh>
 #include <boost/lockfree/stack.hpp>
 #include <boost/lockfree/policies.hpp>
-#include <osv/kernel_config_memory_jvm_balloon.h>
+#include <osv/kernel_config.h>
 
 extern "C" void thread_mark_emergency();
 

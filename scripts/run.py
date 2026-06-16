@@ -43,11 +43,12 @@ def format_args(args):
 
 def set_imgargs(options):
     execute = options.execute
-    if options.image and not execute:
-        return
     if not execute:
-        with open("build/%s/cmdline" % (options.opt_path), "r") as cmdline:
-            execute = cmdline.read()
+        # The slim kernel boots diskless with an in-kernel app; there is no
+        # image to read a command line from. Default to an empty command line
+        # (a build/<opt>/cmdline file is honoured if one happens to exist).
+        cmdline_path = "build/%s/cmdline" % (options.opt_path)
+        execute = open(cmdline_path).read() if os.path.exists(cmdline_path) else ""
     if options.verbose:
         execute = "--verbose " + execute
 
@@ -80,14 +81,6 @@ def set_imgargs(options):
         execute = '--bootchart ' + execute
 
     options.osv_cmdline = execute
-    if options.kernel or options.hypervisor == 'qemu_microvm' or options.arch == 'aarch64':
-        return
-
-    cmdline = [os.path.join(osv_base, "scripts/imgedit.py"), "setargs", options.image_file, execute]
-    if options.dry_run:
-        print(format_args(cmdline))
-    else:
-        subprocess.call(cmdline)
 
 def is_direct_io_supported(path):
     if not os.path.exists(path):
@@ -103,13 +96,6 @@ def is_direct_io_supported(path):
         raise
 
 def start_osv_qemu(options):
-
-    if not is_direct_io_supported(options.image_file):
-        aio = 'cache=unsafe,aio=threads'
-    elif options.block_device_cache != None:
-        aio = 'cache=%s,aio=threads'% options.block_device_cache
-    else:
-        aio = 'cache=none,aio=native'
 
     args = [
         "-m", options.memsize,
@@ -143,28 +129,12 @@ def start_osv_qemu(options):
             args += ["-machine", "gic-version=%s" % options.gic_version, "-cpu", "cortex-a57"]
         args += ["-machine", "virt"]
 
+    # The slim kernel has no filesystem and boots diskless via -kernel (PVH on
+    # x64, the loader.img preboot on aarch64); no primary data disk is attached.
     if options.hypervisor == 'qemu_microvm' and options.arch != 'aarch64':
         args += [
         "-M", "microvm,x-option-roms=off,pit=off,pic=off,rtc=off,auto-kernel-cmdline=on,acpi=off",
-        "-nodefaults", "-no-user-config", "-no-reboot", "-global", "virtio-mmio.force-legacy=off",
-        "-device", "virtio-blk-device,id=blk0,drive=hd0%s%s" % (boot_index, options.virtio_device_suffix),
-        "-drive", "file=%s,if=none,id=hd0,%s" % (options.image_file, aio)]
-    elif options.sata:
-        args += [
-        "-machine", "q35",
-        "-drive", "file=%s,if=none,id=hd0,media=disk,%s" % (options.image_file, aio),
-        "-device", "ide-hd,drive=hd0,id=idehd0,bus=ide.0"]
-    elif options.nvme:
-        args += [
-        "-device", "nvme,serial=deadbeef,drive=nvm%s" % (boot_index),
-        "-drive", "file=%s,if=none,id=nvm,%s" % (options.image_file, aio)]
-    elif options.ide:
-        args += [
-        "-hda", options.image_file]
-    else:
-        args += [
-        "-device", "virtio-blk-pci,id=blk0,drive=hd0%s%s" % (boot_index, options.virtio_device_suffix),
-        "-drive", "file=%s,if=none,id=hd0,%s" % (options.image_file, aio)]
+        "-nodefaults", "-no-user-config", "-no-reboot", "-global", "virtio-mmio.force-legacy=off"]
 
     if options.cloud_init_image:
         args += [
@@ -566,9 +536,11 @@ if __name__ == "__main__":
         # via QEMU -kernel (multiboot/PVH) with a kernel-less data disk.
         cmdargs.kernel = True
     cmdargs.kernel_file = os.path.abspath(cmdargs.kernel_path or os.path.join(osv_base, "build/%s/%s" % (cmdargs.opt_path, default_kernel_file_name)))
+    # The slim kernel boots diskless; there is no data image. image_file is only
+    # used by the legacy xen/vmware/convert paths, so it is optional now.
     cmdargs.image_file = os.path.abspath(cmdargs.image or os.path.join(osv_base, "build/%s/%s" % (cmdargs.opt_path, default_image_file_name)))
-    if not os.path.exists(cmdargs.image_file):
-        raise Exception('Image file %s does not exist.' % cmdargs.image_file)
+    if not os.path.exists(cmdargs.kernel_file):
+        raise Exception('Kernel file %s does not exist.' % cmdargs.kernel_file)
 
     if cmdargs.cloud_init_image:
         cmdargs.cloud_init_image = os.path.abspath(cmdargs.cloud_init_image)

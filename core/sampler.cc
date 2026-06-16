@@ -15,8 +15,7 @@
 #include <osv/trace.hh>
 #include <osv/percpu.hh>
 #include <osv/sampler.hh>
-#include <osv/kernel_config_lazy_stack.h>
-#include <osv/kernel_config_lazy_stack_invariant.h>
+#include <osv/kernel_config.h>
 
 namespace prof {
 

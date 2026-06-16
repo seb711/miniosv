@@ -1,93 +1,203 @@
-REPO CLEANUP — items for your review
-=====================================
+REPO CLEANUP — aggressive dead-file removal for a non-Linux, lightweight kernel
+================================================================================
 
-This is the "unsure" pile from the stray-file cleanup. Everything below was KEPT
-(not deleted) because it's either still referenced, plausibly useful, or removing
-it is a behaviour change rather than a stray-file delete. Decide per item.
+Goal: keep ONLY what is essential to build + boot the slim kernel. This is a
+NON-Linux-compatible, statically-linked, single-in-kernel-app OSv. There is no
+ELF loader, no syscall ABI, no rich VFS (only a read-only rofs data disk), no
+networking, no FreeBSD/ZFS, no GNU toolchain (clang + llvm-libc + libc++ only).
 
-Method used (your transitive rule): a file is only kept if the chain from it
-reaches a REAL consumer — the kernel+app build (scripts/build fs=rofs
-image=os-features), run.py, the aarch64 cross build, or legal/docs. If the chain
-only loops back on libc API surface nothing calls, the whole chain was removed
-(e.g. the locale subsystem: gen-ctype-data.cc + libc/locale/* + runtime.cc
-c_locale — all gone).
+Method (transitive rule): a file is kept ONLY if its dependency chain reaches a
+REAL consumer — the kernel+app build (`scripts/build fs=rofs image=os-features`),
+`scripts/run.py`, the aarch64 cross build, or legal (LICENSE). A chain that only
+loops back on libc API surface that nothing calls is dead and removed whole.
 
-------------------------------------------------------------------------------
-KEPT — REVIEW (candidates you might still want gone)
-------------------------------------------------------------------------------
+Every removal below was validated: x64 from-scratch `scripts/build fs=rofs
+image=os-features`, `run.py -c2 -m 1G` => 26/26 passed, exit 0, and 0 real
+syscall instructions (`0f 05`) in loader.elf.
 
-scripts/create_tap_device.sh [can go]
-scripts/qemu-ifup.sh [can go]
-    Only used by run.py's --networking/--tap path. The slim kernel has NO
-    networking, so this run.py code + these two helpers are effectively dead.
-    Not removed because it means editing run.py (the boot tool) to drop the
-    -n/tap/bridge options. Say the word and I'll strip run.py's networking
-    support and delete these.
+================================================================================
+REMOVED THIS SESSION
+================================================================================
 
-scripts/setup.py [can go and all references]
-    Host dev-environment setup (installs build dependencies on the host). Not
-    used by the build itself; useful for a fresh checkout. Borderline.
+include/osv/kernel_config_*.h  (15 of them) — DELETED
+    These are leftover kconfig artifacts (one tiny header per CONF_ option). 15
+    had ZERO source includers and were dead:
+      compiler_cflags, compiler_cxx_level, compiler_opt, core_c_wrappers,
+      core_commands_runscript, core_newpoll, drivers_profile_all, elf_debug,
+      hide_symbols, memory_optimize, syscalls_list_file, tracepoints_callstack,
+      tracepoints_sampler, tracing, version_script.
+    KEPT: include/osv/kernel_config.h (the aggregator — loader.cc includes it)
+    plus the ~18 per-option headers that ARE still #included by source
+    (lazy_stack, lazy_stack_invariant, logger_debug, memory_jvm_balloon,
+    memory_debug, preempt, threads_default_kernel_stack_size, tracepoints,
+    tracepoints_strace, memory_tracker, etc.). See "future opportunities" below
+    re: consolidating these into one header.
 
-scripts/nbd_client.py [can go]
-    Imported by imgedit.py (which the build uses) — but only for imgedit's
-    qemu-nbd disk-content-editing mode (nbd_file). The build only calls imgedit's
-    setpartition/setargs, which don't touch nbd. Could be removed together with
-    the nbd_file class + import in imgedit.py. Kept to avoid editing imgedit.
+include/api/linux/version.h  + include/api/linux/  — DELETED
+    The Linux KERNEL_VERSION / LINUX_VERSION_CODE macro header. Its only consumer
+    was a _Static_assert in libc/misc/uname.c pretending to be "Linux 3.7.0".
+    Removed the linux/ dir entirely.
 
-scripts/audit-libc-surface.py [keep]
-scripts/loc-compare.sh [keep]
-    Phase-0 slimming guardrail tools, referenced from docs/libc-surface.md. Not
-    build-essential, but project tooling. Kept.
+libc/misc/uname.c  — REWRITTEN (de-Linux'd), NOT deleted
+    Almost dead — uname() has no callers — BUT it also defines the global
+    `struct utsname utsname`, which libc/unistd/sethostname.c references (and is
+    the host-name storage). So it cannot be deleted outright (link error:
+    "undefined reference to utsname"). Rewritten to drop the <linux/version.h>
+    coupling and the "Linux 3.7.0" lie; now reports sysname "OSv". Kept its
+    `libc += misc/uname.o` Makefile line.
 
-Doxyfile [can go]
-    Doxygen config for generating API docs. Harmless; kept.
+static/etc/fstab, static/etc/fstab_ext, static/etc/inputrc  — DELETED
+    Unreferenced. The rofs image (usr_rofs.manifest.skel) only pulls
+    static/etc/hosts and the build-generated `fstab` (copied from fstab_rofs).
+    KEPT: static/etc/hosts, static/etc/fstab_rofs (both build-essential).
 
-docs/  documentation/  licenses/ [can go]
-    docs/ = project docs (libc-surface.md, llvm-libc-coverage.md).
-    documentation/ = the upstream LICENSE-musl / LICENSE-freebsd / etc. + a few
-    diagrams. licenses/ = third-party licences. Kept for legal/reference; tell me
-    if you want the non-legal bits (diagrams, *.txt) trimmed.
+tools/llvm-libc/  — MOVED to external/llvm-libc-config/  ; tools/ dir DELETED
+    "Why is llvm-libc in tools and llvm-project in external?" — consolidated.
+    tools/llvm-libc/ was just the 3 curated config files (entrypoints.txt,
+    headers.txt, config.json) that scripts/build-llvm-libc.sh installs into the
+    llvm-project checkout. Moved under external/ next to the llvm source; updated
+    Makefile (.llvm-libc-built prereqs) + build-llvm-libc.sh (CONFIG_SRC) +
+    REFACTORING.md. tools/ is now gone (it held nothing else).
 
-------------------------------------------------------------------------------
-KEPT — ESSENTIAL (do NOT remove; flagged because they LOOK stray)
-------------------------------------------------------------------------------
+.travis.yml, .travis/, .github/, CODINGSTYLE.md, CONTRIBUTING, PORTING — DELETED
+    Upstream OSv community/CI process cruft. No build impact. KEPT LICENSE +
+    README.md.
 
-dummy-shlib.cc [what i do not get here is: why should we link against a do-nothing .so? we have a fixed binary and no elf reloc's anymore, just remove all of this. dl_iterate_phdr is also not used anymore really because there are no shared libs anymore in our example we have a static build.]
-    NOT vestigial. It's a documented linker workaround (Makefile ~990): linking
-    loader.elf against a do-nothing .so forces ld to keep the .dynamic /.dynsym
-    sections (an ld bug drops them otherwise). OSv needs them for backtraces,
-    libosv.so, and dl_iterate_phdr — which libunwind uses for C++ exception
-    unwinding (Phase 8.7). Removing it would break exceptions.
+================================================================================
+KEPT — ESSENTIAL (you flagged these; here is the PROOF they are load-bearing)
+================================================================================
 
-scripts/nbd_client.py    -> see REVIEW above (imgedit import).
+dummy-shlib.cc  — ESSENTIAL (re-verified empirically THIS session)
+    Your note: "we have a fixed binary and no elf reloc's anymore, just remove
+    all of this." This is incorrect, and I tested it to be sure: I removed it
+    from stage1_targets, rebuilt, and booted.
+      RESULT: loader.elf links with NO .dynamic / .dynsym section, and the
+      kernel ABORTS at boot ("OSv v0.57... / Aborted / Halting", run.py exit
+      124 / timeout). Restoring it -> .dynamic present, 26/26, exit 0.
+    Why: even though the kernel is non-PIE, OSv self-relocates at boot via
+    .rela.dyn / DT_RELA, which requires the .dynamic section. Linking against a
+    do-nothing .so is the ld workaround that forces ld to keep .dynamic/.dynsym.
+    (dl_iterate_phdr is also live: libunwind walks program headers to find
+    .eh_frame for C++ exception unwinding — Phase 8.7.) DO NOT REMOVE.
 
-------------------------------------------------------------------------------
-REMOVED in this cleanup (for the record)
-------------------------------------------------------------------------------
+COMMENT: can you just remove the self-relocation? this would also simplfy things. 
+then you can also remove the dummy-shlib.cc. or is this needed for a higher-half 
+kernel. cannot you just statically define that in the linker script? 
 
-Locale subsystem (separate commit): gen-ctype-data.cc, ctype-data.h,
-  libc/locale/* (11 objects), runtime.cc c_locale/__newlocale, the _ISupper enum.
+scripts/nbd_client.py  — ESSENTIAL (your hunch "we do not use it anymore" is wrong)
+    imgedit.py's `nbd_file` class uses nbd_client (qemu-nbd) to edit disk.img,
+    and scripts/build calls imgedit.py BOTH setpartition (line 92) and setargs
+    (line 101) — both go through nbd_file. Confirmed by reading imgedit.py.
+    Remove nbd_client and the image build breaks.
 
-scripts/ (~60 files): all cloud/release/deploy tooling (aws/, ec2-*, deploy_to_*,
-  release-*, upload-*, gen-gce/vbox/vmx, capstan, build-vm-*, github_releases),
-  alt-virt (firecracker.py), old-fs tooling (zfs-image-on-host.sh,
-  ext-disk-utils.sh, disk-utils-common.sh, mkromfs.sh), networking setup
-  (dnsmasq/iptables/bridge/fc), old module/manifest helpers (module.py earlier,
-  export_manifest.py, manifest_from_host.sh, list_manifest_files.py,
-  upload_manifest.py), old test harness (test.py, tester.py, test-ruby.py,
-  scripts/tests/, check-libcfunc-avail.sh, silentant.py), debug/profiling tools
-  (scripts/osv/ pkg, top.py, memory_analyzer.py, trace.py, loader.py, prof.py,
-  freq.py, metadata.py, benchs/, post-processing/, convert), and misc dev
-  (checkpatch.pl, linux_distro.py, pull_github_pr.sh, download_and_build_boost.sh,
-  download_and_build_qemu.sh, generate_app_version_script.sh, extract_symbols.sh).
-  scripts/build was rewritten to a clean rofs-only version.
+COMMENT: why do we need to edit disk.img. for what is the disk.img needed? check 
+if we really need the disk.img. and then remove it if we do not need it anymore. 
 
-top-level: config.json (old module config), zfs_builder_bootfs.{S,manifest.skel},
-  the non-rofs manifest skels (bootfs.manifest.skel, bootfs_ext, usr.manifest.skel,
-  usr_ext, usr_ramfs). The Makefile bootfs default was retargeted to
-  bootfs_empty.manifest.skel.
+scripts/disk.bin  — ESSENTIAL
+    The raw MBR disk template. scripts/build line 91 `cp scripts/disk.bin
+    disk.raw` then imgedit.py writes the partition table + args into it. The data
+    disk cannot be built without it.
 
-dirs: modules/ (earlier), docker/, images/, exported_symbols/, tests/ (old
-  standalone ELF tests), tools/{cpiod,mkfs,mount,uush} (old standalone tools;
-  tools/llvm-libc kept). The dead aarch64 tests/tst-hello.so Makefile block and
-  the unused `tools +=` lines were removed.
+COMMENT: Same as above. why do we need that? do we need that and if so why? 
+
+usr_rofs.manifest.skel  — ESSENTIAL ("why if we have no fs?")
+    We DO have a filesystem — a read-only rofs DATA disk (just not ZFS/VFS-rich).
+    This skel defines its contents: /libenviron.so + the mount-point dirs +
+    /etc/hosts + /etc/fstab. scripts/build line 74 copies it to usr.manifest,
+    which gen-rofs-img.py turns into rofs.img. Remove it and the disk is empty
+    (no libenviron.so, boot env breaks).
+
+COMMENT: remove the filesystem alltogether first and reevaluate. we do not want to 
+use the rofs anymore. also the mount-point dirs we do not need anymore. Therefore
+we also do not need usr_rofs.manifest.skel.
+
+libvdso-content.S  — ESSENTIAL
+    loader.elf depends on libvdso-content.o (Makefile 1138/1190), which .incbin's
+    the stripped libvdso.so into the kernel image (the vDSO).
+
+COMMENT: but we do not need vdso anymore. you can remove it. we do not need that feature. 
+
+include/api/syscall.h  — ESSENTIAL (not the syscall ABI!)
+    core/futex.cc includes <syscall.h> for SYS_futex and SYS_gettid only — the
+    one syscall() shim libstdc++/libc++abi calls for __cxa_guard_* contention.
+    There is NO syscall entry path or table. (The huge x64/aarch64 bits/syscall.h
+    number tables are mostly unused — see future opportunities.)
+
+COMMENT: But we do we support futex. Can we also just remove that alltogether or is 
+a component requiring that. this seems as a linux compat leftover. why not just use directly the
+osv mutex. 
+
+include/api/signal.h  — ESSENTIAL ("do we really need that?")
+    Yes. Signals are part of the conformance surface: the test suite
+    (test/os-features.cc, os-stress.cc) exercises sigaction/raise/sigprocmask/
+    pthread_kill. Keep.
+
+COMMENT: remove that from the conformance surface. we do not need to exercise SIGNALS. 
+You can remove that alltogether. 
+
+compiler/  (empty.cc, attr/cold-label.cc, include/intrinsics.hh)  — ESSENTIAL
+    empty.cc is the probe TU for ~25 `compiler-flag` feature tests in the
+    Makefile (does clang accept -Wno-foo?). intrinsics.hh is force-included into
+    every TU (Makefile 309). Not stray.
+
+conf/  (base.mk, config.mk, debug.mk, release.mk, x64.mk, aarch64.mk)  — ESSENTIAL
+    "Are we using the conf configurations?" — yes, ALL of them. The Makefile
+    `include`s base.mk, conf/$(mode).mk, conf/$(arch).mk, and config.mk
+    (the frozen conf_* options + driver set). This is the active config system.
+
+static/  — KEEP (the dir + hosts + fstab_rofs)  [dead files inside removed above]
+
+scripts/mkbootfs.py + manifest_common.py  — ESSENTIAL
+    bootfs.bin -> bootfs.o is a prereq of loader.elf; mkbootfs.py builds it and
+    imports manifest_common.py. gen-rofs-img.py also imports manifest_common.py.
+
+COMMENT: cehck again if we need that after you removed the rofs. 
+
+scripts/libosv.py + osv-version.sh + gen-version-header  — ESSENTIAL
+    gen-version-header (-> osv-version.sh) generates gen/include/osv/version.h on
+    every build. libosv.py + osv-version.sh build libosv.so inside the loader.elf
+    recipe (debug symbol table / kallsyms for the gdb stub + backtraces).
+    [libosv.so itself is a debug aid; removing it means surgery on the loader.elf
+    recipe — see future opportunities. osv-version.sh is needed regardless.]
+
+COMMENT: i do not see the reason why we need to build libosv.so... check why we need it 
+and if it is required with our current requirements. static build, no external libs, 
+everything is statically linked and compiled into the binary. 
+
+scripts/download_aarch64_*.{sh,py} + download_fedora/ubuntu_aarch64_*.sh — KEEP
+    Used by the aarch64 cross build (scripts/build sources
+    download_aarch64_toolchain.sh; download_aarch64_packages.py drives the
+    fedora/ubuntu rpm/deb fetchers). Only relevant to aarch64, but that is a
+    supported target.
+
+================================================================================
+FUTURE OPPORTUNITIES (not done — bigger than a stray-file delete; your call)
+================================================================================
+
+- Consolidate kernel_config: ~18 per-option headers + the kernel_config.h
+  aggregator could collapse into ONE config header. The aggregator already
+  duplicates a subset; loader.cc uses the aggregator while everything else uses
+  per-option headers. Unifying is a small refactor with mild behaviour risk
+  (e.g. CONF_memory_tracker is defined in the per-option header but NOT in the
+  aggregator, so loader.cc currently sees it as 0).
+
+COMMENT: do this
+
+- include/api/{x64,aarch64}/bits/syscall.h: full Linux syscall-number tables,
+  but only SYS_futex + SYS_gettid are used (core/futex.cc). Could be trimmed to
+  those two constants.
+
+COMMENT: we do not need futex and we also not need gettid. both can be removed. 
+check that after the step no syscall things are in the binary anymore. 
+
+- libosv.so debug machinery (libosv.py, osv.syms/kallsyms in the loader.elf
+  recipe): a gdb/backtrace convenience, not needed to boot. Removable with
+  Makefile surgery if you want to drop symbol-table generation.
+
+COMMENT: yes we want to do this. 
+
+- libc/misc/uname.c: uname() has no callers (only the utsname global is needed).
+  Could shrink to just the global if you don't want a uname() symbol at all.
+
+COMMENT: we do not want the uname symbol at all. check for more such things that 
+are coming from the linux compat era that are not needed in a baremetal build`

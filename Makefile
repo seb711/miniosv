@@ -371,19 +371,19 @@ q-build-so = $(call quiet, $(build-so), LINK $@)
 # (libcxx-includes in CXXFLAGS), so they must exist before any .cc compiles. In
 # a from-scratch -j build the libc++ build would otherwise race the kernel
 # compiles (and fail with e.g. "'functional' file not found").
-$(out)/%.o: %.cc include/osv/kernel_config_hide_symbols.h | generated-headers $(out)/.libcxx-built
+$(out)/%.o: %.cc include/osv/kernel_config.h | generated-headers $(out)/.libcxx-built
 	$(makedir)
 	$(call quiet, $(CXX) $(CXXFLAGS) -c -o $@ $<, CXX $*.cc)
 
-$(out)/%.o: %.c include/osv/kernel_config_hide_symbols.h | generated-headers
+$(out)/%.o: %.c include/osv/kernel_config.h | generated-headers
 	$(makedir)
 	$(call quiet, $(CC) $(CFLAGS) -c -o $@ $<, CC $*.c)
 
-$(out)/%.o: %.S include/osv/kernel_config_hide_symbols.h
+$(out)/%.o: %.S include/osv/kernel_config.h
 	$(makedir)
 	$(call quiet, $(ASCOMPILE) $(ASFLAGS) -c -o $@ $<, AS $*.S)
 
-$(out)/%.o: %.s include/osv/kernel_config_hide_symbols.h
+$(out)/%.o: %.s include/osv/kernel_config.h
 	$(makedir)
 	$(call quiet, $(ASCOMPILE) $(ASFLAGS) -c -o $@ $<, AS $*.s)
 
@@ -679,7 +679,6 @@ ifeq ($(conf_tracepoints_sampler),1)
 objects += core/sampler.o
 endif
 
-objects += core/futex.o
 objects += core/sched.o
 objects += core/mmio.o
 objects += core/kprintf.o
@@ -712,31 +711,17 @@ objects += core/string_utils.o
 #include $(src)/libc/build.mk:
 libc =
 libc_to_hide =
-environ_libc =
 
 libc += internal/_chk_fail.o
 libc_to_hide += internal/_chk_fail.o
-libc += internal/floatscan.o
-libc += internal/intscan.o
 libc += internal/libc.o
-libc += internal/shgetc.o
 
 
 
 libc += env/__environ.o
 libc += env/secure_getenv.o
 
-environ_libc += env/__environ.c
-environ_libc += env/clearenv.c
-environ_libc += env/getenv.c
-environ_libc += env/secure_getenv.c
-environ_libc += env/putenv.c
-environ_libc += env/setenv.c
-environ_libc += env/unsetenv.c
-environ_libc += string/strchrnul.c
 
-
-libc += errno/strerror.o
 
 libc += math/finitel.o
 
@@ -755,7 +740,6 @@ libc += misc/getopt_long.o
 libc_to_hide += misc/getopt_long.o
 libc += misc/realpath.o
 libc += misc/backtrace.o
-libc += misc/uname.o
 libc += misc/lockf.o
 libc += misc/__longjmp_chk.o
 
@@ -791,107 +775,15 @@ endif
 # llvm-libc (whose FILE has no OSv console backend). The musl-derived sources
 # were vendored into libc/stdio/ (Phase 8.11). tmpfile/tmpnam/tempnam were
 # dropped: they create/stat files (dead with no filesystem, and unreferenced).
-libc += stdio/__fclose_ca.o
-libc += stdio/__fdopen.o
 $(out)/libc/stdio/__fdopen.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/__fmodeflags.o
-libc += stdio/__fopen_rb_ca.o
-libc += stdio/__fprintf_chk.o
-libc += stdio/__lockfile.o
-libc += stdio/__overflow.o
-libc += stdio/__stdio_close.o
 $(out)/libc/stdio/__stdio_close.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/__stdio_exit.o
-libc += stdio/__stdio_read.o
-libc += stdio/__stdio_seek.o
 $(out)/libc/stdio/__stdio_seek.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/__stdio_write.o
 $(out)/libc/stdio/__stdio_write.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/__stdout_write.o
-libc += stdio/__string_read.o
-libc += stdio/__toread.o
-libc += stdio/__towrite.o
-libc += stdio/__uflow.o
-libc += stdio/__vfprintf_chk.o
-libc += stdio/ofl.o
-libc += stdio/ofl_add.o
-libc += stdio/asprintf.o
-libc += stdio/clearerr.o
-libc += stdio/dprintf.o
-libc += stdio/ext.o
-libc += stdio/ext2.o
-libc += stdio/fclose.o
-libc += stdio/feof.o
-libc += stdio/ferror.o
-libc += stdio/fflush.o
-libc += stdio/fgetc.o
-libc += stdio/fgetln.o
-libc += stdio/fgetpos.o
-libc += stdio/fgets.o
-libc += stdio/fileno.o
-libc += stdio/flockfile.o
-libc += stdio/fmemopen.o
-libc += stdio/fopen.o
 $(out)/libc/stdio/fopen.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/fprintf.o
-libc += stdio/fputc.o
-libc += stdio/fputs.o
-libc += stdio/fread.o
-libc += stdio/__fread_chk.o
-libc += stdio/freopen.o
 $(out)/libc/stdio/freopen.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/fscanf.o
-libc += stdio/fseek.o
-libc += stdio/fsetpos.o
-libc += stdio/ftell.o
-libc += stdio/ftrylockfile.o
-libc += stdio/funlockfile.o
-libc += stdio/fwrite.o
-libc += stdio/getc.o
-libc += stdio/getc_unlocked.o
-libc += stdio/getchar.o
-libc += stdio/getchar_unlocked.o
-libc += stdio/getdelim.o
-libc += stdio/getline.o
-libc += stdio/gets.o
-libc += stdio/getw.o
-libc += stdio/open_memstream.o
-libc += stdio/perror.o
-libc += stdio/printf.o
-libc += stdio/putc.o
-libc += stdio/putc_unlocked.o
-libc += stdio/putchar.o
-libc += stdio/putchar_unlocked.o
-libc += stdio/puts.o
-libc += stdio/putw.o
-libc += stdio/remove.o
-libc += stdio/rewind.o
-libc += stdio/scanf.o
-libc += stdio/setbuf.o
-libc += stdio/setbuffer.o
-libc += stdio/setlinebuf.o
-libc += stdio/setvbuf.o
-libc += stdio/snprintf.o
-libc += stdio/sprintf.o
-libc += stdio/sscanf.o
-libc += stdio/stderr.o
-libc += stdio/stdin.o
-libc += stdio/stdout.o
-libc += stdio/ungetc.o
-libc += stdio/vasprintf.o
-libc += stdio/vdprintf.o
-libc += stdio/vfprintf.o
 $(out)/libc/stdio/vfprintf.o: COMMON += $(wno-maybe-uninitialized)
-libc += stdio/vfscanf.o
 $(out)/libc/stdio/vfscanf.o: COMMON += $(wno-maybe-uninitialized)
-libc += stdio/vprintf.o
-libc += stdio/vscanf.o
-libc += stdio/vsnprintf.o
-libc += stdio/vsprintf.o
-libc += stdio/vsscanf.o
-libc += stdio/printf-hooks.o
 
-$(out)/libc/stdlib/qsort_r.o: COMMON += $(wno-dangling-pointer)
 ifeq ($(arch),x64)
 libc += stdlib/unimplemented.o
 endif
@@ -930,7 +822,6 @@ libc += time/__year_to_secs.o
 $(out)/libc/time/ftime.o: CFLAGS += -Ilibc/include
 
 
-libc += unistd/sethostname.o
 libc += unistd/sync.o
 libc += unistd/getpgid.o
 libc += unistd/setpgid.o
@@ -946,6 +837,13 @@ libc += pthread_barrier.o
 libc += libc.o
 libc += dlfcn.o
 libc += io.o
+# Stdio: the FILE implementation (printf/fopen/fread/scanf/...) comes from the
+# llvm-libc archive; these are the OSv seam (console-backed std streams + FILE
+# stubs), the printf-extension stubs, and the _FORTIFY_SOURCE wrappers.
+libc += stdio/llvm_stdio.o
+libc += stdio/printf-hooks.o
+libc += stdio/__fprintf_chk.o
+libc += stdio/__vfprintf_chk.o
 libc += time.o
 libc_to_hide += time.o
 libc += signal.o
@@ -964,7 +862,6 @@ libc += cpu_set.o
 libc += malloc_hooks.o
 libc += mallopt.o
 
-libc += linux/makedev.o
 
 
 
@@ -1077,7 +974,7 @@ endif
 # under libc/ - the musl submodule was deleted in Phase 8.13.
 llvm_libc_libdir = build/llvm-libc/$(arch)/libc/lib
 llvm_libc_archives = $(llvm_libc_libdir)/libc.a $(llvm_libc_libdir)/libm.a
-$(out)/.llvm-libc-built: scripts/build-llvm-libc.sh tools/llvm-libc/entrypoints.txt tools/llvm-libc/config.json tools/llvm-libc/headers.txt
+$(out)/.llvm-libc-built: scripts/build-llvm-libc.sh external/llvm-libc-config/entrypoints.txt external/llvm-libc-config/config.json external/llvm-libc-config/headers.txt
 	$(call quiet, scripts/build-llvm-libc.sh $(arch), LLVM-LIBC $(arch))
 	$(call very-quiet, touch $@)
 $(llvm_libc_archives): $(out)/.llvm-libc-built
@@ -1122,8 +1019,8 @@ libc += env/putenv.o
 libc += env/unsetenv.o
 libc += env/clearenv.o
 # env + strchrnul use the musl-internal decls (__environ, __putenv, __strchrnul)
-# that live in OSv's internal_musl_headers (the kernel build does not otherwise
-# put that dir on the path, unlike the libenviron.so build).
+# that live in OSv's internal_musl_headers, so put that dir on the include path
+# for these objects only.
 $(out)/libc/env/%.o: pre-include-api = -isystem include/api/internal_musl_headers
 $(out)/libc/string/strchrnul.o: pre-include-api = -isystem include/api/internal_musl_headers
 
@@ -1135,60 +1032,12 @@ def_symbols = --defsym=OSV_KERNEL_BASE=$(kernel_base) \
               --defsym=OSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 endif
 
-$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
+$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(loader_options_dep) $(app_mode_dep) $(version_script_file) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
 		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -L$(out)/arch/$(arch) \
             $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep),$^))) \
 	    $(linker_archives_options) $(conf_linker_extra_options), \
 		LINK loader.elf)
-	@# Build libosv.so matching this loader.elf. This is not a separate
-	@# rule because that caused bug #545.
-	@readelf --dyn-syms --wide $(out)/loader.elf > $(out)/osv.syms
-	@scripts/libosv.py $(out)/osv.syms $(out)/libosv.ld `scripts/osv-version.sh` | $(CC) -c -o $(out)/osv.o -x assembler -
-	@echo '0000000000000000 T _text' > $(out)/osv.kallsyms
-	@echo '0000000000000000 T _stext' >> $(out)/osv.kallsyms
-	@grep ': 0000' $(out)/osv.syms | grep -v 'NOTYPE' | awk '{ print $$2 " T " $$8 }' | c++filt >> $(out)/osv.kallsyms
-	$(call quiet, $(CC) $(out)/osv.o -nostdlib -shared -o $(out)/libosv.so -T $(out)/libosv.ld, LIBOSV.SO)
-
-
-
-environ_sources = $(addprefix libc/, $(environ_libc))
-
-$(out)/libenviron.so: pre-include-api = -isystem include/api/internal_musl_headers
-$(out)/libenviron.so: source-dialects =
-
-$(out)/libenviron.so: $(environ_sources)
-	$(makedir)
-	 $(call quiet, $(CC) $(CFLAGS) -shared -nostartfiles -nodefaultlibs -o $(out)/libenviron.so $(environ_sources), CC libenviron.so)
-
-$(out)/libvdso.so: libc/vdso/vdso.cc
-	$(makedir)
-	$(call quiet, $(CXX) $(CXXFLAGS) -fno-exceptions -c -fPIC -o $(out)/libvdso.o libc/vdso/vdso.cc, CXX libvdso.o)
-	$(call quiet, $(LD) -shared -z now -o $(out)/libvdso.so $(out)/libvdso.o -T libc/vdso/vdso.lds --version-script=libc/vdso/$(arch)/vdso.version, LINK libvdso.so)
-
-bootfs_manifest ?= bootfs_empty.manifest.skel
-
-# If parameter "bootfs_manifest" has been changed since the last make,
-# bootfs.bin requires rebuilding
-bootfs_manifest_dep = $(out)/bootfs_manifest.last
-.PHONY: phony
-$(bootfs_manifest_dep): phony
-	@if [ '$(shell cat $(bootfs_manifest_dep) 2>&1)' != '$(bootfs_manifest)' ]; then \
-		echo -n $(bootfs_manifest) > $(bootfs_manifest_dep) ; \
-	fi
-
-bootfs_dep := scripts/mkbootfs.py $(bootfs_manifest) $(bootfs_manifest_dep) $(out)/libenviron.so
-$(out)/bootfs.bin: $(bootfs_dep)
-	$(call quiet, olddir=`pwd`; cd $(out); "$$olddir"/scripts/mkbootfs.py -o bootfs.bin -d bootfs.bin.d -m "$$olddir"/$(bootfs_manifest), MKBOOTFS $@)
-
-$(out)/bootfs.o: $(out)/bootfs.bin
-$(out)/bootfs.o: ASFLAGS += -I$(out)
-
-$(out)/libvdso-stripped.so: $(out)/libvdso.so
-	$(call quiet, $(STRIP) $(out)/libvdso.so -o $(out)/libvdso-stripped.so, STRIP libvdso.so -> libvdso-stripped.so)
-
-$(out)/libvdso-content.o: $(out)/libvdso-stripped.so
-$(out)/libvdso-content.o: ASFLAGS += -I$(out)
 
 
 ################################################################################

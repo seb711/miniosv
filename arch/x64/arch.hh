@@ -10,8 +10,7 @@
 
 #include "processor.hh"
 #include "msr.hh"
-#include <osv/kernel_config_lazy_stack.h>
-#include <osv/kernel_config_lazy_stack_invariant.h>
+#include <osv/kernel_config.h>
 
 // namespace arch - architecture independent interface for architecture
 //                  dependent operations (e.g. irq_disable vs. cli)

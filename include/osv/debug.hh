@@ -14,7 +14,7 @@
 #include <osv/debug.h>
 #include <osv/mutex.h>
 #include <osv/printf.hh>
-#include <osv/kernel_config_core_debug_buffer_size.h>
+#include <osv/kernel_config.h>
 
 #define DEBUG_BUFFER_SIZE CONF_core_debug_buffer_size
 
