@@ -767,9 +767,6 @@ libc += math/finitel.o
 # for the affected files.
 
 libc += misc/error.o
-ifeq ($(conf_networking_stack),1)
-libc += misc/gethostid.o
-endif
 libc += misc/getopt.o
 libc_to_hide += misc/getopt.o
 libc += misc/getopt_long.o
@@ -785,17 +782,6 @@ libc += multibyte/__mbsnrtowcs_chk.o
 libc += multibyte/__mbsrtowcs_chk.o
 libc += multibyte/__mbstowcs_chk.o
 
-
-ifeq ($(conf_networking_stack),1)
-libc += network/gethostbyname_r.o
-libc += network/getaddrinfo.o
-libc += network/freeaddrinfo.o
-libc += network/getnameinfo.o
-libc += network/__dns.o
-libc_to_hide += network/__dns.o
-libc += network/__ipparse.o
-libc_to_hide += network/__ipparse.o
-endif
 
 libc += prng/random.o
 libc += random.o
