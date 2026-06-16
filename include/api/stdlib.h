@@ -112,6 +112,19 @@ char *mkdtemp (char *);
 int getsubopt (char **, char *const *, char **);
 int rand_r (unsigned *);
 
+/* POSIX-2008 locale-aware strtonum (the *_l family). libc++'s locale facets
+ * call these against a static "C" locale; llvm-libc provides the bodies. */
+#define __NEED_locale_t
+#include <bits/alltypes.h>
+
+float strtof_l (const char *__restrict, char **__restrict, locale_t);
+double strtod_l (const char *__restrict, char **__restrict, locale_t);
+long double strtold_l (const char *__restrict, char **__restrict, locale_t);
+long strtol_l (const char *__restrict, char **__restrict, int, locale_t);
+unsigned long strtoul_l (const char *__restrict, char **__restrict, int, locale_t);
+long long strtoll_l (const char *__restrict, char **__restrict, int, locale_t);
+unsigned long long strtoull_l (const char *__restrict, char **__restrict, int, locale_t);
+
 #endif
 
 

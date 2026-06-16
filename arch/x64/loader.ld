@@ -78,6 +78,20 @@ SECTIONS
         *(.rela.iplt) *(.rela.dyn) *(.rela.plt)
     } :text
     HIDDEN(__rela_iplt_end = .);
+    /* Deferred constructors: init_priority(100) is the highest the toolchain
+     * allows, and libc++ uses it for the global that initializes the standard
+     * streams (std::cout/cin/cerr). With the application linked into the kernel,
+     * that constructor would otherwise run first in premain()'s init-array loop,
+     * before OSv's allocator/scheduler/console exist, and crash. Capturing
+     * .init_array.100 into a separate array (outside _init_array_start..end, so
+     * premain skips it) lets us run it later, from the main thread once the
+     * runtime is up - see _init_array_late in loader.cc. Listed before the main
+     * .init_array so the linker assigns these inputs here first. */
+    HIDDEN(_init_array_late_start = .);
+    .init_array_late : AT(ADDR(.init_array_late) - OSV_KERNEL_VM_SHIFT) {
+        KEEP(*(.init_array.100))
+    } : text
+    HIDDEN(_init_array_late_end = .);
     HIDDEN(_init_array_start = .);
     .init_array : AT(ADDR(.init_array) - OSV_KERNEL_VM_SHIFT) {
         *(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*))
