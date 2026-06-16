@@ -20,27 +20,27 @@ gic_dist::gic_dist(mmu::phys b, size_t l) : _base(b)
 
 u32 gic_dist::read_reg(gicd_reg reg)
 {
-    return mmio_getl((mmioaddr_t)_base + (u32)reg);
+    return mmio_getl(mmio_a((mmioaddr_t)_base, (u32)reg));
 }
 
 void gic_dist::write_reg(gicd_reg reg, u32 value)
 {
-    mmio_setl((mmioaddr_t)_base + (u32)reg, value);
+    mmio_setl(mmio_a((mmioaddr_t)_base, (u32)reg), value);
 }
 
 u32 gic_dist::read_reg_at_offset(u32 reg, u32 offset)
 {
-    return mmio_getl((mmioaddr_t)_base + reg + offset);
+    return mmio_getl(mmio_a((mmioaddr_t)_base, reg + offset));
 }
 
 void gic_dist::write_reg_at_offset(u32 reg, u32 offset, u32 value)
 {
-    mmio_setl((mmioaddr_t)_base + reg + offset, value);
+    mmio_setl(mmio_a((mmioaddr_t)_base, reg + offset), value);
 }
 
 void gic_dist::write_reg64_at_offset(u32 reg, u32 offset, u64 value)
 {
-    mmio_setq((mmioaddr_t)_base + reg + offset, value);
+    mmio_setq(mmio_a((mmioaddr_t)_base, reg + offset), value);
 }
 
 unsigned int gic_dist::read_number_of_interrupts()

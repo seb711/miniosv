@@ -13,11 +13,11 @@ mmioaddr_t mmio_isa_serial_console::_addr_mmio;
 u64 mmio_isa_serial_console::_phys_mmio_address;
 
 u8 isa_serial_console_base::read_byte(int reg) {
-    return mmio_getb(mmio_isa_serial_console::_addr_mmio + reg);
+    return mmio_getb(mmio_a(mmio_isa_serial_console::_addr_mmio, reg));
 };
 
 void isa_serial_console_base::write_byte(u8 val, int reg) {
-    mmio_setb(mmio_isa_serial_console::_addr_mmio + reg, val);
+    mmio_setb(mmio_a(mmio_isa_serial_console::_addr_mmio, reg), val);
 };
 
 void mmio_isa_serial_console::early_init(u64 mmio_phys_address)

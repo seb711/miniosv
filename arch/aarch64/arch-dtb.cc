@@ -861,7 +861,7 @@ void  __attribute__((constructor(init_prio::dtb))) dtb_setup()
     extern u64 kernel_vm_shift;
 
     mmu::elf_phys_start = reinterpret_cast<void *>(elf_header);
-    elf_start = mmu::elf_phys_start + kernel_vm_shift;
+    elf_start = static_cast<char *>(mmu::elf_phys_start) + kernel_vm_shift;
     elf_size = (u64)edata - (u64)elf_start;
 
     /* remove amount of memory used for ELF from avail memory */

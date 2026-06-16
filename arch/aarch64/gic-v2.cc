@@ -39,12 +39,12 @@ void gic_v2_dist::write_reg_grp(gicd_reg_irq1 reg, unsigned int irq, u8 value)
 
     unsigned int offset = (u32)reg + (irq / 32) * 4;
     unsigned int shift = irq % 32;
-    unsigned int old = mmio_getl((mmioaddr_t)_base + offset);
+    unsigned int old = mmio_getl(mmio_a((mmioaddr_t)_base, offset));
 
     old &= ~(1 << shift);
     old |= value << shift;
 
-    mmio_setl((mmioaddr_t)_base + offset, old);
+    mmio_setl(mmio_a((mmioaddr_t)_base, offset), old);
 }
 
 void gic_v2_dist::write_reg_grp(gicd_reg_irq2 reg, unsigned int irq, u8 value)
@@ -53,12 +53,12 @@ void gic_v2_dist::write_reg_grp(gicd_reg_irq2 reg, unsigned int irq, u8 value)
 
     unsigned int offset = (u32)reg + (irq / 16) * 4;
     unsigned int shift = ((irq % 16) * 2);
-    unsigned int old = mmio_getl((mmioaddr_t)_base + offset);
+    unsigned int old = mmio_getl(mmio_a((mmioaddr_t)_base, offset));
 
     old &= ~(0x3 << shift);
     old |= value << shift;
 
-    mmio_setl((mmioaddr_t)_base + offset, old);
+    mmio_setl(mmio_a((mmioaddr_t)_base, offset), old);
 }
 
 gic_v2_cpu::gic_v2_cpu(mmu::phys b, size_t l) : _base(b)
@@ -68,12 +68,12 @@ gic_v2_cpu::gic_v2_cpu(mmu::phys b, size_t l) : _base(b)
 
 u32 gic_v2_cpu::read_reg(gicc_reg reg)
 {
-    return mmio_getl((mmioaddr_t)_base + (u32)reg);
+    return mmio_getl(mmio_a((mmioaddr_t)_base, (u32)reg));
 }
 
 void gic_v2_cpu::write_reg(gicc_reg reg, u32 value)
 {
-    mmio_setl((mmioaddr_t)_base + (u32)reg, value);
+    mmio_setl(mmio_a((mmioaddr_t)_base, (u32)reg), value);
 }
 
 void gic_v2_cpu::enable()

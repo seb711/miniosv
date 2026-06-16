@@ -22,7 +22,7 @@ safe_load(const T* potentially_bad_ptr, T& data)
          "2: \n"
          ".pushsection .text.fixup, \"ax\" \n"
          "3: \n"
-         "mov %[ok], #0 \n"
+         "mov %w[ok], #0 \n"
          "b 2b \n"
          ".popsection \n"
          ".pushsection .fixup, \"aw\" \n"

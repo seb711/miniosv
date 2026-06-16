@@ -60,8 +60,39 @@ sh "$OSV_ROOT/include/api/$osv_arch/bits/alltypes.h.sh" > "$GEN_INC/bits/alltype
 OSV_HEADERS="-isystem $OSV_ROOT/include/api -isystem $OSV_ROOT/include/api/$osv_arch -isystem $GEN_INC"
 KERNEL_FLAGS="-fno-pie -fno-stack-protector -ftls-model=local-exec -fno-omit-frame-pointer $OSV_HEADERS"
 
+# Pure-LLVM cross-compile when targeting a non-host arch: one clang driven at the
+# target triple (no GNU cross toolchain). cmake needs the cross vars explicitly.
+# CMAKE_*_COMPILER_TARGET supplies --target for C/CXX/ASM, so we do NOT also put
+# it in *_FLAGS. TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY makes cmake's compiler
+# check compile-only (we have no GNU sysroot / crt*.o to link an executable, and
+# don't want one - the runtimes are freestanding static archives).
+CROSS_CMAKE=
+if [ "$llvm_arch" != "$(uname -m)" ]; then
+    CROSS_CMAKE="-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=$llvm_arch \
+        -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+        -DCMAKE_C_COMPILER_TARGET=$llvm_arch-linux-gnu \
+        -DCMAKE_CXX_COMPILER_TARGET=$llvm_arch-linux-gnu \
+        -DCMAKE_ASM_COMPILER_TARGET=$llvm_arch-linux-gnu"
+
+    # libc++'s atomic.cpp pulls <linux/futex.h> for the std::atomic wait backend,
+    # which needs a few <asm/*> headers. Those are the only arch-specific Linux
+    # UAPI headers, shipped per-arch under /usr/include/<triple>/asm - present for
+    # the host but not for the cross target (we install no GNU cross sysroot). On
+    # aarch64 (a "generic" kernel arch, LP64) they are thin forwarders to the
+    # arch-neutral asm-generic/* (which lives in plain /usr/include, on the path
+    # for every target). Generate the forwarders so the futex backend compiles;
+    # everything else resolves to OSv's include/api (e.g. <sys/syscall.h> ->
+    # OSv's bits/syscall.h, so no host asm/unistd is pulled).
+    mkdir -p "$GEN_INC/asm"
+    echo '#include <asm-generic/types.h>'       > "$GEN_INC/asm/types.h"
+    echo '#include <asm-generic/posix_types.h>' > "$GEN_INC/asm/posix_types.h"
+    printf '#define __BITS_PER_LONG 64\n#include <asm-generic/bitsperlong.h>\n' \
+        > "$GEN_INC/asm/bitsperlong.h"
+fi
+
 mkdir -p "$BUILD_DIR"
 cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
+    $CROSS_CMAKE \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_C_COMPILER=clang \
     -DCMAKE_CXX_COMPILER=clang++ \

@@ -23,16 +23,27 @@ void thread_main_c(sched::thread* t);
 
 namespace sched {
 
+// The tail of switch_to_first, after the thread pointer has been
+// switched. Must not be inlined: clang CSEs "mrs tpidr_el0" within a
+// function, so any TLS access inlined next to the msr that changes the
+// thread pointer may use a stale, pre-switch base register. An opaque
+// call boundary forces fresh thread-pointer reads.
+static __attribute__((noinline))
+void switch_to_first_with_new_tp(thread* t, cpu* c)
+{
+    /* check that the tls variable preempt_counter is correct */
+    assert(sched::get_preempt_counter() == 1);
+
+    s_current = t;
+    current_cpu = c;
+    percpu_base = c->percpu_base;
+}
+
 void thread::switch_to_first()
 {
     asm volatile ("msr tpidr_el0, %0; msr tpidr_el1, %0; isb; " :: "r"(_tcb) : "memory");
 
-    /* check that the tls variable preempt_counter is correct */
-    assert(sched::get_preempt_counter() == 1);
-
-    s_current = this;
-    current_cpu = _detached_state->_cpu;
-    remote_thread_local_var(percpu_base) = _detached_state->_cpu->percpu_base;
+    switch_to_first_with_new_tp(this, _detached_state->_cpu);
 
     asm volatile("\n"
                  "ldp x29, x0, %3  \n"
@@ -42,8 +53,10 @@ void thread::switch_to_first()
                  "msr sp_el0, x22  \n"
                  "blr x21          \n"
                  : // No output operands - this is to designate the input operands as earlyclobbers
-                "=&Ump"(this->_state.fp), "=&Ump"(this->_state.sp), "=&Ump"(this->_state.exception_sp)
-                 : "Ump"(this->_state.fp), "Ump"(this->_state.sp), "Ump"(this->_state.exception_sp)
+                  // ("Q" is the Clang/GCC aarch64 constraint for a [Xn] memory
+                  // operand usable by ldp/ldr; GCC-only "Ump" is unsupported by Clang)
+                "=&Q"(this->_state.fp), "=&Q"(this->_state.sp), "=&Q"(this->_state.exception_sp)
+                 : "Q"(this->_state.fp), "Q"(this->_state.sp), "Q"(this->_state.exception_sp)
                  : "x0", "x19", "x20", "x21", "x22", "x23", "x24",
                    "x25", "x26", "x27", "x28", "x30", "memory");
 }
@@ -67,7 +80,7 @@ void thread::init_stack()
         // the case, so we need to fault it in now, with preemption on.
         (void) *((volatile char*)stack.begin + stack.size - 1);
     }
-    void** stacktop = reinterpret_cast<void**>(stack.begin + stack.size);
+    void** stacktop = reinterpret_cast<void**>(static_cast<char*>(stack.begin) + stack.size);
     _state.fp = 0;
     _state.thread = this;
     _state.sp = stacktop;
@@ -114,51 +127,25 @@ void thread::setup_tcb()
 
     assert(tls.size);
 
-    void* user_tls_data;
-    size_t user_tls_size = 0;
-    size_t executable_tls_size = 0;
-    if (_app_runtime) {
-        auto obj = _app_runtime->app.lib();
-        assert(obj);
-        user_tls_size = obj->initial_tls_size();
-        user_tls_data = obj->initial_tls();
-        if (obj->is_dynamically_linked_executable()) {
-           executable_tls_size = obj->get_tls_size();
-        }
-    }
-
+    // The application is statically linked into the kernel, so a thread's TLS
+    // is just the kernel TLS template (module 0); there is no separately loaded
+    // executable/shared-object TLS to splice in.
     // In arch/aarch64/loader.ld, the TLS template segment is aligned to 64
-    // bytes, and that's what the objects placed in it assume. So make
-    // sure our copy is allocated with the same 64-byte alignment, and
-    // verify that object::init_static_tls() ensured that user_tls_size
-    // also doesn't break this alignment.
+    // bytes, and that's what the objects placed in it assume, so allocate with
+    // the same 64-byte alignment.
     auto kernel_tls_size = sched::tls.size;
     assert(align_check(kernel_tls_size, (size_t)64));
-    assert(align_check(user_tls_size, (size_t)64));
 
-    auto total_tls_size = kernel_tls_size + user_tls_size;
-    void* p = aligned_alloc(64, total_tls_size + sizeof(*_tcb));
+    void* p = aligned_alloc(64, kernel_tls_size + sizeof(*_tcb));
     _tcb = (thread_control_block *)p;
     _tcb[0].tls_base = &_tcb[1];
     _state.tcb = p;
     //
-    // First goes kernel TLS data
-    auto kernel_tls = _tcb[0].tls_base;
+    // Kernel TLS data follows the TCB (variant I layout).
+    char* kernel_tls = static_cast<char*>(_tcb[0].tls_base);
     memcpy(kernel_tls, sched::tls.start, sched::tls.filesize);
     memset(kernel_tls + sched::tls.filesize, 0,
            kernel_tls_size - sched::tls.filesize);
-    //
-    // Next goes user TLS data
-    if (user_tls_size) {
-        memcpy(kernel_tls + kernel_tls_size, user_tls_data, user_tls_size);
-    }
-
-    if (executable_tls_size) {
-        // If executable, then copy its TLS block data at the designated offset
-        // at the beginning of the area as described in the ascii art for executables
-        // TLS layout
-        _app_runtime->app.lib()->copy_local_tls(kernel_tls);
-    }
 
     _tcb->dtv = &_arch._dtv;
 }

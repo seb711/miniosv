@@ -79,10 +79,15 @@ make -C "$BUILD_DIR" -j"$(nproc)" libc libm > "$BUILD_DIR-build.log" 2>&1 || {
         echo "build failed, see $BUILD_DIR-build.log"; exit 1; }
 
 # x86 uses the `syscall` instruction; arm uses `svc`. Gate against both so the
-# archive is guaranteed free of any direct kernel-entry instruction.
+# archive is guaranteed free of any direct kernel-entry instruction. Use
+# llvm-objdump - it disassembles every target, unlike the host GNU objdump
+# which only knows the host arch. x86 has variable-length encodings (mnemonic
+# is the last field of a no-operand insn); aarch64 is fixed 32-bit (one
+# encoding field, so the mnemonic is always field 3).
+OBJDUMP=$(command -v llvm-objdump || command -v llvm-objdump-20 || echo objdump)
 case "$llvm_arch" in
     x86_64)  entry_insns='$NF=="syscall" || $NF=="sysenter"' ;;
-    aarch64) entry_insns='$1=="svc"' ;;
+    aarch64) entry_insns='$3=="svc"' ;;
 esac
 
 for name in libc.a libm.a; do
@@ -90,7 +95,7 @@ for name in libc.a libm.a; do
     if [ -z "$ARCHIVE" ]; then
         echo "error: $name not produced" >&2; exit 1
     fi
-    nsyscall=$(objdump -d "$ARCHIVE" | awk "$entry_insns" | wc -l)
+    nsyscall=$($OBJDUMP -d "$ARCHIVE" | awk "$entry_insns" | wc -l)
     if [ "$nsyscall" -ne 0 ]; then
         echo "GATE FAILED: $nsyscall kernel-entry instructions in $ARCHIVE" >&2
         exit 1

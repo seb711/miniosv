@@ -194,6 +194,6 @@ void synchronize_cpu_caches(void *v, size_t size) {
     //
     // For more details about what this built-in does, please read this gcc documentation -
     // https://gcc.gnu.org/onlinedocs/gcc/Other-Builtins.html
-    __builtin___clear_cache((char*)v, (char*)(v + size));
+    __builtin___clear_cache((char*)v, (char*)v + size);
 }
 }
