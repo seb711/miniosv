@@ -1,0 +1,93 @@
+REPO CLEANUP — items for your review
+=====================================
+
+This is the "unsure" pile from the stray-file cleanup. Everything below was KEPT
+(not deleted) because it's either still referenced, plausibly useful, or removing
+it is a behaviour change rather than a stray-file delete. Decide per item.
+
+Method used (your transitive rule): a file is only kept if the chain from it
+reaches a REAL consumer — the kernel+app build (scripts/build fs=rofs
+image=os-features), run.py, the aarch64 cross build, or legal/docs. If the chain
+only loops back on libc API surface nothing calls, the whole chain was removed
+(e.g. the locale subsystem: gen-ctype-data.cc + libc/locale/* + runtime.cc
+c_locale — all gone).
+
+------------------------------------------------------------------------------
+KEPT — REVIEW (candidates you might still want gone)
+------------------------------------------------------------------------------
+
+scripts/create_tap_device.sh
+scripts/qemu-ifup.sh
+    Only used by run.py's --networking/--tap path. The slim kernel has NO
+    networking, so this run.py code + these two helpers are effectively dead.
+    Not removed because it means editing run.py (the boot tool) to drop the
+    -n/tap/bridge options. Say the word and I'll strip run.py's networking
+    support and delete these.
+
+scripts/setup.py
+    Host dev-environment setup (installs build dependencies on the host). Not
+    used by the build itself; useful for a fresh checkout. Borderline.
+
+scripts/nbd_client.py
+    Imported by imgedit.py (which the build uses) — but only for imgedit's
+    qemu-nbd disk-content-editing mode (nbd_file). The build only calls imgedit's
+    setpartition/setargs, which don't touch nbd. Could be removed together with
+    the nbd_file class + import in imgedit.py. Kept to avoid editing imgedit.
+
+scripts/audit-libc-surface.py
+scripts/loc-compare.sh
+    Phase-0 slimming guardrail tools, referenced from docs/libc-surface.md. Not
+    build-essential, but project tooling. Kept.
+
+Doxyfile
+    Doxygen config for generating API docs. Harmless; kept.
+
+docs/  documentation/  licenses/
+    docs/ = project docs (libc-surface.md, llvm-libc-coverage.md).
+    documentation/ = the upstream LICENSE-musl / LICENSE-freebsd / etc. + a few
+    diagrams. licenses/ = third-party licences. Kept for legal/reference; tell me
+    if you want the non-legal bits (diagrams, *.txt) trimmed.
+
+------------------------------------------------------------------------------
+KEPT — ESSENTIAL (do NOT remove; flagged because they LOOK stray)
+------------------------------------------------------------------------------
+
+dummy-shlib.cc
+    NOT vestigial. It's a documented linker workaround (Makefile ~990): linking
+    loader.elf against a do-nothing .so forces ld to keep the .dynamic /.dynsym
+    sections (an ld bug drops them otherwise). OSv needs them for backtraces,
+    libosv.so, and dl_iterate_phdr — which libunwind uses for C++ exception
+    unwinding (Phase 8.7). Removing it would break exceptions.
+
+scripts/nbd_client.py    -> see REVIEW above (imgedit import).
+
+------------------------------------------------------------------------------
+REMOVED in this cleanup (for the record)
+------------------------------------------------------------------------------
+
+Locale subsystem (separate commit): gen-ctype-data.cc, ctype-data.h,
+  libc/locale/* (11 objects), runtime.cc c_locale/__newlocale, the _ISupper enum.
+
+scripts/ (~60 files): all cloud/release/deploy tooling (aws/, ec2-*, deploy_to_*,
+  release-*, upload-*, gen-gce/vbox/vmx, capstan, build-vm-*, github_releases),
+  alt-virt (firecracker.py), old-fs tooling (zfs-image-on-host.sh,
+  ext-disk-utils.sh, disk-utils-common.sh, mkromfs.sh), networking setup
+  (dnsmasq/iptables/bridge/fc), old module/manifest helpers (module.py earlier,
+  export_manifest.py, manifest_from_host.sh, list_manifest_files.py,
+  upload_manifest.py), old test harness (test.py, tester.py, test-ruby.py,
+  scripts/tests/, check-libcfunc-avail.sh, silentant.py), debug/profiling tools
+  (scripts/osv/ pkg, top.py, memory_analyzer.py, trace.py, loader.py, prof.py,
+  freq.py, metadata.py, benchs/, post-processing/, convert), and misc dev
+  (checkpatch.pl, linux_distro.py, pull_github_pr.sh, download_and_build_boost.sh,
+  download_and_build_qemu.sh, generate_app_version_script.sh, extract_symbols.sh).
+  scripts/build was rewritten to a clean rofs-only version.
+
+top-level: config.json (old module config), zfs_builder_bootfs.{S,manifest.skel},
+  the non-rofs manifest skels (bootfs.manifest.skel, bootfs_ext, usr.manifest.skel,
+  usr_ext, usr_ramfs). The Makefile bootfs default was retargeted to
+  bootfs_empty.manifest.skel.
+
+dirs: modules/ (earlier), docker/, images/, exported_symbols/, tests/ (old
+  standalone ELF tests), tools/{cpiod,mkfs,mount,uush} (old standalone tools;
+  tools/llvm-libc kept). The dead aarch64 tests/tst-hello.so Makefile block and
+  the unused `tools +=` lines were removed.

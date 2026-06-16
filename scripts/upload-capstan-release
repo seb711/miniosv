@@ -1,3 +1,0 @@
-#!/bin/sh
-
-s3cmd sync -P build/capstan/ s3://osv.capstan/

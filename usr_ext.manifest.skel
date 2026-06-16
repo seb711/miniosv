@@ -1,9 +1,0 @@
-[manifest]
-/libenviron.so: libenviron.so
-/&/etc/hosts: ../../static/&
-/etc/mnttab: ->/proc/mounts
-/etc/fstab: fstab
-/dev: ../../static
-/proc: ../../static
-/sys: ../../static
-/tmp: ../../static
