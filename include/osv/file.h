@@ -50,7 +50,7 @@
 #include <osv/rcu.hh>
 #include <osv/error.h>
 #include <osv/clock.hh>
-#include <osv/kernel_config_fs_max_file_descriptors.h>
+#include <osv/kernel_config.h>
 #include <boost/optional/optional.hpp>
 #include <osv/mmu-defs.hh>
 #include <boost/intrusive/list.hpp>

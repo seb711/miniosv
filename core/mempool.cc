@@ -17,7 +17,7 @@
 #include "libc/libc.hh"
 #include <osv/align.hh>
 #include <osv/debug.hh>
-#include <osv/kernel_config_memory_tracker.h>
+#include <osv/kernel_config.h>
 #if CONF_memory_tracker
 #include <osv/alloctracker.hh>
 #endif
@@ -37,12 +37,7 @@
 #include <osv/migration-lock.hh>
 #include <osv/export.h>
 
-#include <osv/kernel_config_lazy_stack.h>
-#include <osv/kernel_config_lazy_stack_invariant.h>
-#include <osv/kernel_config_memory_debug.h>
-#include <osv/kernel_config_memory_l1_pool_size.h>
-#include <osv/kernel_config_memory_page_batch_size.h>
-#include <osv/kernel_config_memory_jvm_balloon.h>
+#include <osv/kernel_config.h>
 
 // recent Boost gets confused by the "hidden" macro we add in some Musl
 // header files, so need to undefine it

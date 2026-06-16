@@ -27,8 +27,7 @@
 #include <osv/clock.hh>
 #include <osv/timer-set.hh>
 #include <osv/export.h>
-#include <osv/kernel_config_lazy_stack.h>
-#include <osv/kernel_config_lazy_stack_invariant.h>
+#include <osv/kernel_config.h>
 #include <string.h>
 
 typedef float runtime_t;

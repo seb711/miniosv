@@ -11,8 +11,7 @@
 #define ARCH_SWITCH_HH_
 
 #include <osv/barrier.hh>
-#include <osv/kernel_config_preempt.h>
-#include <osv/kernel_config_threads_default_kernel_stack_size.h>
+#include <osv/kernel_config.h>
 #include <string.h>
 #include "arch-setup.hh"
 

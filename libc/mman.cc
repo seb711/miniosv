@@ -15,7 +15,7 @@
 #include "libc/libc.hh"
 #include <safe-ptr.hh>
 #include <atomic>
-#include <osv/kernel_config_memory_jvm_balloon.h>
+#include <osv/kernel_config.h>
 
 #ifndef MAP_UNINITIALIZED
 #define MAP_UNINITIALIZED 0x4000000

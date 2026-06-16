@@ -26,8 +26,7 @@
 #include <osv/string_utils.hh>
 #include <cxxabi.h>
 #include "drivers/console.hh"
-#include <osv/kernel_config_lazy_stack.h>
-#include <osv/kernel_config_lazy_stack_invariant.h>
+#include <osv/kernel_config.h>
 
 using namespace std;
 

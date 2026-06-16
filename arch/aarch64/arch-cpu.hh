@@ -14,7 +14,7 @@
 #include "osv/pagealloc.hh"
 #include <osv/debug.h>
 #include "exceptions.hh"
-#include <osv/kernel_config_threads_default_exception_stack_size.h>
+#include <osv/kernel_config.h>
 
 struct init_stack {
     char stack[4096] __attribute__((aligned(16)));

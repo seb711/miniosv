@@ -7,42 +7,30 @@
 
 /*
  * A printf variant that prints directly to the kernel console.
+ *
+ * Formats into a stack buffer and hands the result to debug_write():
+ * no allocation, usable from delicate contexts. (The musl-era version
+ * instead faked a FILE over debug_write; llvm-libc's FILE is an opaque
+ * cookie, so that trick is gone - and a bounded buffer is what a
+ * kernel-console printf should have been anyway.)
  */
 
 #include <osv/debug.h>
 #include <osv/export.h>
 
-#include "../libc/stdio/stdio_impl.h"
-#include <assert.h>
-#include <limits.h>
+#include <stdio.h>
 #include <string.h>
-#include <errno.h>
-#include <stdint.h>
-#include <sys/uio.h>
-
-static size_t wrap_write(FILE *f, const unsigned char *buf, size_t len)
-{
-	if (f->wpos-f->wbase)
-		debug_write((const char *)f->wbase, f->wpos-f->wbase);
-
-	debug_write((const char *)buf, len);
-
-	f->wend = f->buf + f->buf_size;
-	f->wpos = f->wbase = f->buf;
-	return len;
-}
 
 int vkprintf(const char *restrict fmt, va_list ap)
 {
-	FILE f = {
-		.fd = 1,
-		.lbf = EOF,
-		.write = wrap_write,
-		.buf = (void *)fmt,
-		.buf_size = 0,
-		.no_locking = true,
-	};
-	return vfprintf(&f, fmt, ap);
+	char buf[1024];
+	int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+	if (n < 0) {
+		return n;
+	}
+	size_t len = (size_t)n < sizeof(buf) - 1 ? (size_t)n : sizeof(buf) - 1;
+	debug_write(buf, len);
+	return n;
 }
 
 OSV_LIBSOLARIS_API

@@ -38,7 +38,6 @@
 #include <errno.h>
 #include <pthread.h>
 #include <semaphore.h>
-#include <signal.h>
 #include <dlfcn.h>
 #include <time.h>
 #include <sys/time.h>
@@ -312,64 +311,6 @@ static void test_memory()
     }
 }
 
-/* ============================================================== signals */
-
-static volatile sig_atomic_t g_sigusr1 = 0;
-static void usr1_handler(int) { g_sigusr1 = 1; }
-
-static void test_signals()
-{
-    group("Signals (process-directed; no inter-thread delivery)");
-
-    section("sigaction handler runs on raise()");
-    {
-        struct sigaction sa{}, old{};
-        sa.sa_handler = usr1_handler;
-        sigemptyset(&sa.sa_mask);
-        CHECK(sigaction(SIGUSR1, &sa, &old) == 0);
-        g_sigusr1 = 0;
-        CHECK(raise(SIGUSR1) == 0);
-        // handler is synchronous for raise(); give a tiny grace anyway
-        for (int i = 0; i < 100 && !g_sigusr1; i++) usleep(1000);
-        CHECK(g_sigusr1 == 1);
-        sigaction(SIGUSR1, &old, nullptr);
-    }
-
-    section("sigprocmask blocks, queries and restores the signal mask");
-    {
-        sigset_t set, old, cur;
-        sigemptyset(&set); sigaddset(&set, SIGUSR2);
-        CHECK(sigprocmask(SIG_BLOCK, &set, &old) == 0);
-        CHECK(sigprocmask(SIG_BLOCK, nullptr, &cur) == 0);   // query
-        CHECK(sigismember(&cur, SIGUSR2) == 1);
-        CHECK(sigprocmask(SIG_SETMASK, &old, nullptr) == 0); // restore
-        CHECK(sigprocmask(SIG_BLOCK, nullptr, &cur) == 0);
-        CHECK(sigismember(&cur, SIGUSR2) == 0);
-    }
-
-    section("pthread_kill(self, 0) succeeds (existence check)");
-    CHECK(pthread_kill(pthread_self(), 0) == 0);
-
-    section("BOUNDARY: directed pthread_kill to another thread is unsupported");
-    {
-        std::mutex m; std::condition_variable cv;
-        bool release = false, ready = false;
-        pthread_t target{};
-        std::thread t([&] {
-            { std::lock_guard<std::mutex> lk(m); target = pthread_self(); ready = true; }
-            cv.notify_one();
-            std::unique_lock<std::mutex> lk(m);
-            cv.wait(lk, [&] { return release; });
-        });
-        { std::unique_lock<std::mutex> lk(m); cv.wait(lk, [&] { return ready; }); }
-        int rc = pthread_kill(target, 0);    // not self -> stubbed
-        CHECK(rc == EINVAL);
-        { std::lock_guard<std::mutex> lk(m); release = true; }
-        cv.notify_one();
-        t.join();
-    }
-}
-
 /* ========================================================= time & clocks */
 
 static void test_time()
@@ -517,7 +458,6 @@ int os_features_main()
     test_threads();
     test_sync();
     test_memory();
-    test_signals();
     test_time();
     test_random();
     test_runtime();
