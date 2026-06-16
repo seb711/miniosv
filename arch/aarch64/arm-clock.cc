@@ -15,7 +15,7 @@
 #include <osv/debug.hh>
 #include <osv/prio.hh>
 #include <osv/sched.hh>
-#include <osv/kernel_config_logger_debug.h>
+#include <osv/kernel_config.h>
 
 #include "arch-dtb.hh"
 

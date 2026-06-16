@@ -9,7 +9,7 @@
 #include <osv/align.hh>
 
 #include <osv/pci.hh>
-#include <osv/kernel_config_logger_debug.h>
+#include <osv/kernel_config.h>
 #include "drivers/pci-function.hh"
 #include "arch-dtb.hh"
 

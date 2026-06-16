@@ -30,9 +30,7 @@
 #include <api/time.h>
 #include <osv/rwlock.h>
 #include <osv/export.h>
-#include <osv/kernel_config_lazy_stack.h>
-#include <osv/kernel_config_lazy_stack_invariant.h>
-#include <osv/kernel_config_threads_default_pthread_stack_size.h>
+#include <osv/kernel_config.h>
 
 #include "pthread.hh"
 

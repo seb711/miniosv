@@ -133,7 +133,7 @@ very-quiet = $(if $V, $1, @$1)
 # there is no boot sector or compressed image, so loader.img is not built.
 # aarch64 keeps loader.img (preboot stub + uncompressed loader).
 ifeq ($(arch),x64)
-all: $(out)/loader-stripped.elf links $(out)/vmlinuz.bin
+all: $(out)/loader-stripped.elf links
 endif
 ifeq ($(arch),aarch64)
 all: $(out)/loader.img links
@@ -201,21 +201,14 @@ cscope:
 local-includes =
 INCLUDES = $(local-includes) -Iarch/$(arch) -I. -Iinclude  -Iarch/common
 #
-# C++ standard headers come from our own libc++ (CXX_INCLUDES is set below,
-# overriding anything here). The aarch64 cross-build still needs a sysroot and
-# the target toolchain's standard C headers (e.g. unwind.h) for the freestanding
-# bits; the native x86 build needs nothing extra.
+# C++ standard headers come from our own libc++ (CXX_INCLUDES is set below).
+# There is no GNU toolchain and no sysroot on either arch: C headers come from
+# OSv's own include/api, C++ headers from our libc++, and <unwind.h> from
+# libunwind (already on the include path). The aarch64 cross build compiles
+# -nostdinc so it does not pick up the host's headers.
 ifeq ($(arch),aarch64)
-  # Pure-LLVM aarch64 cross build: clang cross-compiles (--target below), the C
-  # headers come from OSv's own include/api (compiled -nostdinc), the C++ headers
-  # from our libc++, and <unwind.h> (the only freestanding header the kernel
-  # needs, for backtrace.cc) from libunwind, which is already on the include path
-  # (external/llvm-project/libunwind/include). No GNU cross toolchain, no sysroot.
-  STANDARD_GCC_INCLUDES =
-  gcc-sysroot =
   standard-includes-flag = -nostdinc
 else
-  STANDARD_GCC_INCLUDES =
   standard-includes-flag =
 endif
 
@@ -244,8 +237,6 @@ INCLUDES += $(CXX_INCLUDES)
 INCLUDES += $(pre-include-api)
 INCLUDES += -isystem include/api
 INCLUDES += -isystem include/api/$(arch)
-# must be after include/api, since it includes some libc-style headers:
-INCLUDES += $(STANDARD_GCC_INCLUDES)
 INCLUDES += -isystem $(out)/gen/include
 INCLUDES += $(post-includes-bsd)
 
@@ -277,10 +268,8 @@ source-dialects = -D_GNU_SOURCE
 $(out)/libc/%.o: source-dialects =
 
 # do not hide symbols in libc because it has its own hiding mechanism
-$(out)/libc/%.o: cc-hide-flags =
-$(out)/libc/%.o: cxx-hide-flags =
 
-kernel-defines = -D_KERNEL $(source-dialects) $(cc-hide-flags) $(gc-flags)
+kernel-defines = -D_KERNEL $(source-dialects)
 
 # This play the same role as "_KERNEL", but _KERNEL unfortunately is too
 # overloaded. A lot of files will expect it to be set no matter what, specially
@@ -307,7 +296,7 @@ COMMON = $(autodepend) -g -Wall -Wno-pointer-arith $(CFLAGS_WERROR) -Wformat=0 -
 	$(kernel-defines) \
 	-fno-omit-frame-pointer $(compiler-specific) \
 	-include compiler/include/intrinsics.hh \
-	$(conf_compiler_cflags) $(conf_compiler_opt) $(tracing-flags) $(gcc-sysroot) \
+	$(conf_compiler_cflags) $(conf_compiler_opt) $(tracing-flags) \
 	-D__OSV__ -DARCH_STRING=$(ARCH_STR) $(EXTRA_FLAGS)
 COMMON += $(standard-includes-flag)
 COMMON += $(wno-unused-private-field)
@@ -318,17 +307,8 @@ tracing-excl := $(shell $(CXX) $(CFLAGS_WERROR) -finstrument-functions-exclude-f
 tracing-flags-1 = -finstrument-functions $(tracing-excl)
 tracing-flags = $(tracing-flags-$(conf_tracing))
 
-cc-hide-flags-0 =
-cc-hide-flags-1 = -fvisibility=hidden
-cc-hide-flags = $(cc-hide-flags-$(conf_hide_symbols))
 
-cxx-hide-flags-0 =
-cxx-hide-flags-1 = -fvisibility-inlines-hidden
-cxx-hide-flags = $(cxx-hide-flags-$(conf_hide_symbols))
 
-gc-flags-0 =
-gc-flags-1 = -ffunction-sections -fdata-sections
-gc-flags = $(gc-flags-$(conf_hide_symbols))
 
 gcc-opt-Og := $(call compiler-flag, -Og, -Og, compiler/empty.cc)
 
@@ -337,7 +317,7 @@ gcc-opt-Og := $(call compiler-flag, -Og, -Og, compiler/empty.cc)
 # immediate offsets resolved at link time rather than GOT-based TPOFF64 dynamic
 # relocations that would need processing at boot.
 tls-model = -ftls-model=local-exec
-CXXFLAGS = -std=$(conf_cxx_level) $(libcxx-includes) $(COMMON) $(cxx-hide-flags) $(tls-model)
+CXXFLAGS = -std=$(conf_cxx_level) $(libcxx-includes) $(COMMON) $(tls-model)
 CFLAGS = -std=gnu99 $(COMMON) $(tls-model)
 
 # should be limited to files under libc/ eventually
@@ -362,38 +342,28 @@ $(out)/fs/vfs/main.o: CXXFLAGS += -Wno-sign-compare -Wno-write-strings
 
 
 makedir = $(call very-quiet, mkdir -p $(dir $@))
-EXTRA_LDFLAGS =
-build-so = $(CC) $(CFLAGS) -o $@ $^ $(EXTRA_LDFLAGS) $(EXTRA_LIBS)
-q-build-so = $(call quiet, $(build-so), LINK $@)
 
 
 # Order-only dep on the libc++ build: every C++ TU includes our libc++ headers
 # (libcxx-includes in CXXFLAGS), so they must exist before any .cc compiles. In
 # a from-scratch -j build the libc++ build would otherwise race the kernel
 # compiles (and fail with e.g. "'functional' file not found").
-$(out)/%.o: %.cc include/osv/kernel_config_hide_symbols.h | generated-headers $(out)/.libcxx-built
+$(out)/%.o: %.cc | generated-headers $(out)/.libcxx-built
 	$(makedir)
 	$(call quiet, $(CXX) $(CXXFLAGS) -c -o $@ $<, CXX $*.cc)
 
-$(out)/%.o: %.c include/osv/kernel_config_hide_symbols.h | generated-headers
+$(out)/%.o: %.c | generated-headers
 	$(makedir)
 	$(call quiet, $(CC) $(CFLAGS) -c -o $@ $<, CC $*.c)
 
-$(out)/%.o: %.S include/osv/kernel_config_hide_symbols.h
+$(out)/%.o: %.S
 	$(makedir)
 	$(call quiet, $(ASCOMPILE) $(ASFLAGS) -c -o $@ $<, AS $*.S)
 
-$(out)/%.o: %.s include/osv/kernel_config_hide_symbols.h
+$(out)/%.o: %.s
 	$(makedir)
 	$(call quiet, $(ASCOMPILE) $(ASFLAGS) -c -o $@ $<, AS $*.s)
 
-%.so: EXTRA_FLAGS = -fPIC
-# -nostartfiles: kernel-space .so's need no CRT, and the aarch64 cross build has
-# no GNU sysroot to supply crti.o/crtn.o/Scrt1.o.
-%.so: EXTRA_LDFLAGS = -shared -nostartfiles -Wl,-z,relro -Wl,-z,lazy
-%.so: %.o
-	$(makedir)
-	$(q-build-so)
 
 autodepend = -MD -MT $@ -MP
 
@@ -411,26 +381,8 @@ ifeq ($(arch),x64)
 kernel_base := 0x200000
 kernel_vm_base := 0x40200000
 
-# the default of 512 bytes can be overridden by passing the app_local_exec_tls_size
-# environment variable to the make or scripts/build
-app_local_exec_tls_size := 0x200
-
-# vmlinuz.bin is the uncompressed bzImage-style wrapper around loader-stripped.elf
-# for hosts that expect a Linux-kernel blob. The primary x64 boot path is
-# 'qemu -kernel loader[-stripped].elf' (multiboot/PVH), which needs no wrapper.
-kernel_size = $(shell stat --printf %s $(out)/loader-stripped.elf)
-
-$(out)/arch/x64/vmlinuz-boot32.o: $(out)/loader-stripped.elf
-$(out)/arch/x64/vmlinuz-boot32.o: ASFLAGS += -I$(out) -DOSV_KERNEL_SIZE=$(kernel_size)
-
-$(out)/vmlinuz-boot.bin: $(out)/arch/x64/vmlinuz-boot32.o arch/x64/vmlinuz-boot.ld
-	$(call quiet, $(LD) -static -o $@ \
-		$(filter-out %.bin, $(^:%.ld=-T %.ld)), LD $@)
-
-$(out)/vmlinuz.bin: $(out)/vmlinuz-boot.bin $(out)/loader-stripped.elf
-	$(call quiet, dd if=$(out)/vmlinuz-boot.bin of=$@ > /dev/null 2>&1, DD vmlinuz.bin vmlinuz-boot.bin)
-	$(call quiet, dd if=$(out)/loader-stripped.elf of=$@ conv=notrunc seek=4 > /dev/null 2>&1, \
-		DD vmlinuz.bin loader-stripped.elf)
+# The x64 boot path is 'qemu -kernel loader[-stripped].elf' (multiboot/PVH),
+# which boots the ELF directly - no bzImage/vmlinuz wrapper is needed.
 
 kernel_vm_shift := $(shell printf "0x%X" $(shell expr $$(( $(kernel_vm_base) - $(kernel_base) )) ))
 
@@ -439,7 +391,6 @@ endif # x64
 ifeq ($(arch),aarch64)
 
 kernel_vm_base := 0xfc0080000 #63GB
-app_local_exec_tls_size := 0x200
 
 include $(libfdt_base)/Makefile.libfdt
 libfdt-source := $(patsubst %.c, $(libfdt_base)/%.c, $(LIBFDT_SRCS))
@@ -477,15 +428,6 @@ COMMON += $(wno-extern-c-compat) $(wno-ignored-attributes) $(wno-sometimes-unini
 
 
 
-wno-vla-cxx-extension := $(call compiler-flag, -Wno-vla-cxx-extension, -Wno-vla-cxx-extension, compiler/empty.cc)
-wno-c99-designator    := $(call compiler-flag, -Wno-c99-designator,    -Wno-c99-designator,    compiler/empty.cc)
-$(out)/drivers/libtsm/%.o: CXXFLAGS += $(wno-vla-cxx-extension) $(wno-c99-designator)
-libtsm :=
-libtsm += drivers/libtsm/tsm_render.o
-libtsm += drivers/libtsm/tsm_screen.o
-libtsm += drivers/libtsm/tsm_vte.o
-libtsm += drivers/libtsm/tsm_vte_charsets.o
-
 drivers :=
 drivers += core/mmu.o
 drivers += arch/$(arch)/early-console.o
@@ -509,10 +451,6 @@ endif
 drivers += drivers/driver.o
 
 ifeq ($(arch),x64)
-ifeq ($(conf_drivers_vga),1)
-drivers += $(libtsm)
-drivers += drivers/vga.o
-endif
 drivers += drivers/kbd.o drivers/isa-serial.o
 drivers += arch/$(arch)/pvclock-abi.o
 
@@ -655,7 +593,6 @@ endif
 objects += arch/x64/ioapic.o
 objects += arch/x64/apic.o
 objects += arch/x64/apic-clock.o
-objects += arch/x64/prctl.o
 objects += arch/x64/vmlinux.o
 objects += arch/x64/vmlinux-boot64.o
 objects += arch/x64/pvh-boot.o
@@ -679,7 +616,6 @@ ifeq ($(conf_tracepoints_sampler),1)
 objects += core/sampler.o
 endif
 
-objects += core/futex.o
 objects += core/sched.o
 objects += core/mmio.o
 objects += core/kprintf.o
@@ -711,34 +647,16 @@ objects += core/string_utils.o
 
 #include $(src)/libc/build.mk:
 libc =
-libc_to_hide =
-environ_libc =
 
-libc += internal/_chk_fail.o
-libc_to_hide += internal/_chk_fail.o
-libc += internal/floatscan.o
-libc += internal/intscan.o
 libc += internal/libc.o
-libc += internal/shgetc.o
 
 
 
 libc += env/__environ.o
 libc += env/secure_getenv.o
 
-environ_libc += env/__environ.c
-environ_libc += env/clearenv.c
-environ_libc += env/getenv.c
-environ_libc += env/secure_getenv.c
-environ_libc += env/putenv.c
-environ_libc += env/setenv.c
-environ_libc += env/unsetenv.c
-environ_libc += string/strchrnul.c
 
 
-libc += errno/strerror.o
-
-libc += math/finitel.o
 
 # Issue #867: Gcc 4.8.4 has a bug where it optimizes the trivial round-
 # related functions incorrectly - it appears to convert calls to any
@@ -750,26 +668,15 @@ libc += math/finitel.o
 
 libc += misc/error.o
 libc += misc/getopt.o
-libc_to_hide += misc/getopt.o
 libc += misc/getopt_long.o
-libc_to_hide += misc/getopt_long.o
-libc += misc/realpath.o
 libc += misc/backtrace.o
-libc += misc/uname.o
-libc += misc/lockf.o
-libc += misc/__longjmp_chk.o
 
 
-libc += multibyte/__mbsnrtowcs_chk.o
-libc += multibyte/__mbsrtowcs_chk.o
-libc += multibyte/__mbstowcs_chk.o
 
 
 libc += prng/random.o
 libc += random.o
 
-libc += process/execve.o
-libc += process/waitpid.o
 
 libc += arch/$(arch)/setjmp/sigsetjmp.o
 libc += signal/block.o
@@ -778,7 +685,6 @@ ifeq ($(arch),x64)
 libc += arch/$(arch)/ucontext/getcontext.o
 libc += arch/$(arch)/ucontext/setcontext.o
 libc += arch/$(arch)/ucontext/start_context.o
-libc_to_hide += arch/$(arch)/ucontext/start_context.o
 libc += arch/$(arch)/ucontext/ucontext.o
 ifeq ($(conf_memory_optimize),1)
 libc += string/memmove.o
@@ -791,146 +697,32 @@ endif
 # llvm-libc (whose FILE has no OSv console backend). The musl-derived sources
 # were vendored into libc/stdio/ (Phase 8.11). tmpfile/tmpnam/tempnam were
 # dropped: they create/stat files (dead with no filesystem, and unreferenced).
-libc += stdio/__fclose_ca.o
-libc += stdio/__fdopen.o
 $(out)/libc/stdio/__fdopen.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/__fmodeflags.o
-libc += stdio/__fopen_rb_ca.o
-libc += stdio/__fprintf_chk.o
-libc += stdio/__lockfile.o
-libc += stdio/__overflow.o
-libc += stdio/__stdio_close.o
 $(out)/libc/stdio/__stdio_close.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/__stdio_exit.o
-libc += stdio/__stdio_read.o
-libc += stdio/__stdio_seek.o
 $(out)/libc/stdio/__stdio_seek.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/__stdio_write.o
 $(out)/libc/stdio/__stdio_write.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/__stdout_write.o
-libc += stdio/__string_read.o
-libc += stdio/__toread.o
-libc += stdio/__towrite.o
-libc += stdio/__uflow.o
-libc += stdio/__vfprintf_chk.o
-libc += stdio/ofl.o
-libc += stdio/ofl_add.o
-libc += stdio/asprintf.o
-libc += stdio/clearerr.o
-libc += stdio/dprintf.o
-libc += stdio/ext.o
-libc += stdio/ext2.o
-libc += stdio/fclose.o
-libc += stdio/feof.o
-libc += stdio/ferror.o
-libc += stdio/fflush.o
-libc += stdio/fgetc.o
-libc += stdio/fgetln.o
-libc += stdio/fgetpos.o
-libc += stdio/fgets.o
-libc += stdio/fileno.o
-libc += stdio/flockfile.o
-libc += stdio/fmemopen.o
-libc += stdio/fopen.o
 $(out)/libc/stdio/fopen.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/fprintf.o
-libc += stdio/fputc.o
-libc += stdio/fputs.o
-libc += stdio/fread.o
-libc += stdio/__fread_chk.o
-libc += stdio/freopen.o
 $(out)/libc/stdio/freopen.o: CFLAGS += --include libc/syscall_to_function.h
-libc += stdio/fscanf.o
-libc += stdio/fseek.o
-libc += stdio/fsetpos.o
-libc += stdio/ftell.o
-libc += stdio/ftrylockfile.o
-libc += stdio/funlockfile.o
-libc += stdio/fwrite.o
-libc += stdio/getc.o
-libc += stdio/getc_unlocked.o
-libc += stdio/getchar.o
-libc += stdio/getchar_unlocked.o
-libc += stdio/getdelim.o
-libc += stdio/getline.o
-libc += stdio/gets.o
-libc += stdio/getw.o
-libc += stdio/open_memstream.o
-libc += stdio/perror.o
-libc += stdio/printf.o
-libc += stdio/putc.o
-libc += stdio/putc_unlocked.o
-libc += stdio/putchar.o
-libc += stdio/putchar_unlocked.o
-libc += stdio/puts.o
-libc += stdio/putw.o
-libc += stdio/remove.o
-libc += stdio/rewind.o
-libc += stdio/scanf.o
-libc += stdio/setbuf.o
-libc += stdio/setbuffer.o
-libc += stdio/setlinebuf.o
-libc += stdio/setvbuf.o
-libc += stdio/snprintf.o
-libc += stdio/sprintf.o
-libc += stdio/sscanf.o
-libc += stdio/stderr.o
-libc += stdio/stdin.o
-libc += stdio/stdout.o
-libc += stdio/ungetc.o
-libc += stdio/vasprintf.o
-libc += stdio/vdprintf.o
-libc += stdio/vfprintf.o
 $(out)/libc/stdio/vfprintf.o: COMMON += $(wno-maybe-uninitialized)
-libc += stdio/vfscanf.o
 $(out)/libc/stdio/vfscanf.o: COMMON += $(wno-maybe-uninitialized)
-libc += stdio/vprintf.o
-libc += stdio/vscanf.o
-libc += stdio/vsnprintf.o
-libc += stdio/vsprintf.o
-libc += stdio/vsscanf.o
-libc += stdio/printf-hooks.o
 
-$(out)/libc/stdlib/qsort_r.o: COMMON += $(wno-dangling-pointer)
 ifeq ($(arch),x64)
 libc += stdlib/unimplemented.o
 endif
 
-libc += string/__memcpy_chk.o
 libc += string/explicit_bzero.o
-libc += string/__explicit_bzero_chk.o
 ifeq ($(conf_memory_optimize),1)
 libc += string/memcpy.o
-libc_to_hide += string/memcpy.o
 else
 endif
-libc += string/__memmove_chk.o
 libc += string/memset.o
-libc_to_hide += string/memset.o
-libc += string/__memset_chk.o
 libc += string/rawmemchr.o
-libc += string/__stpcpy_chk.o
-libc += string/__strcat_chk.o
-libc += string/__strcpy_chk.o
 libc += string/strerror_r.o
-libc += string/__strncat_chk.o
-libc += string/__strncpy_chk.o
 libc += string/stresep.o
-libc_to_hide += string/stresep.o
-libc += string/__wcscpy_chk.o
-libc += string/__wcsncpy_chk.o
-libc += string/__wmemcpy_chk.o
-libc += string/__wmemmove_chk.o
-libc += string/__wmemset_chk.o
 
 
-libc += time/__tz.o
-$(out)/libc/time/__tz.o: pre-include-api = -isystem include/api/internal_musl_headers
-libc += time/__year_to_secs.o
-$(out)/libc/time/ftime.o: CFLAGS += -Ilibc/include
 
 
-libc += unistd/sethostname.o
 libc += unistd/sync.o
 libc += unistd/getpgid.o
 libc += unistd/setpgid.o
@@ -941,30 +733,28 @@ libc += unistd/ttyname_r.o
 
 
 libc += pthread.o
-libc_to_hide += pthread.o
 libc += pthread_barrier.o
 libc += libc.o
 libc += dlfcn.o
 libc += io.o
+# Stdio: the FILE implementation (printf/fopen/fread/scanf/...) comes from the
+# llvm-libc archive; these are the OSv seam (console-backed std streams + FILE
+# stubs) and the printf-extension stubs.
+libc += stdio/llvm_stdio.o
+libc += stdio/printf-hooks.o
 libc += time.o
-libc_to_hide += time.o
 libc += signal.o
-libc_to_hide += signal.o
 libc += mman.o
-libc_to_hide += mman.o
 libc += sem.o
-libc_to_hide += sem.o
 # pipe, af_local (unix sockets), mount, eventfd, timerfd, shm and inotify all
 # depend on the (removed) file-descriptor table and filesystem.
 libc += user.o
 libc += resource.o
-libc += syslog.o
 libc += cxa_thread_atexit.o
 libc += cpu_set.o
 libc += malloc_hooks.o
 libc += mallopt.o
 
-libc += linux/makedev.o
 
 
 
@@ -972,9 +762,6 @@ libc += linux/makedev.o
 # in-memory file systems. Minimal console-backed stdio lives in libc/io.cc.
 objects += $(addprefix libc/, $(libc))
 
-libc_objects_to_hide = $(addprefix $(out)/libc/, $(libc_to_hide))
-$(libc_objects_to_hide): cc-hide-flags = $(cc-hide-flags-$(conf_hide_symbols))
-$(libc_objects_to_hide): cxx-hide-flags = $(cxx-hide-flags-$(conf_hide_symbols))
 
 # Compiler builtins (soft-int helpers like __umodti3) come from LLVM compiler-rt,
 # not GNU libgcc - no GCC anywhere in the toolchain. The C++ exception unwinder
@@ -1009,8 +796,6 @@ boost-libs :=
 
 # nfs/ext null vfsops went with the filesystem.
 
-$(out)/loader.o: CXXFLAGS += -DHIDE_SYMBOLS=$(conf_hide_symbols)
-$(out)/core/trace.o: CXXFLAGS += -DHIDE_SYMBOLS=$(conf_hide_symbols)
 
 # The OSv kernel is linked into an ordinary, non-PIE, executable, so there is no point in compiling
 # with -fPIC or -fpie and objects that can be linked into a PIE. On the contrary, PIE-compatible objects
@@ -1018,47 +803,11 @@ $(out)/core/trace.o: CXXFLAGS += -DHIDE_SYMBOLS=$(conf_hide_symbols)
 # default was changed to use -fpie, so we need to undo this default by explicitly specifying -fno-pie.
 $(objects:%=$(out)/%) $(drivers:%=$(out)/%) $(out)/arch/$(arch)/boot.o $(out)/loader.o $(out)/runtime.o: COMMON += -fno-pie
 
-# ld has a known bug (https://sourceware.org/bugzilla/show_bug.cgi?id=6468)
-# where if the executable doesn't use shared libraries, its .dynamic section is
-# dropped, even with --export-dynamic. We need .dynamic: OSv self-relocates at
-# boot via .rela.dyn / DT_RELA (removing this makes the kernel reboot-loop -
-# empirically verified). The workaround is to link loader.elf against a
-# do-nothing shared library.
-# -nostartfiles: this do-nothing .so needs no CRT init/fini, and the aarch64
-# cross build has no GNU sysroot to supply crti.o/crtn.o/Scrt1.o.
-$(out)/dummy-shlib.so: $(out)/dummy-shlib.o
-	$(call quiet, $(CXX) -nodefaultlibs -nostartfiles -shared $(gcc-sysroot) -o $@ $^, LINK $@)
-
-stage1_targets = $(out)/arch/$(arch)/boot.o $(out)/loader.o $(out)/runtime.o $(drivers:%=$(out)/%) $(objects:%=$(out)/%) $(out)/dummy-shlib.so
+stage1_targets = $(out)/arch/$(arch)/boot.o $(out)/loader.o $(out)/runtime.o $(drivers:%=$(out)/%) $(objects:%=$(out)/%)
 stage1: $(stage1_targets) links
 .PHONY: stage1
 
-loader_options_dep = $(out)/arch/$(arch)/loader_options.ld
-$(loader_options_dep): stage1
-	$(makedir)
-	@if [ '$(shell cat $(loader_options_dep) 2>&1)' != 'APP_LOCAL_EXEC_TLS_SIZE = $(app_local_exec_tls_size);' ]; then \
-		echo -n "APP_LOCAL_EXEC_TLS_SIZE = $(app_local_exec_tls_size);" > $(loader_options_dep) ; \
-	fi
 
-ifeq ($(conf_hide_symbols),1)
-version_script_file:=$(out)/version_script
-#Detect which version script to be used and copy to $(out)/version_script
-#so that loader.elf/zfs_builder.elf is rebuilt accordingly if version script has changed
-ifdef conf_version_script
-ifeq (,$(wildcard $(conf_version_script)))
-    $(error Missing version script: $(conf_version_script))
-endif
-ifneq ($(shell cmp $(out)/version_script $(conf_version_script)),)
-$(shell cp $(conf_version_script) $(out)/version_script)
-endif
-else
-ifneq ($(shell cmp $(out)/version_script $(out)/default_version_script),)
-$(shell cp $(out)/default_version_script $(out)/version_script)
-endif
-endif
-linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group \
-  $(compiler_rt_builtins) $(boost-libs) --gc-sections
-else
 # The C++ runtime (libc++ / libc++abi / libunwind) is linked on demand inside a
 # --start-group, not whole-archived: the slim kernel links its single app at
 # build time and exports no dynamic C++ ABI, so only referenced runtime objects
@@ -1066,7 +815,6 @@ else
 # each symbol once avoids the multiple-definition clash from the libunwind
 # objects that the build bundles into all three archives.
 linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group $(boost-libs) $(compiler_rt_builtins)
-endif
 
 # LLVM libc (LLVM_LIBC_PLAN.md): llvm-libc is the generic libc, linked trailing
 # so it supplies any symbol the kernel and the OSv libc objects do not define.
@@ -1077,7 +825,7 @@ endif
 # under libc/ - the musl submodule was deleted in Phase 8.13.
 llvm_libc_libdir = build/llvm-libc/$(arch)/libc/lib
 llvm_libc_archives = $(llvm_libc_libdir)/libc.a $(llvm_libc_libdir)/libm.a
-$(out)/.llvm-libc-built: scripts/build-llvm-libc.sh tools/llvm-libc/entrypoints.txt tools/llvm-libc/config.json tools/llvm-libc/headers.txt
+$(out)/.llvm-libc-built: scripts/build-llvm-libc.sh external/llvm-libc-config/entrypoints.txt external/llvm-libc-config/config.json external/llvm-libc-config/headers.txt
 	$(call quiet, scripts/build-llvm-libc.sh $(arch), LLVM-LIBC $(arch))
 	$(call very-quiet, touch $@)
 $(llvm_libc_archives): $(out)/.llvm-libc-built
@@ -1109,23 +857,15 @@ libcxx_dep = $(libcxx_archives)
 # __ctype_*_loc glibc table accessors, the whole temp/ family (mkstemp/mkdtemp/
 # mktemp/__randname - no filesystem), and time/{strptime,timegm,getdate,ftime,
 # __secs_to_tm,__tm_to_secs}.
-libc += math/__fpclassifyl.o     # x87 long-double classify (vfprintf %Lf)
-libc += math/__signbitl.o
-libc += time/__month_to_secs.o
-libc += time/time.o              # time() -> OSv clock_gettime
-libc += multibyte/mbsinit.o      # vfscanf
-libc += string/strchrnul.o       # provides strchrnul + hidden __strchrnul (env)
+# x87/binary128 long-double survivors llvm-libc lacks (__fpclassifyl/__signbitl
+# for vfprintf %Lf, logl). strchrnul + mbsinit now come from the llvm-libc
+# archive (entrypoints libc.src.string.strchrnul / libc.src.wchar.mbsinit).
+libc += math/longdouble.o
 libc += string/strsignal.o
-libc += env/getenv.o
-libc += env/setenv.o
-libc += env/putenv.o
-libc += env/unsetenv.o
-libc += env/clearenv.o
-# env + strchrnul use the musl-internal decls (__environ, __putenv, __strchrnul)
-# that live in OSv's internal_musl_headers (the kernel build does not otherwise
-# put that dir on the path, unlike the libenviron.so build).
-$(out)/libc/env/%.o: pre-include-api = -isystem include/api/internal_musl_headers
-$(out)/libc/string/strchrnul.o: pre-include-api = -isystem include/api/internal_musl_headers
+# OSv-owned env management (getenv/setenv/putenv/unsetenv) - getenv on baremetal
+# is OS-coupled, so llvm-libc cannot supply it. time() routes to OSv's clock.
+libc += env/env.o
+libc += time/time_shims.o
 
 ifeq ($(arch),aarch64)
 def_symbols = --defsym=OSV_KERNEL_VM_BASE=$(kernel_vm_base)
@@ -1135,60 +875,12 @@ def_symbols = --defsym=OSV_KERNEL_BASE=$(kernel_base) \
               --defsym=OSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 endif
 
-$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
+$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
-		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -L$(out)/arch/$(arch) \
-            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep),$^))) \
+		-static --eh-frame-hdr -L$(out)/arch/$(arch) \
+            $(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep),$^)) \
 	    $(linker_archives_options) $(conf_linker_extra_options), \
 		LINK loader.elf)
-	@# Build libosv.so matching this loader.elf. This is not a separate
-	@# rule because that caused bug #545.
-	@readelf --dyn-syms --wide $(out)/loader.elf > $(out)/osv.syms
-	@scripts/libosv.py $(out)/osv.syms $(out)/libosv.ld `scripts/osv-version.sh` | $(CC) -c -o $(out)/osv.o -x assembler -
-	@echo '0000000000000000 T _text' > $(out)/osv.kallsyms
-	@echo '0000000000000000 T _stext' >> $(out)/osv.kallsyms
-	@grep ': 0000' $(out)/osv.syms | grep -v 'NOTYPE' | awk '{ print $$2 " T " $$8 }' | c++filt >> $(out)/osv.kallsyms
-	$(call quiet, $(CC) $(out)/osv.o -nostdlib -shared -o $(out)/libosv.so -T $(out)/libosv.ld, LIBOSV.SO)
-
-
-
-environ_sources = $(addprefix libc/, $(environ_libc))
-
-$(out)/libenviron.so: pre-include-api = -isystem include/api/internal_musl_headers
-$(out)/libenviron.so: source-dialects =
-
-$(out)/libenviron.so: $(environ_sources)
-	$(makedir)
-	 $(call quiet, $(CC) $(CFLAGS) -shared -nostartfiles -nodefaultlibs -o $(out)/libenviron.so $(environ_sources), CC libenviron.so)
-
-$(out)/libvdso.so: libc/vdso/vdso.cc
-	$(makedir)
-	$(call quiet, $(CXX) $(CXXFLAGS) -fno-exceptions -c -fPIC -o $(out)/libvdso.o libc/vdso/vdso.cc, CXX libvdso.o)
-	$(call quiet, $(LD) -shared -z now -o $(out)/libvdso.so $(out)/libvdso.o -T libc/vdso/vdso.lds --version-script=libc/vdso/$(arch)/vdso.version, LINK libvdso.so)
-
-bootfs_manifest ?= bootfs_empty.manifest.skel
-
-# If parameter "bootfs_manifest" has been changed since the last make,
-# bootfs.bin requires rebuilding
-bootfs_manifest_dep = $(out)/bootfs_manifest.last
-.PHONY: phony
-$(bootfs_manifest_dep): phony
-	@if [ '$(shell cat $(bootfs_manifest_dep) 2>&1)' != '$(bootfs_manifest)' ]; then \
-		echo -n $(bootfs_manifest) > $(bootfs_manifest_dep) ; \
-	fi
-
-bootfs_dep := scripts/mkbootfs.py $(bootfs_manifest) $(bootfs_manifest_dep) $(out)/libenviron.so
-$(out)/bootfs.bin: $(bootfs_dep)
-	$(call quiet, olddir=`pwd`; cd $(out); "$$olddir"/scripts/mkbootfs.py -o bootfs.bin -d bootfs.bin.d -m "$$olddir"/$(bootfs_manifest), MKBOOTFS $@)
-
-$(out)/bootfs.o: $(out)/bootfs.bin
-$(out)/bootfs.o: ASFLAGS += -I$(out)
-
-$(out)/libvdso-stripped.so: $(out)/libvdso.so
-	$(call quiet, $(STRIP) $(out)/libvdso.so -o $(out)/libvdso-stripped.so, STRIP libvdso.so -> libvdso-stripped.so)
-
-$(out)/libvdso-content.o: $(out)/libvdso-stripped.so
-$(out)/libvdso-content.o: ASFLAGS += -I$(out)
 
 
 ################################################################################

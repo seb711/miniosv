@@ -5,7 +5,6 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
-INCLUDE "loader_options.ld"
 SECTIONS
 {
 	/* Set the initial program counter to one page beyond the minimal
@@ -31,7 +30,6 @@ SECTIONS
         *(.start32_from_vmlinuz_address)
     KEEP(*(.start32_from_vmlinuz_address)) }
     . = OSV_KERNEL_VM_BASE + 0x1000;
-    .dynamic : AT(ADDR(.dynamic) - OSV_KERNEL_VM_SHIFT) { *(.dynamic) } :dynamic :text
     .text : AT(ADDR(.text) - OSV_KERNEL_VM_SHIFT) {
         HIDDEN(text_start = .);
         *(.text.hot .text.hot.*)
@@ -74,6 +72,12 @@ SECTIONS
     KEEP(*(.tracepoint_patch_sites)) } : text
     .data.rel.ro : AT(ADDR(.data.rel.ro) - OSV_KERNEL_VM_SHIFT) { *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*) *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*) } : text
     .data : AT(ADDR(.data) - OSV_KERNEL_VM_SHIFT) { *(.data) *(.data.*) } :text
+    . = ALIGN(8);
+    HIDDEN(__rela_iplt_start = .);
+    .rela.iplt : AT(ADDR(.rela.iplt) - OSV_KERNEL_VM_SHIFT) {
+        *(.rela.iplt) *(.rela.dyn) *(.rela.plt)
+    } :text
+    HIDDEN(__rela_iplt_end = .);
     HIDDEN(_init_array_start = .);
     .init_array : AT(ADDR(.init_array) - OSV_KERNEL_VM_SHIFT) {
         *(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*))
@@ -96,11 +100,8 @@ SECTIONS
     .tdata : AT(ADDR(.tdata) - OSV_KERNEL_VM_SHIFT) { *(.tdata .tdata.* .gnu.linkonce.td.*) } :tls :text
     .tbss : AT(ADDR(.tbss) - OSV_KERNEL_VM_SHIFT) {
         *(.tbss .tbss.* .gnu.linkonce.tb.*)
-        HIDDEN(_pie_static_tls_start = .);
-        /* This is a reserve intended for executables' (pie or non-pie) TLS block */
-        . = . + APP_LOCAL_EXEC_TLS_SIZE;
+        /* Keep the TLS template a multiple of 64 bytes; setup_tcb() asserts it. */
         . = ALIGN(64);
-        HIDDEN(_pie_static_tls_end = .);
     } :tls :text
     HIDDEN(.tls_template_size = SIZEOF(.tdata) + SIZEOF(.tbss));
     .bss : AT(ADDR(.bss) - OSV_KERNEL_VM_SHIFT) { *(.bss .bss.*) } :text
@@ -129,7 +130,6 @@ SECTIONS
 PHDRS {
 	text PT_LOAD FILEHDR PHDRS;
 	tls PT_TLS;
-	dynamic PT_DYNAMIC;
 	eh_frame PT_GNU_EH_FRAME;
 	note PT_NOTE;
 }

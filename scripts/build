@@ -1,23 +1,22 @@
 #!/usr/bin/env bash
-# Build the slim OSv kernel and package it with a read-only (rofs) data disk.
+# Build the slim OSv kernel.
 #
 # The application is statically linked into the kernel (app/ by default, or
-# test/ via "app=tests"), so there are no modules to build - this script builds
-# the kernel with make, then wraps the rofs filesystem (mount points +
-# libenviron.so, from usr_rofs.manifest.skel) into build/<mode>/disk.img. The
-# kernel is loaded via QEMU -kernel (PVH); the disk only carries the filesystem.
+# test/ via "app=tests"), and the kernel is booted directly via QEMU -kernel
+# (PVH) with no disk: there is no filesystem, no modules, and no data image.
+# This script just drives make. Run the result with scripts/run.py.
 #
 # Usage:
-#   scripts/build [make-args] [fs=rofs] [image=os-features]   # build
-#   scripts/build clean                                       # clean
+#   scripts/build [make-args]          # build
+#   scripts/build clean                # clean
 #
-# fs=rofs is the only supported filesystem; image= is accepted but ignored (the
-# app is in-kernel). Run the result with scripts/run.py.
+# fs=/image=/modules=/usrskel= are accepted but ignored (kept for compatibility
+# with old invocations); the app is in-kernel and there is no image to build.
 
 set -e
 trap 'echo "$0 failed: $BASH_COMMAND" >&2; exit $?' ERR
 
-usage() { sed -n '2,17p' "$0"; exit "${1:-0}"; }
+usage() { sed -n '2,15p' "$0"; exit "${1:-0}"; }
 
 # If "MAKEFLAGS" is set we were invoked from "make"; strip image=/modules= so the
 # nested make below does not loop back into us.
@@ -29,14 +28,12 @@ unset image modules
 
 # Forward every arg to make except the build-only keys we interpret here.
 declare -a args
-fs_type=rofs
 do_clean=
 for i in "$@"; do
 	case $i in
 	--help|-h)        usage ;;
 	clean)            do_clean=yes ;;
-	fs=*)             fs_type=${i#fs=} ;;
-	image=*|modules=*|usrskel=*) ;;   # app is in-kernel; these are ignored
+	fs=*|image=*|modules=*|usrskel=*) ;;   # app is in-kernel, no image; ignored
 	arch=*)           eval "$i"; args+=("$i") ;;
 	*)                args+=("$i") ;;
 	esac
@@ -52,50 +49,8 @@ if [ -n "$do_clean" ]; then
 	exit
 fi
 
-if [ "$fs_type" != "rofs" ]; then
-	echo "scripts/build: only fs=rofs is supported in the slim build (got '$fs_type')" >&2
-	exit 2
-fi
-
-SRC=$(pwd)
-
-# Stage 1: build all kernel dependencies (generated headers, libc++/llvm-libc,
-# every object) so the link can proceed.
-make "${args[@]}" stage1 | tee build.out
-test "${PIPESTATUS[0]}" -eq 0 || { echo "make stage1 failed" >&2; exit 1; }
-
-test -L build/last -a -f build/last/loader.o || { echo "'make stage1' did not leave expected results" >&2; exit 2; }
-OUT=build/$(readlink build/last)
-arch=$(expr "$OUT" : '.*\.\(.*\)')
-
-# The rofs manifest is just the static skel (mount points + libenviron.so); there
-# are no modules to merge. The kernel command line is empty - the in-kernel app
-# runs via osv_app_main(), not loaded from the image.
-cp "$SRC"/usr_rofs.manifest.skel "$OUT"/usr.manifest
-: > "$OUT"/cmdline
-
-# Stage 2: link the kernel and build the (empty) rofs bootfs.
-fs=rofs bootfs_manifest=bootfs_empty.manifest.skel make "${args[@]}" | tee -a build.out
+# Build the kernel. The command line is empty (the in-kernel app runs via
+# osv_app_main()); run.py passes it via QEMU -append at boot if needed.
+make "${args[@]}" | tee build.out
 test "${PIPESTATUS[0]}" -eq 0 || { echo "make failed" >&2; exit 1; }
 test -f build/last/loader-stripped.elf || { echo "'make' did not leave expected results" >&2; exit 2; }
-
-# Build the rofs filesystem image and wrap it in a kernel-less data disk.
-cd "$OUT"
-fs_size=$(( ${fs_size_mb:-512} * 1024 * 1024 ))
-cp "$SRC"/static/etc/fstab_rofs fstab
-rm -f rofs.img
-"$SRC"/scripts/gen-rofs-img.py -o rofs.img -m usr.manifest
-partition_size=$(stat --printf %s rofs.img)
-partition_offset=512
-
-cp "$SRC"/scripts/disk.bin disk.raw
-"$SRC"/scripts/imgedit.py setpartition "-f raw disk.raw" 2 $partition_offset "$partition_size"
-qemu-img resize disk.raw ${fs_size}b >/dev/null 2>&1
-dd if=rofs.img of=disk.raw obs=$partition_offset seek=1 >/dev/null 2>&1
-qemu-img convert -f raw -O qcow2 disk.raw disk.img
-qemu-img resize disk.img ${fs_size}b >/dev/null 2>&1
-rm -f disk.raw
-
-# Prepend the root fs type to the command line (run.py reads $OUT/cmdline).
-echo -n "--rootfs=${fs_type} $(cat cmdline)" > cmdline
-"$SRC"/scripts/imgedit.py setargs disk.img "$(cat cmdline)"

@@ -8,7 +8,7 @@
  */
 
 #include <osv/drivers_config.h>
-#include <osv/kernel_config_logger_debug.h>
+#include <osv/kernel_config.h>
 #include "arch-setup.hh"
 #include <osv/sched.hh>
 #include <osv/mempool.hh>
@@ -172,7 +172,7 @@ void arch_setup_tls(void *tls, const elf::tls_data& info)
     tcb[0].tls_base = &tcb[1];
 
     memcpy(&tcb[1], info.start, info.filesize);
-    asm volatile ("msr tpidr_el0, %0; msr tpidr_el1, %0; isb; " :: "r"(tcb) : "memory");
+    asm volatile ("msr tpidr_el0, %0; isb; " :: "r"(tcb) : "memory");
 
     check_boot_tls();
 }

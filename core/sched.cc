@@ -28,8 +28,7 @@
 #include <osv/symbols.hh>
 #include <osv/stubbing.hh>
 #include <algorithm>
-#include <osv/kernel_config_lazy_stack.h>
-#include <osv/kernel_config_lazy_stack_invariant.h>
+#include <osv/kernel_config.h>
 
 MAKE_SYMBOL(sched::thread::current);
 MAKE_SYMBOL(sched::cpu::current);
@@ -39,7 +38,6 @@ MAKE_SYMBOL(sched::preempt);
 MAKE_SYMBOL(sched::preempt_disable);
 MAKE_SYMBOL(sched::preempt_enable);
 
-int futex(int *uaddr, int op, int val, const struct timespec *timeout, int *uaddr2, uint32_t val3);
 
 __thread char* percpu_base;
 
@@ -1416,45 +1414,14 @@ void thread::stop_wait()
     assert(st.load() == status::running);
 }
 
-// See https://www.kernel.org/doc/Documentation/robust-futexes.txt
-#define FUTEX_OWNER_DIED       0x40000000
-#define FUTEX_KEY_ADDR(x, o)    ((int *)((u8 *)(x) + (o)))
-
 void thread::complete()
 {
     run_exit_notifiers();
 
-    //The logic below only applies when running statically
-    //linked executables or dynamically linked ones launched by the
-    //Linux dynamic linker. More specifically it gets triggered only
-    //when set_tid_address and set_robust_list get called
-
-    //See https://www.kernel.org/doc/Documentation/robust-futexes.txt for
-    //details on this Linux specific logic
-    if (_robust_list_head) {
-        robust_list_head *h = _robust_list_head;
-        robust_list *l;
-        int *uaddr;
-
-        if (h->list_op_pending) {
-            uaddr = FUTEX_KEY_ADDR(h->list_op_pending, h->futex_offset);
-            *uaddr |= FUTEX_OWNER_DIED;
-            futex(uaddr, FUTEX_WAKE, 1, nullptr, nullptr, 0);
-        }
-
-        for (l = &h->list; (void*)l != (void*)h; l = l->next) {
-            uaddr = FUTEX_KEY_ADDR(l, h->futex_offset);
-            *uaddr |= FUTEX_OWNER_DIED;
-            futex(uaddr, FUTEX_WAKE, 1, nullptr, nullptr, 0);
-        }
-    }
-
-    //For more details about clear_id read CLONE_CHILD_CLEARTID section
-    //of https://man7.org/linux/man-pages/man2/clone.2.html
-    if (_clear_id) {
-        *_clear_id = 0;
-        futex(_clear_id, FUTEX_WAKE, 1, nullptr, nullptr, 0);
-    }
+    // The Linux robust-futex / clear_child_tid thread-exit wakeups used to run
+    // here, but they were only ever armed by the set_robust_list/set_tid_address
+    // syscalls, which this kernel no longer has (no syscall ABI, no futex). With
+    // nothing to arm them the code was dead, so it is gone along with futex().
 
     auto value = detach_state::attached;
     _detach_state.compare_exchange_strong(value, detach_state::attached_complete);
