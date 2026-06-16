@@ -381,11 +381,6 @@ ifeq ($(arch),x64)
 kernel_base := 0x200000
 kernel_vm_base := 0x40200000
 
-# Reserve, in the kernel TLS block, space for the statically-linked app's
-# local-exec TLS variables (see loader.ld). Required: removing it corrupts the
-# per-thread TLS layout (preemptable() assert at boot).
-app_local_exec_tls_size := 0x200
-
 # The x64 boot path is 'qemu -kernel loader[-stripped].elf' (multiboot/PVH),
 # which boots the ELF directly - no bzImage/vmlinuz wrapper is needed.
 
@@ -396,7 +391,6 @@ endif # x64
 ifeq ($(arch),aarch64)
 
 kernel_vm_base := 0xfc0080000 #63GB
-app_local_exec_tls_size := 0x200
 
 include $(libfdt_base)/Makefile.libfdt
 libfdt-source := $(patsubst %.c, $(libfdt_base)/%.c, $(LIBFDT_SRCS))
@@ -599,7 +593,6 @@ endif
 objects += arch/x64/ioapic.o
 objects += arch/x64/apic.o
 objects += arch/x64/apic-clock.o
-objects += arch/x64/prctl.o
 objects += arch/x64/vmlinux.o
 objects += arch/x64/vmlinux-boot64.o
 objects += arch/x64/pvh-boot.o
@@ -814,13 +807,6 @@ stage1_targets = $(out)/arch/$(arch)/boot.o $(out)/loader.o $(out)/runtime.o $(d
 stage1: $(stage1_targets) links
 .PHONY: stage1
 
-loader_options_dep = $(out)/arch/$(arch)/loader_options.ld
-$(loader_options_dep): stage1
-	$(makedir)
-	@if [ '$(shell cat $(loader_options_dep) 2>&1)' != 'APP_LOCAL_EXEC_TLS_SIZE = $(app_local_exec_tls_size);' ]; then \
-		echo -n "APP_LOCAL_EXEC_TLS_SIZE = $(app_local_exec_tls_size);" > $(loader_options_dep) ; \
-	fi
-
 
 # The C++ runtime (libc++ / libc++abi / libunwind) is linked on demand inside a
 # --start-group, not whole-archived: the slim kernel links its single app at
@@ -889,7 +875,7 @@ def_symbols = --defsym=OSV_KERNEL_BASE=$(kernel_base) \
               --defsym=OSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 endif
 
-$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(loader_options_dep) $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
+$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
 		-static --eh-frame-hdr -L$(out)/arch/$(arch) \
             $(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep),$^)) \
