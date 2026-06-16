@@ -388,28 +388,6 @@ autodepend = -MD -MT $@ -MP
 
 tools :=
 
-$(out)/tools/%.o: COMMON += -fPIC
-
-tools += tools/uush/uush.so
-tools += tools/uush/ls.so
-tools += tools/uush/mkdir.so
-
-tools += tools/mount/mount-fs.so
-tools += tools/mount/umount.so
-
-ifeq ($(arch),aarch64)
-# note that the bootfs.manifest entry for the uush image
-# has no effect on the loader image, only on the usr image.
-# The only thing that does have an effect is the
-# bootfs.manifest.skel.
-#
-# Therefore, you need to manually add tests/tst-hello.so
-# to the bootfs.manifest.skel atm to get it to work.
-#
-tools += tests/tst-hello.so
-cmdline = --nomount tests/tst-hello.so
-endif
-
 $(out)/loader-stripped.elf: $(out)/loader.elf
 	$(call quiet, $(STRIP) $(out)/loader.elf -o $(out)/loader-stripped.elf, STRIP loader.elf -> loader-stripped.elf )
 
@@ -1153,7 +1131,7 @@ $(out)/libvdso.so: libc/vdso/vdso.cc
 	$(call quiet, $(CXX) $(CXXFLAGS) -fno-exceptions -c -fPIC -o $(out)/libvdso.o libc/vdso/vdso.cc, CXX libvdso.o)
 	$(call quiet, $(LD) -shared -z now -o $(out)/libvdso.so $(out)/libvdso.o -T libc/vdso/vdso.lds --version-script=libc/vdso/$(arch)/vdso.version, LINK libvdso.so)
 
-bootfs_manifest ?= bootfs.manifest.skel
+bootfs_manifest ?= bootfs_empty.manifest.skel
 
 # If parameter "bootfs_manifest" has been changed since the last make,
 # bootfs.bin requires rebuilding

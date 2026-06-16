@@ -1,93 +1,44 @@
 #!/usr/bin/env bash
-# This script replaces our old "make" command line - instead of
-# "make mode=debug image=rogue", use "build mode=debug image=rogue".
-# This first runs "make" with the same parameters, and then builds
-# the requested image.
+# Build the slim OSv kernel and package it with a read-only (rofs) data disk.
+#
+# The application is statically linked into the kernel (app/ by default, or
+# test/ via "app=tests"), so there are no modules to build - this script builds
+# the kernel with make, then wraps the rofs filesystem (mount points +
+# libenviron.so, from usr_rofs.manifest.skel) into build/<mode>/disk.img. The
+# kernel is loaded via QEMU -kernel (PVH); the disk only carries the filesystem.
+#
+# Usage:
+#   scripts/build [make-args] [fs=rofs] [image=os-features]   # build
+#   scripts/build clean                                       # clean
+#
+# fs=rofs is the only supported filesystem; image= is accepted but ignored (the
+# app is in-kernel). Run the result with scripts/run.py.
 
-usage() {
-	cat <<-EOF
-	Build OSv kernel and specified modules/apps and package them together into a runnable image
-
-	This bash shell script acts as a top level orchestration tool intended to build
-	OSv images. It does so by invoking a make against the main OSv makefile to
-	build the kernel and then delegates to various Python scripts (scripts/module.py)
-	to orchestrate building of explicitly specified apps and modules as well as any
-	implicitly dependant ones. The end result is the build/<mode>/usr.img file that
-	is composed of OSv kernel (loader-stripped.elf) and application files and can be
-	executed using ./scripts/run.py.
-
-	Usage:
-	  scripts/build [options] image=<app1>[,<app2[.run_conf]>[,<module1>,..]] modules=<module1>[,..] | check
-	  scripts/build clean
-
-	Options:
-	  --help|-h                      Print this help message
-	  arch=x64|aarch64               Specify the build architecture; default is the same as build host arch
-	  mode=release|debug             Specify the build mode; default is release
-	  export=none|selected|all       If 'selected' or 'all' export the app files to <export_dir>
-	  export_dir=<dir>               The directory to export the files to; default is build/export
-	  fs=zfs|rofs|ext|ramfs|virtiofs Specify the filesystem of the image partition
-	    |rofs_with_zfs|rofs_with_ext
-	  fs_size=N                      Specify the size of the image in bytes
-	  fs_size_mb=N                   Specify the size of the image in MiB
-	  app_local_exec_tls_size=N      Specify the size of app local TLS in bytes; the default is 64
-	  usrskel=<*.skel>               Specify the base manifest for the image
-	  <module_makefile_arg>=<value>  Pass value of module_makefile_arg to an app/module makefile
-	                                 (can be used to customize specific app/module build process)
-	  -j<N>                          Set number of parallel jobs for make
-	  --append-manifest              Append build/<mode>/append.manifest to usr.manifest
-	  --create-disk                  Instead of usr.img create kernel-less disk.img
-	  --create-zfs-disk              Create extra empty disk with ZFS filesystem
-	  --use-openzfs                  Build and manipulate ZFS images using on host OpenZFS tools
-
-	Examples:
-	  ./scripts/build -j4 fs=rofs image=native-example   # Create image with native-example app
-
-	  ./scripts/build JAVA_VERSION=10 image=openjdk-zulu-9-and-above,spring-boot-example
-	                                                     # Create image with spring boot app with Java 10 jdk
-
-	  ./scripts/manifest_from_host.sh -w ls && ./script/build --append-manifest
-	                                                     # Create manifest for 'ls' executable
-
-	  ./script/build check                               # Create test image and run all tests in it
-
-	  ./script/build clean                               # Clean the build tree
-	EOF
-	exit ${1:-0}
-}
-
+set -e
 trap 'echo "$0 failed: $BASH_COMMAND" >&2; exit $?' ERR
 
-# If "MAKEFLAGS" is set, we've been run from "make". The following hacks
-# allows our Makefile to forward "make image=..." requests to to us
-# without running into an infinite loop when we call "make".
+usage() { sed -n '2,17p' "$0"; exit "${1:-0}"; }
+
+# If "MAKEFLAGS" is set we were invoked from "make"; strip image=/modules= so the
+# nested make below does not loop back into us.
 MAKEFLAGS=${MAKEFLAGS/ image=/ zzz=}
 MAKEFLAGS=${MAKEFLAGS/#image=/zzz=}
 MAKEFLAGS=${MAKEFLAGS/ modules=/ zzz=}
 MAKEFLAGS=${MAKEFLAGS/#modules=/zzz=}
 unset image modules
 
-# Pass to "make" all the given args except "image=..." or "module=..."
+# Forward every arg to make except the build-only keys we interpret here.
 declare -a args
-# Make is going to be invoked twice. At the first run ("stage1") we
-# build all possible dependencies any app or module might require. At
-# the second - the loader.elf is linked and the loader.img is
-# produced.  In the case of "make clean", the first invocation (and
-# the only one) is used for cleaning up the kernel.
-stage1_args="stage1"
-for i
-do
+fs_type=rofs
+do_clean=
+for i in "$@"; do
 	case $i in
-	--help|-h)
-		usage ;;
-	image=*|modules=*|fs=*|usrskel=*|check|--append-manifest|--create-disk|--create-zfs-disk|--use-openzfs) ;;
-	clean)
-		stage1_args=clean ;;
-	arch=*)
-		eval ${i}
-		args+=("$i") ;;
-	*)
-		args+=("$i") ;;
+	--help|-h)        usage ;;
+	clean)            do_clean=yes ;;
+	fs=*)             fs_type=${i#fs=} ;;
+	image=*|modules=*|usrskel=*) ;;   # app is in-kernel; these are ignored
+	arch=*)           eval "$i"; args+=("$i") ;;
+	*)                args+=("$i") ;;
 	esac
 done
 
@@ -96,367 +47,55 @@ if [[ "${arch-}" == "aarch64" && -d "build/downloaded_packages/aarch64/toolchain
 	export CROSS_PREFIX=aarch64-none-linux-gnu-
 fi
 
-# The kernel configuration is frozen (conf/config.mk); there is no kconfig
-# generation step anymore.
-make "${args[@]}" ${stage1_args} | tee build.out
-# check exit status of make
-status=${PIPESTATUS[0]}
-if [ $status -ne 0 ]
-then
-	echo "make failed. Exiting from build script"
-	exit $status
+if [ -n "$do_clean" ]; then
+	make "${args[@]}" clean
+	exit
 fi
 
-for i
-do
-	case $i in
-	clean)	# "make clean" already cleaned the kernel above; there are no
-		# modules to clean.
-		exit;;
-	esac
-done
-
-# Find out where "make" decided to put its compilation results. We'll
-# put the images in the same place.
-if test ! -L build/last -o ! -f build/last/loader.o
-then
-	echo "'make stage1' did not leave expected results" >&2
-	exit 2
-fi
-OUT=build/`readlink build/last`
-
-# Look for arguments that look like "name=value", and set them in an
-# assoative array "vars". Also look for the "-j ..." parallelism option,
-# which we want to pass to the module's Makefile as well.
-declare -A vars
-j_arg=
-checknumber=
-for i
-do
-	if test -n "$checknumber"
-	then
-		checknumber=
-		case $i in
-		[0-9]*)
-			j_arg="-j$i"
-			continue;;
-		esac
-	fi
-	case $i in
-	*=*)	name=${i%%=*}
-		value=${i#*=}
-		vars[$name]=$value;;
-	-j)
-		# module.py's command line parser has trouble of parsing a
-		# "-j" option without a value. Help it with a fake value "-".
-		j_arg="-j-"
-		# make allows the "-j" option to be separated from the number by a
-		# space (e.g., "-j 4"), but since this number is optional, we will
-		# need to also check the next argument, whether it is a number.
-		checknumber=yes;;
-	-j*)	j_arg=$i;;
-	check)	# "build check" is a shortcut for
-		# "build image=tests; scripts/test.py"
-		vars[image]=tests;;
-	--append-manifest)
-		vars[append_manifest]="true";;
-	--create-disk)
-		vars[create_disk]="true";;
-	--create-zfs-disk)
-		vars[create_zfs_disk]="true";;
-	--use-openzfs)
-		vars[use_openzfs]="true";;
-	esac
-done
-
-# fs_size_mb is in megabytes (1024*1024 bytes)
-fs_size_mb=${vars[fs_size_mb]-512}
-# fs_size is in bytes
-fs_size=${vars[fs_size]-$(($fs_size_mb*1024*1024))}
-# size must be a multiple of 512. Round it down
-fs_size=$((fs_size - (fs_size & 511)))
-
-SRC=`pwd`
-arch=`expr $OUT : '.*\.\(.*\)'`
-mode=`expr $OUT : '.*/\(.*\)\..*'`
-
-# Set "modules" according to the image= or modules= parameters, or some
-# defaults (with same rules as in our old makefile)
-case $arch in
-aarch64) image=${vars[image]-uush};;
-*) image=${vars[image]-default};;
-esac
-modules=${vars[modules]-!$image}
-
-case $OUT in
-/*)	OSV_BUILD_PATH=$OUT;;
-*)	OSV_BUILD_PATH=`pwd`/$OUT;;
-esac
-
-host_arch=$(uname -m)
-
-# Default manifest
-manifest=bootfs.manifest.skel
-fs_type=${vars[fs]-zfs}
-usrskel_arg=
-case $fs_type in
-zfs)
-	;; # Nothing to change here. This is our default behavior
-ext)
-	cp "$SRC"/static/etc/fstab_ext "$OUT"/fstab
-	manifest=bootfs_ext.manifest.skel
-	usrskel_arg="--usrskel usr_ext.manifest.skel";;
-rofs|rofs_with_zfs|rofs_with_ext|virtiofs)
-	# Both are read-only (in OSv) and require nothing extra on bootfs to work
-	manifest=bootfs_empty.manifest.skel
-	usrskel_arg="--usrskel usr_rofs.manifest.skel";;
-ramfs)
-	cp "$SRC"/static/etc/fstab "$OUT"/fstab
-	manifest=$OUT/usr.manifest
-	usrskel_arg="--usrskel usr_ramfs.manifest.skel";;
-*)
-	echo "Unknown filesystem \"$fs_type\"" >&2
-	exit 2
-esac
-
-# x64 no longer embeds a bootable kernel in the disk image (the lzloader and
-# BIOS boot sector are gone); the kernel is loaded via QEMU -kernel. So every
-# arch now produces a kernel-less data disk.
-vars[create_disk]="true"
-
-if test -n "${vars[usrskel]}"
-then
-	# Override default skel
-	usrskel_arg="--usrskel ${vars[usrskel]}"
-fi
-
-export=${vars[export]-none}
-if [ "$export" == "selected" ]
-then
-	no_required_arg="--no-required"
-fi
-
-CC=gcc
-if [[ "$host_arch" == "x86_64" && "$arch" == 'aarch64' ]]; then
-    CC=${CROSS_PREFIX:-aarch64-linux-gnu-}gcc
-fi
-
-libgcc_s_path=$(${CC} -print-file-name=libgcc_s.so.1)
-if [[ "$libgcc_s_path" == "libgcc_s.so.1" ]]; then
-	cat <<-EOF
-	Unable to resolve libgcc_s.so.1 using "${CC}".
-	Looking in build/downloaded_packages/aarch64/gcc/install/lib64
-	EOF
-	libgcc_s_path="build/downloaded_packages/aarch64/gcc/install/lib64/libgcc_s.so.1"
-fi
-libgcc_s_dir=$(dirname $(readlink -f ${libgcc_s_path}))
-
-# The application is statically linked into the kernel (app/ by default, or
-# test/ via "app=tests"), so there are no modules to build. The rofs manifest is
-# just the static skel (the mount points + libenviron.so); the kernel command
-# line is empty because the in-kernel app runs via osv_app_main(), not loaded
-# from the image.
-skel=${usrskel_arg#--usrskel }
-cp "$SRC/$skel" "$OSV_BUILD_PATH/usr.manifest"
-: > "$OSV_BUILD_PATH/cmdline"
-
-if [[ ${vars[append_manifest]} == "true" && -f "$OSV_BUILD_PATH/append.manifest" ]]; then
-	cat "$OSV_BUILD_PATH/append.manifest" >> "$OSV_BUILD_PATH/usr.manifest"
-	if [[ -f "$OSV_BUILD_PATH/append_cmdline" && $(cat "$OSV_BUILD_PATH/cmdline") == "" ]]; then
-		cp $OSV_BUILD_PATH/append_cmdline $OSV_BUILD_PATH/cmdline
-	fi
-fi
-
-fs=$fs_type bootfs_manifest=$manifest make "${args[@]}" | tee -a build.out
-# check exit status of make
-status=${PIPESTATUS[0]}
-if [ $status -ne 0 ]
-then
-	echo "make failed. Exiting from build script"
-	exit $status
-fi
-
-if test ! -f build/last/loader-stripped.elf
-then
-	echo "'make' did not leave expected results" >&2
+if [ "$fs_type" != "rofs" ]; then
+	echo "scripts/build: only fs=rofs is supported in the slim build (got '$fs_type')" >&2
 	exit 2
 fi
 
-# loader.img only exists for the kernel-on-disk (aarch64 preboot) layout and
-# feeds the non-create-disk partition offset below. x64 boots via -kernel and
-# never produces it.
-if test -f build/last/loader.img
-then
-	loader_size=`stat --printf %s $OUT/loader.img`
-	kernel_end=$(($loader_size+2097151 & ~2097151))
-fi
+SRC=$(pwd)
 
-# The python scripts called below assume the current directory is $OUT (as was
-# the case in our old build.mk).
-cd $OUT
+# Stage 1: build all kernel dependencies (generated headers, libc++/llvm-libc,
+# every object) so the link can proceed.
+make "${args[@]}" stage1 | tee build.out
+test "${PIPESTATUS[0]}" -eq 0 || { echo "make stage1 failed" >&2; exit 1; }
 
-if [ "$export" != "none" ]; then
-	export_dir=${vars[export_dir]-$SRC/build/export}
-	rm -rf "$export_dir"
-	"$SRC"/scripts/export_manifest.py -e "$export_dir" -m usr.manifest -D libgcc_s_dir="$libgcc_s_dir"
-fi
+test -L build/last -a -f build/last/loader.o || { echo "'make stage1' did not leave expected results" >&2; exit 2; }
+OUT=build/$(readlink build/last)
+arch=$(expr "$OUT" : '.*\.\(.*\)')
 
-if [[ ${vars[create_disk]} == "true" ]]; then
-	partition_offset=512
-	bare="$SRC"/scripts/disk.bin
-	raw_disk=disk
-	qcow2_disk=disk
-else
-	partition_offset=$kernel_end
-	bare=loader.img
-	raw_disk=bare
-	qcow2_disk=usr
-fi
+# The rofs manifest is just the static skel (mount points + libenviron.so); there
+# are no modules to merge. The kernel command line is empty - the in-kernel app
+# runs via osv_app_main(), not loaded from the image.
+cp "$SRC"/usr_rofs.manifest.skel "$OUT"/usr.manifest
+: > "$OUT"/cmdline
 
-create_zfs_disk() {
-	cp $bare $raw_disk.raw
-	"$SRC"/scripts/imgedit.py setpartition "-f raw ${raw_disk}.raw" 2 $partition_offset $partition_size
-	if [[ ${vars[use_openzfs]} == "true" ]]; then
-		#We use raw disk on purpose so that zfs-image-on-host.sh can use loop device which is faster to copy files to
-		qemu-img resize ${raw_disk}.raw ${image_size}b >/dev/null 2>&1
-		"$SRC"/scripts/zfs-image-on-host.sh build ${raw_disk}.raw 1 osv zfs true
-		qemu-img convert -f raw -O qcow2 $raw_disk.raw $qcow2_disk.img
-	else
-		qemu-img convert -f raw -O qcow2 $raw_disk.raw $qcow2_disk.img
-		qemu-img resize $qcow2_disk.img ${image_size}b >/dev/null 2>&1
-		"$SRC"/scripts/upload_manifest.py --arch=$arch -o $qcow2_disk.img -m usr.manifest -D libgcc_s_dir="$libgcc_s_dir"
-	fi
-	rm ${raw_disk}.raw
-}
+# Stage 2: link the kernel and build the (empty) rofs bootfs.
+fs=rofs bootfs_manifest=bootfs_empty.manifest.skel make "${args[@]}" | tee -a build.out
+test "${PIPESTATUS[0]}" -eq 0 || { echo "make failed" >&2; exit 1; }
+test -f build/last/loader-stripped.elf || { echo "'make' did not leave expected results" >&2; exit 2; }
 
-create_ext_disk() {
-	cp $bare $raw_disk.raw
-	"$SRC"/scripts/imgedit.py setpartition "-f raw ${raw_disk}.raw" 2 $partition_offset $partition_size
-	qemu-img resize ${raw_disk}.raw ${image_size}b >/dev/null 2>&1
-	dd if=disk.ext of=${raw_disk}.raw obs=$partition_offset seek=1 >/dev/null 2>&1
-	qemu-img convert -f raw -O qcow2 $raw_disk.raw $qcow2_disk.img
-}
+# Build the rofs filesystem image and wrap it in a kernel-less data disk.
+cd "$OUT"
+fs_size=$(( ${fs_size_mb:-512} * 1024 * 1024 ))
+cp "$SRC"/static/etc/fstab_rofs fstab
+rm -f rofs.img
+"$SRC"/scripts/gen-rofs-img.py -o rofs.img -m usr.manifest
+partition_size=$(stat --printf %s rofs.img)
+partition_offset=512
 
-create_rofs_disk() {
-	cp $bare $raw_disk.raw
-	"$SRC"/scripts/imgedit.py setpartition "-f raw ${raw_disk}.raw" 2 $partition_offset $partition_size
-	qemu-img resize ${raw_disk}.raw ${image_size}b >/dev/null 2>&1
-	dd if=rofs.img of=${raw_disk}.raw obs=$partition_offset seek=1 >/dev/null 2>&1
-	qemu-img convert -f raw -O qcow2 $raw_disk.raw $qcow2_disk.img
-	qemu-img resize $qcow2_disk.img ${image_size}b >/dev/null 2>&1
-}
+cp "$SRC"/scripts/disk.bin disk.raw
+"$SRC"/scripts/imgedit.py setpartition "-f raw disk.raw" 2 $partition_offset "$partition_size"
+qemu-img resize disk.raw ${fs_size}b >/dev/null 2>&1
+dd if=rofs.img of=disk.raw obs=$partition_offset seek=1 >/dev/null 2>&1
+qemu-img convert -f raw -O qcow2 disk.raw disk.img
+qemu-img resize disk.img ${fs_size}b >/dev/null 2>&1
+rm -f disk.raw
 
-create_zfs_filesystem() {
-	local image_path=$1
-	if [[ ${vars[use_openzfs]} == "true" ]]; then
-		local partition=$3
-		"$SRC"/scripts/zfs-image-on-host.sh build $image_path $partition osv zfs false
-	else
-		local device_path=$2
-		local qemu_arch=$arch
-		if [[ "$qemu_arch" == 'aarch64' ]]; then
-			console=''
-			zfs_builder_name='zfs_builder.img'
-		else
-			qemu_arch='x86_64'
-			console='--console=serial'
-			zfs_builder_name='zfs_builder-stripped.elf'
-		fi
-		"$SRC"/scripts/run.py -k --kernel-path $zfs_builder_name --arch=$qemu_arch --vnc none -m 512 -c1 -i ${image_path} --block-device-cache unsafe \
-			-s -e "${console} --norandom --nomount --noinit --preload-zfs-library /tools/mkfs.so ${device_path}; /zfs.so set compression=off osv"
-	fi
-}
-
-if [[ "$host_arch" == "x86_64" && "$arch" == 'aarch64' ]]; then
-	export STRIP=${CROSS_PREFIX:-aarch64-linux-gnu-}strip
-fi
-
-case $fs_type in
-zfs)
-	partition_size=$((fs_size - partition_offset))
-	image_size=$fs_size
-	cp "$SRC"/static/etc/fstab fstab
-	create_zfs_disk ;;
-ext)
-	rm -rf disk.ext
-	"$SRC"/scripts/ext-disk-utils.sh create disk.ext $(((fs_size - partition_offset)/(1024*1024))) true
-	partition_size=`stat --printf %s disk.ext`
-	image_size=$fs_size
-	create_ext_disk ;;
-rofs)
-	rm -rf rofs.img
-	cp "$SRC"/static/etc/fstab_rofs fstab
-	if [[ ${vars[create_zfs_disk]} == "true" ]]; then
-		echo "/dev/vblk1.1 /data      zfs       defaults 0 0" >> fstab
-	fi
-	"$SRC"/scripts/gen-rofs-img.py -o rofs.img -m usr.manifest -D libgcc_s_dir="$libgcc_s_dir"
-	partition_size=`stat --printf %s rofs.img`
-	image_size=$fs_size
-	create_rofs_disk ;;
-rofs_with_zfs|rofs_with_ext)
-	# Create disk with rofs image on it 1st partition
-	rm -rf rofs.img
-	cp "$SRC"/static/etc/fstab_rofs fstab
-	if [[ "$fs_type" == "rofs_with_zfs" ]]; then
-		echo "/dev/vblk0.2 /data      zfs       defaults 0 0" >> fstab
-	else
-		echo "/dev/vblk0.2 /data      ext       defaults 0 0" >> fstab
-	fi
-	"$SRC"/scripts/gen-rofs-img.py -o rofs.img -m usr.manifest -D libgcc_s_dir="$libgcc_s_dir"
-	partition_size=`stat --printf %s rofs.img`
-	image_size=$((fs_size+partition_size))
-	create_rofs_disk
-	# Resize the disk to fit ext or zfs on it after rofs
-	qemu-img resize $qcow2_disk.img ${image_size}b >/dev/null 2>&1
-	snd_partition_offset=$((partition_offset + partition_size))
-	snd_partition_size=$((image_size-snd_partition_offset))
-	"$SRC"/scripts/imgedit.py setpartition "$qcow2_disk.img" 3 $snd_partition_offset $snd_partition_size
-	# Create filesystem on ZFS/EXT partition
-	if [[ "$fs_type" == "rofs_with_zfs" ]]; then
-		create_zfs_filesystem $qcow2_disk.img "/dev/vblk0.2" 2
-	else
-		rm -rf disk.ext
-		"$SRC"/scripts/ext-disk-utils.sh create disk.ext $((snd_partition_size/(1024*1024)))
-		qemu-img convert -f qcow2 -O raw $qcow2_disk.img $raw_disk.raw
-		dd if=disk.ext of=${raw_disk}.raw obs=$snd_partition_offset seek=1 >/dev/null 2>&1
-		qemu-img convert -f raw -O qcow2 $raw_disk.raw $qcow2_disk.img
-	fi ;;
-ramfs|virtiofs)
-	# No need to create extra fs like above: ramfs is already created (as the
-	# bootfs) and virtio-fs is specified with virtiofsd at run time
-	image_size=$((partition_offset))
-	cp $bare $raw_disk.raw
-	"$SRC"/scripts/imgedit.py setpartition "-f raw ${raw_disk}.raw" 2 $partition_offset 0
-	qemu-img resize ${raw_disk}.raw ${image_size}b >/dev/null 2>&1
-	qemu-img convert -f raw -O qcow2 $raw_disk.raw $qcow2_disk.img ;;
-esac
-# Prepend the root fs type option to the command line (preserved by run.py)
-cmdline=$(cat cmdline)
-echo -n "--rootfs=${fs_type} ${cmdline}" > cmdline
-
-if [[ -f "$OSV_BUILD_PATH/usr.img" ]]; then
-	"$SRC"/scripts/imgedit.py setargs usr.img `cat cmdline`
-fi
-
-if [[ ${vars[create_zfs_disk]} == "true" ]]; then
-	partition_offset=512
-	partition_size=$((fs_size - partition_offset))
-	image_size=$fs_size
-	raw_disk=zfs_disk
-	qcow2_disk=zfs_disk
-	cp "$SRC"/scripts/disk.bin $raw_disk.raw
-	"$SRC"/scripts/imgedit.py setpartition "-f raw ${raw_disk}.raw" 2 $partition_offset $partition_size
-	qemu-img convert -f raw -O qcow2 $raw_disk.raw $qcow2_disk.img
-	qemu-img resize $qcow2_disk.img ${image_size}b >/dev/null 2>&1
-	create_zfs_filesystem $qcow2_disk.img "/dev/vblk0.1" 1
-fi
-
-# Support "build check"
-for i
-do
-	case $i in
-	check)	set -x
-		cd "$SRC"
-		exec ./scripts/test.py
-	esac
-done
+# Prepend the root fs type to the command line (run.py reads $OUT/cmdline).
+echo -n "--rootfs=${fs_type} $(cat cmdline)" > cmdline
+"$SRC"/scripts/imgedit.py setargs disk.img "$(cat cmdline)"
