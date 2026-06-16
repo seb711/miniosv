@@ -51,6 +51,14 @@ set(TARGET_LIBC_ENTRYPOINTS
     libc.src.locale.setlocale
     libc.src.locale.uselocale
 
+    # nl_types.h entrypoints - libc++'s std::messages<char> facet links these.
+    # llvm-libc's versions support only the "C" locale (catopen always fails,
+    # catgets returns the fallback string), which is exactly the no-translation
+    # behaviour we want for a single static US locale.
+    libc.src.nl_types.catopen
+    libc.src.nl_types.catclose
+    libc.src.nl_types.catgets
+
     # setjmp.h entrypoints
     libc.src.setjmp.longjmp
     libc.src.setjmp.setjmp

@@ -27,7 +27,6 @@
 #include <wctype.h>
 #include <langinfo.h>
 #include <stdarg.h>
-#include <xlocale.h>
 #include <cassert>
 #include <sys/sysinfo.h>
 #include "processor.hh"

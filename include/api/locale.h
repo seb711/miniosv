@@ -6,9 +6,11 @@ extern "C" {
 #endif
 
 #include <features.h>
-/* OSv's __locale_struct / locale_t layout (was pulled in by
- * include/glibc-compat/locale.h, removed in Phase 9.6). */
-#include "libc/internal/locale_impl.h"
+
+/* locale_t is an opaque handle: a pointer to a struct only llvm-libc (which
+ * owns newlocale/uselocale and every *_l body) ever dereferences. We never look
+ * inside it, so the POSIX section below pulls just the pointer typedef from
+ * <bits/alltypes.h> - no glibc/musl __locale_struct layout is needed here. */
 
 #ifdef __cplusplus
 #define NULL 0L
