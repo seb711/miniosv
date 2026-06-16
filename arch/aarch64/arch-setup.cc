@@ -34,7 +34,6 @@
 
 #include <alloca.h>
 
-#include <osv/kernel_config_networking_stack.h>
 
 void setup_temporary_phys_map()
 {
@@ -184,11 +183,6 @@ void arch_init_premain()
 #if CONF_drivers_virtio_blk
 #include "drivers/virtio-blk.hh"
 #endif
-#if CONF_networking_stack
-#if CONF_drivers_virtio_net
-#include "drivers/virtio-net.hh"
-#endif
-#endif
 #if CONF_drivers_virtio_fs
 #include "drivers/virtio-fs.hh"
 #endif
@@ -238,11 +232,6 @@ void arch_init_drivers()
 #endif
 #if CONF_drivers_virtio_blk
     drvman->register_driver(virtio::blk::probe);
-#endif
-#if CONF_networking_stack
-#if CONF_drivers_virtio_net
-    drvman->register_driver(virtio::net::probe);
-#endif
 #endif
 #if CONF_drivers_virtio_fs
     drvman->register_driver(virtio::fs::probe);

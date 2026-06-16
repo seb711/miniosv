@@ -34,7 +34,6 @@
 #include "drivers/random.hh"
 #include "drivers/console.hh"
 
-#include "libc/network/__dns.hh"
 #include <processor.hh>
 #include <dlfcn.h>
 #include <osv/string_utils.hh>
@@ -158,63 +157,7 @@ void* do_main_thread(void *_main_args)
     boot_time.event("drivers loaded");
 
     // There is no filesystem: nothing to mount.
-
-#if CONF_networking_stack
-    bool has_if = false;
-    osv::for_each_if([&has_if] (std::string if_name) {
-        if (if_name == "lo0")
-            return;
-
-        has_if = true;
-        // Start DHCP by default and wait for an IP
-        if (osv::start_if(if_name, "0.0.0.0", "255.255.255.0") != 0 ||
-            osv::ifup(if_name) != 0)
-            debug("Could not initialize network interface.\n");
-    });
-    if (has_if) {
-#if CONF_networking_dhcp
-        if (opt_ip.size() == 0) {
-            dhcp_start(true);
-        } else {
-#endif
-            for (auto t : opt_ip) {
-                std::vector<std::string> tmp;
-                osv::split(tmp, t, " ,", true);
-                if (tmp.size() != 3)
-                    abort("incorrect parameter on --ip");
-
-                printf("%s: %s\n",tmp[0].c_str(),tmp[1].c_str());
-
-                if (osv::start_if(tmp[0], tmp[1], tmp[2]) != 0)
-                    debug("Could not initialize network interface.\n");
-            }
-            if (opt_defaultgw.size() != 0) {
-                osv_route_add_network("0.0.0.0",
-                                      "0.0.0.0",
-                                      opt_defaultgw.c_str());
-            }
-            if (opt_nameserver.size() != 0) {
-                auto addr = boost::asio::ip::make_address_v4(opt_nameserver);
-                osv::set_dns_config({boost::asio::ip::address(addr)}, std::vector<std::string>());
-            }
-#if CONF_networking_dhcp
-        }
-#endif
-    }
-
-    std::string if_ip;
-    auto nr_ips = 0;
-
-    osv::for_each_if([&](std::string if_name) {
-        if (if_name == "lo0")
-            return;
-        if_ip = osv::if_ip(if_name);
-        nr_ips++;
-    });
-    if (nr_ips == 1) {
-       setenv("OSV_IP", if_ip.c_str(), 1);
-    }
-#endif
+    // Networking was removed (Phase 9.2): no interfaces to bring up.
 
 #if CONF_memory_tracker
     if (opt_leak) {
