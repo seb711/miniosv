@@ -133,7 +133,7 @@ very-quiet = $(if $V, $1, @$1)
 # there is no boot sector or compressed image, so loader.img is not built.
 # aarch64 keeps loader.img (preboot stub + uncompressed loader).
 ifeq ($(arch),x64)
-all: $(out)/loader-stripped.elf links $(out)/vmlinuz.bin
+all: $(out)/loader-stripped.elf links
 endif
 ifeq ($(arch),aarch64)
 all: $(out)/loader.img links
@@ -277,10 +277,8 @@ source-dialects = -D_GNU_SOURCE
 $(out)/libc/%.o: source-dialects =
 
 # do not hide symbols in libc because it has its own hiding mechanism
-$(out)/libc/%.o: cc-hide-flags =
-$(out)/libc/%.o: cxx-hide-flags =
 
-kernel-defines = -D_KERNEL $(source-dialects) $(cc-hide-flags) $(gc-flags)
+kernel-defines = -D_KERNEL $(source-dialects)
 
 # This play the same role as "_KERNEL", but _KERNEL unfortunately is too
 # overloaded. A lot of files will expect it to be set no matter what, specially
@@ -318,17 +316,8 @@ tracing-excl := $(shell $(CXX) $(CFLAGS_WERROR) -finstrument-functions-exclude-f
 tracing-flags-1 = -finstrument-functions $(tracing-excl)
 tracing-flags = $(tracing-flags-$(conf_tracing))
 
-cc-hide-flags-0 =
-cc-hide-flags-1 = -fvisibility=hidden
-cc-hide-flags = $(cc-hide-flags-$(conf_hide_symbols))
 
-cxx-hide-flags-0 =
-cxx-hide-flags-1 = -fvisibility-inlines-hidden
-cxx-hide-flags = $(cxx-hide-flags-$(conf_hide_symbols))
 
-gc-flags-0 =
-gc-flags-1 = -ffunction-sections -fdata-sections
-gc-flags = $(gc-flags-$(conf_hide_symbols))
 
 gcc-opt-Og := $(call compiler-flag, -Og, -Og, compiler/empty.cc)
 
@@ -337,7 +326,7 @@ gcc-opt-Og := $(call compiler-flag, -Og, -Og, compiler/empty.cc)
 # immediate offsets resolved at link time rather than GOT-based TPOFF64 dynamic
 # relocations that would need processing at boot.
 tls-model = -ftls-model=local-exec
-CXXFLAGS = -std=$(conf_cxx_level) $(libcxx-includes) $(COMMON) $(cxx-hide-flags) $(tls-model)
+CXXFLAGS = -std=$(conf_cxx_level) $(libcxx-includes) $(COMMON) $(tls-model)
 CFLAGS = -std=gnu99 $(COMMON) $(tls-model)
 
 # should be limited to files under libc/ eventually
@@ -371,19 +360,19 @@ q-build-so = $(call quiet, $(build-so), LINK $@)
 # (libcxx-includes in CXXFLAGS), so they must exist before any .cc compiles. In
 # a from-scratch -j build the libc++ build would otherwise race the kernel
 # compiles (and fail with e.g. "'functional' file not found").
-$(out)/%.o: %.cc include/osv/kernel_config.h | generated-headers $(out)/.libcxx-built
+$(out)/%.o: %.cc | generated-headers $(out)/.libcxx-built
 	$(makedir)
 	$(call quiet, $(CXX) $(CXXFLAGS) -c -o $@ $<, CXX $*.cc)
 
-$(out)/%.o: %.c include/osv/kernel_config.h | generated-headers
+$(out)/%.o: %.c | generated-headers
 	$(makedir)
 	$(call quiet, $(CC) $(CFLAGS) -c -o $@ $<, CC $*.c)
 
-$(out)/%.o: %.S include/osv/kernel_config.h
+$(out)/%.o: %.S
 	$(makedir)
 	$(call quiet, $(ASCOMPILE) $(ASFLAGS) -c -o $@ $<, AS $*.S)
 
-$(out)/%.o: %.s include/osv/kernel_config.h
+$(out)/%.o: %.s
 	$(makedir)
 	$(call quiet, $(ASCOMPILE) $(ASFLAGS) -c -o $@ $<, AS $*.s)
 
@@ -415,22 +404,8 @@ kernel_vm_base := 0x40200000
 # environment variable to the make or scripts/build
 app_local_exec_tls_size := 0x200
 
-# vmlinuz.bin is the uncompressed bzImage-style wrapper around loader-stripped.elf
-# for hosts that expect a Linux-kernel blob. The primary x64 boot path is
-# 'qemu -kernel loader[-stripped].elf' (multiboot/PVH), which needs no wrapper.
-kernel_size = $(shell stat --printf %s $(out)/loader-stripped.elf)
-
-$(out)/arch/x64/vmlinuz-boot32.o: $(out)/loader-stripped.elf
-$(out)/arch/x64/vmlinuz-boot32.o: ASFLAGS += -I$(out) -DOSV_KERNEL_SIZE=$(kernel_size)
-
-$(out)/vmlinuz-boot.bin: $(out)/arch/x64/vmlinuz-boot32.o arch/x64/vmlinuz-boot.ld
-	$(call quiet, $(LD) -static -o $@ \
-		$(filter-out %.bin, $(^:%.ld=-T %.ld)), LD $@)
-
-$(out)/vmlinuz.bin: $(out)/vmlinuz-boot.bin $(out)/loader-stripped.elf
-	$(call quiet, dd if=$(out)/vmlinuz-boot.bin of=$@ > /dev/null 2>&1, DD vmlinuz.bin vmlinuz-boot.bin)
-	$(call quiet, dd if=$(out)/loader-stripped.elf of=$@ conv=notrunc seek=4 > /dev/null 2>&1, \
-		DD vmlinuz.bin loader-stripped.elf)
+# The x64 boot path is 'qemu -kernel loader[-stripped].elf' (multiboot/PVH),
+# which boots the ELF directly - no bzImage/vmlinuz wrapper is needed.
 
 kernel_vm_shift := $(shell printf "0x%X" $(shell expr $$(( $(kernel_vm_base) - $(kernel_base) )) ))
 
@@ -710,10 +685,8 @@ objects += core/string_utils.o
 
 #include $(src)/libc/build.mk:
 libc =
-libc_to_hide =
 
 libc += internal/_chk_fail.o
-libc_to_hide += internal/_chk_fail.o
 libc += internal/libc.o
 
 
@@ -735,9 +708,7 @@ libc += math/finitel.o
 
 libc += misc/error.o
 libc += misc/getopt.o
-libc_to_hide += misc/getopt.o
 libc += misc/getopt_long.o
-libc_to_hide += misc/getopt_long.o
 libc += misc/realpath.o
 libc += misc/backtrace.o
 libc += misc/lockf.o
@@ -762,7 +733,6 @@ ifeq ($(arch),x64)
 libc += arch/$(arch)/ucontext/getcontext.o
 libc += arch/$(arch)/ucontext/setcontext.o
 libc += arch/$(arch)/ucontext/start_context.o
-libc_to_hide += arch/$(arch)/ucontext/start_context.o
 libc += arch/$(arch)/ucontext/ucontext.o
 ifeq ($(conf_memory_optimize),1)
 libc += string/memmove.o
@@ -793,12 +763,10 @@ libc += string/explicit_bzero.o
 libc += string/__explicit_bzero_chk.o
 ifeq ($(conf_memory_optimize),1)
 libc += string/memcpy.o
-libc_to_hide += string/memcpy.o
 else
 endif
 libc += string/__memmove_chk.o
 libc += string/memset.o
-libc_to_hide += string/memset.o
 libc += string/__memset_chk.o
 libc += string/rawmemchr.o
 libc += string/__stpcpy_chk.o
@@ -808,7 +776,6 @@ libc += string/strerror_r.o
 libc += string/__strncat_chk.o
 libc += string/__strncpy_chk.o
 libc += string/stresep.o
-libc_to_hide += string/stresep.o
 libc += string/__wcscpy_chk.o
 libc += string/__wcsncpy_chk.o
 libc += string/__wmemcpy_chk.o
@@ -832,7 +799,6 @@ libc += unistd/ttyname_r.o
 
 
 libc += pthread.o
-libc_to_hide += pthread.o
 libc += pthread_barrier.o
 libc += libc.o
 libc += dlfcn.o
@@ -845,13 +811,9 @@ libc += stdio/printf-hooks.o
 libc += stdio/__fprintf_chk.o
 libc += stdio/__vfprintf_chk.o
 libc += time.o
-libc_to_hide += time.o
 libc += signal.o
-libc_to_hide += signal.o
 libc += mman.o
-libc_to_hide += mman.o
 libc += sem.o
-libc_to_hide += sem.o
 # pipe, af_local (unix sockets), mount, eventfd, timerfd, shm and inotify all
 # depend on the (removed) file-descriptor table and filesystem.
 libc += user.o
@@ -869,9 +831,6 @@ libc += mallopt.o
 # in-memory file systems. Minimal console-backed stdio lives in libc/io.cc.
 objects += $(addprefix libc/, $(libc))
 
-libc_objects_to_hide = $(addprefix $(out)/libc/, $(libc_to_hide))
-$(libc_objects_to_hide): cc-hide-flags = $(cc-hide-flags-$(conf_hide_symbols))
-$(libc_objects_to_hide): cxx-hide-flags = $(cxx-hide-flags-$(conf_hide_symbols))
 
 # Compiler builtins (soft-int helpers like __umodti3) come from LLVM compiler-rt,
 # not GNU libgcc - no GCC anywhere in the toolchain. The C++ exception unwinder
@@ -906,8 +865,6 @@ boost-libs :=
 
 # nfs/ext null vfsops went with the filesystem.
 
-$(out)/loader.o: CXXFLAGS += -DHIDE_SYMBOLS=$(conf_hide_symbols)
-$(out)/core/trace.o: CXXFLAGS += -DHIDE_SYMBOLS=$(conf_hide_symbols)
 
 # The OSv kernel is linked into an ordinary, non-PIE, executable, so there is no point in compiling
 # with -fPIC or -fpie and objects that can be linked into a PIE. On the contrary, PIE-compatible objects
@@ -937,25 +894,6 @@ $(loader_options_dep): stage1
 		echo -n "APP_LOCAL_EXEC_TLS_SIZE = $(app_local_exec_tls_size);" > $(loader_options_dep) ; \
 	fi
 
-ifeq ($(conf_hide_symbols),1)
-version_script_file:=$(out)/version_script
-#Detect which version script to be used and copy to $(out)/version_script
-#so that loader.elf/zfs_builder.elf is rebuilt accordingly if version script has changed
-ifdef conf_version_script
-ifeq (,$(wildcard $(conf_version_script)))
-    $(error Missing version script: $(conf_version_script))
-endif
-ifneq ($(shell cmp $(out)/version_script $(conf_version_script)),)
-$(shell cp $(conf_version_script) $(out)/version_script)
-endif
-else
-ifneq ($(shell cmp $(out)/version_script $(out)/default_version_script),)
-$(shell cp $(out)/default_version_script $(out)/version_script)
-endif
-endif
-linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group \
-  $(compiler_rt_builtins) $(boost-libs) --gc-sections
-else
 # The C++ runtime (libc++ / libc++abi / libunwind) is linked on demand inside a
 # --start-group, not whole-archived: the slim kernel links its single app at
 # build time and exports no dynamic C++ ABI, so only referenced runtime objects
@@ -963,7 +901,6 @@ else
 # each symbol once avoids the multiple-definition clash from the libunwind
 # objects that the build bundles into all three archives.
 linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group $(boost-libs) $(compiler_rt_builtins)
-endif
 
 # LLVM libc (LLVM_LIBC_PLAN.md): llvm-libc is the generic libc, linked trailing
 # so it supplies any symbol the kernel and the OSv libc objects do not define.
@@ -1032,10 +969,10 @@ def_symbols = --defsym=OSV_KERNEL_BASE=$(kernel_base) \
               --defsym=OSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 endif
 
-$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(loader_options_dep) $(app_mode_dep) $(version_script_file) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
+$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(loader_options_dep) $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
 		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -L$(out)/arch/$(arch) \
-            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep),$^))) \
+            $(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep),$^)) \
 	    $(linker_archives_options) $(conf_linker_extra_options), \
 		LINK loader.elf)
 
