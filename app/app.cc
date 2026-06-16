@@ -1,261 +1,195 @@
-// The OSv application.
-//
-// Unlike upstream OSv, the application is not a separate ELF shared object
-// loaded at runtime from a filesystem image. It is compiled and statically
-// linked directly into the kernel image (app.o in loader.elf). The kernel
-// calls osv_app_main() once, after early initialization, on a dedicated thread.
-//
-// For the slimming work the in-kernel application is the os-features breadth
-// conformance test (Phase 0 guardrail, see REFACTORING.md): it exercises the
-// facilities the refactoring promises to preserve - threads, memory mapping,
-// time, and the libc surface - and nothing it does should ever stop working as
-// subsystems are deleted. It prints a PASS/FAIL line per check and a final
-// tally, then powers the machine off so a run exits cleanly.
+/*
+ * LeanStore YCSB benchmark for OSv.
+ *
+ * Fixed configuration:
+ *   MEAN_TYPE   = MEAN_USE_TASKING
+ *   dram_gib    = 1.0
+ *   target_gib  = 1.0
+ *   threads     = 1  (worker_threads + worker_tasks)
+ *   io engine   = osv
+ *   ssd_path    = /dev/vda  (first NVMe device exposed by OSv NVMe driver)
+ */
 
-#include <atomic>
-#include <cerrno>
-#include <cmath>
-#include <csetjmp>
-#include <cstdint>
+#include "leanstore/BTreeAdapter.hpp"
+#include "leanstore/Config.hpp"
+#include "leanstore/LeanStore.hpp"
+#include "leanstore/profiling/counters/WorkerCounters.hpp"
+#include "leanstore/utils/FVector.hpp"
+#include "leanstore/utils/Files.hpp"
+#include "leanstore/utils/RandomGenerator.hpp"
+#include "leanstore/utils/ScrambledZipfGenerator.hpp"
+#include "leanstore/concurrency/Mean.hpp"
+#include "leanstore/io/IoInterface.hpp"
+#include "Time.hpp"
+#include "Units.hpp"
+
+#include <gflags/gflags.h>
+
+#include <iostream>
+#include <set>
 #include <cstdio>
-#include <cstdlib>
-#include <cstring>
-#include <ctime>
-#include <pthread.h>
-#include <sys/mman.h>
-#include <unistd.h>
-#include <osv/power.hh>
 
-static int g_pass = 0;
-static int g_fail = 0;
+// YCSB-specific flags not declared in leanstore/Config.hpp
+DEFINE_uint32(ycsb_read_ratio, 100, "percentage of read operations");
+DEFINE_uint64(ycsb_tuple_count, 0, "number of tuples; 0 = derived from target_gib");
+DEFINE_uint32(ycsb_payload_size, 120, "tuple payload size in bytes");
 
-static void check(const char *name, bool ok)
+using namespace leanstore;
+
+using YCSBKey = u64;
+using YCSBPayload = BytesPayload<120>;
+
+static double calculateMTPS(chrono::high_resolution_clock::time_point begin,
+                             chrono::high_resolution_clock::time_point end,
+                             u64 factor)
 {
-    printf("[%s] %s\n", ok ? "PASS" : "FAIL", name);
-    if (ok) {
-        g_pass++;
-    } else {
-        g_fail++;
-    }
+    double tps = (factor * 1.0 /
+                  (chrono::duration_cast<chrono::microseconds>(end - begin).count() / 1000000.0));
+    return tps / 1000000.0;
 }
 
-// ---------------------------------------------------------------------------
-// Threads: creation/join, mutex, condition variable, TLS.
-// ---------------------------------------------------------------------------
-
-static std::atomic<int> g_counter{0};
-
-static void *worker(void *arg)
+static void run_ycsb()
 {
-    long n = (long)arg;
-    for (long i = 0; i < n; i++) {
-        g_counter.fetch_add(1, std::memory_order_relaxed);
+    chrono::high_resolution_clock::time_point begin, end;
+
+    LeanStore db;
+    unique_ptr<BTreeInterface<YCSBKey, YCSBPayload>> adapter;
+    mean::task::scheduleTaskSync([&]() {
+        auto& vs_btree = db.registerBTreeLL("ycsb", "y");
+        adapter.reset(new BTreeVSAdapter<YCSBKey, YCSBPayload>(vs_btree));
+        db.registerConfigEntry("ycsb_read_ratio", FLAGS_ycsb_read_ratio);
+        db.registerConfigEntry("ycsb_target_gib", FLAGS_target_gib);
+    });
+
+    auto& table = *adapter;
+    const u64 ycsb_tuple_count =
+        FLAGS_target_gib * 1024.0 * 1024.0 * 1024.0 / 2.0 /
+        (sizeof(YCSBKey) + sizeof(YCSBPayload));
+
+    // Insert phase
+    {
+        db.startProfilingThread();
+        const u64 n = ycsb_tuple_count;
+        printf("Inserting %lu tuples\n", n);
+        begin = chrono::high_resolution_clock::now();
+
+        std::atomic<u64> current_block_start{0};
+        const u64 block_size = 1 << 18;
+
+        auto ycsb_insert_fun = [&]() {
+            while (true) {
+                u64 block_start = current_block_start.fetch_add(block_size, std::memory_order_relaxed);
+                if (block_start >= n) break;
+                u64 block_end = std::min(block_start + block_size, n);
+                for (u64 t = block_start; t < block_end; t++) {
+                    YCSBPayload payload;
+                    utils::RandomGenerator::getRandString(reinterpret_cast<u8*>(&payload), sizeof(YCSBPayload));
+                    table.insert(t, payload);
+                    YCSBPayload result;
+                    table.lookup(t, result);
+                    ensure(result == payload);
+                }
+            }
+        };
+
+        BlockedRange bb(0, (u64)1);
+        mean::task::parallelFor(bb, ycsb_insert_fun, FLAGS_worker_tasks, false);
+
+        end = chrono::high_resolution_clock::now();
+        printf("Insert time: %.3f s  (%.2f M tps)\n",
+               chrono::duration_cast<chrono::microseconds>(end - begin).count() / 1000000.0,
+               calculateMTPS(begin, end, n));
+        const u64 written_pages = db.getBufferManager().consumedPages();
+        printf("Inserted: %lu pages (%lu MiB)\n",
+               written_pages, written_pages * PAGE_SIZE / 1024 / 1024);
     }
-    return (void *)(n * 2);
+
+    // Transaction phase
+    auto zipf_random = std::make_unique<utils::ScrambledZipfGenerator>(
+        0, ycsb_tuple_count, FLAGS_zipf_factor);
+
+    printf("Starting YCSB transactions (read_ratio=%u, run_for=%lu s)\n",
+           FLAGS_ycsb_read_ratio, FLAGS_run_for_seconds);
+
+    {
+        auto start = mean::getSeconds();
+
+        auto ycsb_tx = [&]() {
+            auto before = mean::readTSC();
+            YCSBKey key = zipf_random->rand();
+            assert(key < ycsb_tuple_count);
+            YCSBPayload result;
+            if (FLAGS_ycsb_read_ratio == 100 ||
+                utils::RandomGenerator::getRandU64(0, 100) < FLAGS_ycsb_read_ratio) {
+                table.lookup(key, result);
+            } else {
+                YCSBPayload payload;
+                utils::RandomGenerator::getRandString(
+                    reinterpret_cast<u8*>(&payload), sizeof(YCSBPayload));
+                table.update(key, payload);
+            }
+            auto now = mean::readTSC();
+            auto timeDiff = mean::tscDifferenceUs(now, before);
+            WorkerCounters::myCounters().total_tx_time += timeDiff;
+            WorkerCounters::myCounters().tx_latency_hist.increaseSlot(timeDiff);
+            WorkerCounters::myCounters().tx++;
+            mean::task::yield();
+        };
+
+        BlockedRange bb(0, (u64)1000000000000ul);
+        auto startTsc = mean::readTSC();
+        auto startTP = mean::getTimePoint();
+        mean::task::parallelFor(bb, ycsb_tx, FLAGS_worker_tasks, 100000, true);
+        auto diffTP = mean::timePointDifference(mean::getTimePoint(), startTP) / 1e9;
+        printf("Done: %.3f s\n", diffTP);
+    }
+
+    mean::env::shutdown();
 }
 
-static void test_threads()
+extern "C" void osv_main_app()
 {
-    const int N = 8;
-    const long per = 10000;
-    pthread_t t[N];
-    g_counter.store(0);
-    bool created = true;
-    for (int i = 0; i < N; i++) {
-        if (pthread_create(&t[i], nullptr, worker, (void *)per) != 0) {
-            created = false;
-        }
-    }
-    long sum = 0;
-    for (int i = 0; i < N; i++) {
-        void *r = nullptr;
-        pthread_join(t[i], &r);
-        sum += (long)r;
-    }
-    check("thread create/join", created);
-    check("thread shared atomic count", g_counter.load() == N * per);
-    check("thread return values", sum == (long)N * per * 2);
+    // Synthesize a fake argv with the hardcoded configuration so that all
+    // FLAGS_* variables are initialised by gflags before leanstore starts.
+    const char* args[] = {
+        "leanstore-ycsb",
+        "--ssd_path=/dev/vda",   // OSv NVMe block device (first drive)
+        "--ioengine=osv",
+        "--dram_gib=1",
+        "--target_gib=2",
+        "--worker_threads=1",
+        "--worker_tasks=16",
+        "--pp_threads=1",
+        "--nopp",
+        "--ycsb_read_ratio=100",
+        "--run_for_seconds=60",
+        "--partition_bits=3",
+        "--optimistic_parent_pointer=1",
+        "--xmerge=1",
+        "--contention_split=1"
+    	, nullptr
+    };
+    int argc = 0;
+    while (args[argc]) argc++;
 
-    // mutex + condition variable handshake
-    pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
-    pthread_cond_t c = PTHREAD_COND_INITIALIZER;
-    bool ready = false;
-    struct ctx { pthread_mutex_t *m; pthread_cond_t *c; bool *ready; } cx{&m, &c, &ready};
-    pthread_t signaller;
-    pthread_create(&signaller, nullptr, [](void *a) -> void * {
-        auto *x = (ctx *)a;
-        pthread_mutex_lock(x->m);
-        *x->ready = true;
-        pthread_cond_signal(x->c);
-        pthread_mutex_unlock(x->m);
-        return nullptr;
-    }, &cx);
-    pthread_mutex_lock(&m);
-    while (!ready) {
-        pthread_cond_wait(&c, &m);
-    }
-    pthread_mutex_unlock(&m);
-    pthread_join(signaller, nullptr);
-    check("mutex + condition variable", ready);
+    // gflags needs a non-const argv
+    char** argv = const_cast<char**>(args);
+    gflags::ParseCommandLineFlags(&argc, &argv, true);
 
-    // thread-local storage isolation
-    static thread_local int tls = 0;
-    tls = 42;
-    bool tls_ok = true;
-    pthread_t tt;
-    pthread_create(&tt, nullptr, [](void *r) -> void * {
-        static thread_local int local = 0;
-        *(bool *)r = (local == 0); // fresh in the new thread
-        local = 7;
-        return nullptr;
-    }, &tls_ok);
-    pthread_join(tt, nullptr);
-    check("thread-local storage isolation", tls_ok && tls == 42);
+    using namespace mean;
+    IoOptions ioOptions("osv", "/dev/vda");
+    ioOptions.write_back_buffer_size = PAGE_SIZE;
+    ioOptions.engine = "osv";
+    ioOptions.iodepth = 2;  // 1 worker + small batch
+    ioOptions.channelCount = 1;
+
+    mean::env::init(1 /*workerThreads*/, 0 /*pp_threads*/, ioOptions);
+    mean::env::start(run_ycsb);
+    mean::env::join();
 }
 
-// ---------------------------------------------------------------------------
-// Memory: anonymous mmap, mprotect, munmap.
-// ---------------------------------------------------------------------------
-
-static void test_mmap()
-{
-    const size_t len = 256 * 1024;
-    void *p = mmap(nullptr, len, PROT_READ | PROT_WRITE,
-                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    check("mmap anonymous", p != MAP_FAILED);
-    if (p == MAP_FAILED) {
-        return;
-    }
-    auto *bytes = (volatile unsigned char *)p;
-    for (size_t i = 0; i < len; i += 4096) {
-        bytes[i] = (unsigned char)i;
-    }
-    bool readback = true;
-    for (size_t i = 0; i < len; i += 4096) {
-        if (bytes[i] != (unsigned char)i) {
-            readback = false;
-        }
-    }
-    check("mmap read/write across pages", readback);
-    check("mprotect read-only", mprotect(p, len, PROT_READ) == 0);
-    check("munmap", munmap(p, len) == 0);
-}
-
-// ---------------------------------------------------------------------------
-// Time: clocks are monotonic / advance, nanosleep waits.
-// ---------------------------------------------------------------------------
-
-static void test_time()
-{
-    struct timespec a{}, b{};
-    bool got = clock_gettime(CLOCK_MONOTONIC, &a) == 0;
-    struct timespec req{0, 5 * 1000 * 1000}; // 5ms
-    nanosleep(&req, nullptr);
-    got = got && clock_gettime(CLOCK_MONOTONIC, &b) == 0;
-    check("clock_gettime(CLOCK_MONOTONIC)", got);
-    double da = a.tv_sec + a.tv_nsec / 1e9;
-    double db = b.tv_sec + b.tv_nsec / 1e9;
-    check("monotonic clock advances over nanosleep", db > da);
-
-    struct timespec rt{};
-    check("clock_gettime(CLOCK_REALTIME)", clock_gettime(CLOCK_REALTIME, &rt) == 0);
-
-    // gmtime/mktime round-trip on a fixed epoch.
-    time_t epoch = 1700000000; // 2023-11-14T22:13:20Z
-    struct tm tmv{};
-    gmtime_r(&epoch, &tmv);
-    char buf[64];
-    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tmv);
-    check("gmtime_r + strftime", strcmp(buf, "2023-11-14T22:13:20") == 0);
-}
-
-// ---------------------------------------------------------------------------
-// libc surface: string/stdlib, formatted I/O, math, sort/search,
-// setjmp/longjmp, errno discipline, malloc.
-// ---------------------------------------------------------------------------
-
-static int cmp_int(const void *a, const void *b)
-{
-    return (*(const int *)a) - (*(const int *)b);
-}
-
-static jmp_buf g_jb;
-
-static void test_libc()
-{
-    // string / memory
-    char s[32];
-    strcpy(s, "hello");
-    strcat(s, ", world");
-    check("strcpy/strcat/strlen", strlen(s) == 12 && strcmp(s, "hello, world") == 0);
-    check("memcmp/memset", (memset(s, 'x', 4), memcmp(s, "xxxx", 4) == 0));
-
-    // stdlib conversions
-    check("strtol", strtol("  -123", nullptr, 10) == -123);
-    check("strtod hex float", strtod("0x1.8p3", nullptr) == 12.0);
-
-    // formatted output (golden vector)
-    char out[64];
-    int n = snprintf(out, sizeof(out), "%d %5.2f %s %#x", 42, 3.14159, "ok", 255);
-    check("snprintf golden vector",
-          n == (int)strlen(out) && strcmp(out, "42  3.14 ok 0xff") == 0);
-
-    // formatted input
-    int iv = 0; double dv = 0;
-    int matched = sscanf("7 2.5", "%d %lf", &iv, &dv);
-    check("sscanf", matched == 2 && iv == 7 && dv == 2.5);
-
-    // math
-    check("sqrt/pow", std::fabs(std::sqrt(2.0) * std::sqrt(2.0) - 2.0) < 1e-12 &&
-                      std::fabs(std::pow(2.0, 10.0) - 1024.0) < 1e-9);
-    check("log/exp", std::fabs(std::log(std::exp(1.0)) - 1.0) < 1e-12);
-
-    // qsort / bsearch
-    int arr[] = {5, 2, 9, 1, 7, 3};
-    const int len = sizeof(arr) / sizeof(arr[0]);
-    qsort(arr, len, sizeof(int), cmp_int);
-    int key = 7;
-    int *found = (int *)bsearch(&key, arr, len, sizeof(int), cmp_int);
-    check("qsort sorts", arr[0] == 1 && arr[len - 1] == 9);
-    check("bsearch finds", found != nullptr && *found == 7);
-
-    // setjmp / longjmp
-    volatile int hops = 0;
-    if (setjmp(g_jb) == 0) {
-        hops = 1;
-        longjmp(g_jb, 99);
-    } else {
-        hops = 2;
-    }
-    check("setjmp/longjmp", hops == 2);
-
-    // errno discipline
-    errno = 0;
-    FILE *f = fopen("/this/does/not/exist", "r");
-    check("errno set on failure", f == nullptr && errno != 0);
-    if (f) {
-        fclose(f);
-    }
-
-    // malloc / realloc / free
-    void *m = malloc(1024);
-    bool malloc_ok = m != nullptr;
-    m = realloc(m, 4096);
-    malloc_ok = malloc_ok && m != nullptr;
-    if (m) {
-        memset(m, 0, 4096);
-    }
-    free(m);
-    check("malloc/realloc/free", malloc_ok);
-}
-
+// The OSv kernel calls osv_app_main() at boot.
 extern "C" void osv_app_main()
 {
-    printf("== os-features conformance ==\n");
-    test_threads();
-    test_mmap();
-    test_time();
-    test_libc();
-    printf("== %d passed, %d failed ==\n", g_pass, g_fail);
-    osv::poweroff();
+    osv_main_app();
 }

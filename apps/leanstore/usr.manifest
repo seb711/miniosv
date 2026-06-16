@@ -1,0 +1,15 @@
+/ycsb: ${MODULE_DIR}/build/frontend/libycsb.so
+/mixed: ${MODULE_DIR}/build/frontend/libmixed.so
+/libleanstore.so: ${MODULE_DIR}/build/backend/libleanstore.so
+/nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags.a: /nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags.a
+/nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags_nothreads.a: /nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags_nothreads.a
+/nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags_nothreads.so: /nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags_nothreads.so
+/nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags_nothreads.so.2.2: /nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags_nothreads.so.2.2
+/nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags_nothreads.so.2.2.2: /nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags_nothreads.so.2.2.2
+/nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags.so: /nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags.so
+/nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags.so.2.2: /nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags.so.2.2
+/nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags.so.2.2.2: /nix/store/wk7rciwb35pq0lh01k6z0nxhaci5rx87-gflags-2.2.2/lib/libgflags.so.2.2.2
+
+/nix/store/ja4mxjifpaw5fq5pnkism1isi4q8amh7-boost-1.81.0/lib/libboost_context.a: /nix/store/ja4mxjifpaw5fq5pnkism1isi4q8amh7-boost-1.81.0/lib/libboost_context.a
+/nix/store/ja4mxjifpaw5fq5pnkism1isi4q8amh7-boost-1.81.0/lib/libboost_context.so: /nix/store/ja4mxjifpaw5fq5pnkism1isi4q8amh7-boost-1.81.0/lib/libboost_context.so
+/nix/store/ja4mxjifpaw5fq5pnkism1isi4q8amh7-boost-1.81.0/lib/libboost_context.so.1.81.0: /nix/store/ja4mxjifpaw5fq5pnkism1isi4q8amh7-boost-1.81.0/lib/libboost_context.so.1.81.0

@@ -50,4 +50,4 @@ conf_drivers_virtio_blk=0
 conf_drivers_virtio_fs=0
 conf_drivers_virtio_rng=1
 conf_drivers_mmio=1
-conf_drivers_nvme=0
+conf_drivers_nvme=1

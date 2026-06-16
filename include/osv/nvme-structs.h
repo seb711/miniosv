@@ -133,7 +133,13 @@ typedef union _nvme_controller_cap {
         u32             rsvd2   : 3;    ///< reserved
         u32             mpsmin  : 4;    ///< memory page size minimum
         u32             mpsmax  : 4;    ///< memory page size maximum
-        u32             rsvd3   : 8;    ///< reserved
+
+        u32             pmrs    : 1;    ///< Persistent Memory Region supported
+        u32             cmbs    : 1;    ///< controller memory buffer supported
+        u32             nsss    : 1;    ///< nvm subsystem shutdown supported
+        u32             crms    : 2;    ///< controller ready modes supported
+        u32             nsses   : 1;    ///< nvm substem shutdown enhancements supported
+        u32             rsvd3   : 2;    ///< reserved
     };
 } nvme_controller_cap_t;
 
@@ -149,7 +155,8 @@ typedef union _nvme_controller_config {
         u32             shn     : 2;    ///< shutdown notification
         u32             iosqes  : 4;    ///< I/O submission queue entry size
         u32             iocqes  : 4;    ///< I/O completion queue entry size
-        u32             rsvd2   : 8;    ///< reserved
+        u32             crime   : 1;    ///< Controller Ready Independent of Media Enable
+        u32             rsvd2   : 7;    ///< reserved
     };
 } nvme_controller_config_t;
 
@@ -160,7 +167,10 @@ typedef union _nvme_controller_status {
         u32             rdy     : 1;    ///< ready
         u32             cfs     : 1;    ///< controller fatal status
         u32             shst    : 2;    ///< shutdown status
-        u32             rsvd    : 28;   ///< reserved
+        u32             nssro   : 1;    ///< nvme subsystem reset occured
+        u32             pp      : 1;    ///< processing paused
+        u32             st      : 1;    ///< shutdown type
+        u32             rsvd    : 25;   ///< reserved
     };
 } nvme_controller_status_t;
 
@@ -188,6 +198,16 @@ typedef union _nvme_cmbsz {
         u32             sz      : 20;   ///< size (in cmbsz units)
     };
 } nvme_cmbsz_t;
+
+
+/// Controller Ready Timeouts
+typedef union _nvme_crto {
+    u32                 val;            ///< whole value
+    struct {
+        u16             crwmt;          ///< Controller Ready With Media Timeout 
+        u16             crimt;          ///< Controller Ready Independent of Media Timeout
+    };
+} nvme_crto_t;
 
 
 
@@ -250,8 +270,19 @@ typedef struct _nvme_controller_reg {
     u64                     asq;        ///< admin submission queue base address
     u64                     acq;        ///< admin completion queue base address
     nvme_cmbloc_t           cmbloc;     ///< controller memory buffer location
-    nvme_cmbsz_t            cmbsz;      ///< controller memory buffer size
-    u32                     rcss[1008]; ///< reserved and command set specific
+    nvme_cmbsz_t            cmbsz;      ///< controller memory buffer size offset: 3Ch
+    
+    u32                     bpinfo;     /// offset: 0x40
+    u32                     bprsel;     /// offsetl 0x44
+    u64                     bpmbl;      /// offset: 0x48
+    u64                     cmbmsc;     /// offset: 0x50
+    u32                     cmbsts;     /// offset: 0x58
+    u32                     cmbebs;     /// offset: 0x5C
+    u32                     cmbswtp;    /// offset: 0x60
+    u32                     nssd;       /// offset: 0x64
+    nvme_crto_t             crto;       /// offset: 0x68
+
+    u32                     rcss[997]; ///< reserved and command set specific
     u32                     sq0tdbl[1024]; ///< sq0 tail doorbell at 0x1000
 } nvme_controller_reg_t;
 

@@ -362,6 +362,11 @@ $(out)/%.o: %.cc | generated-headers $(out)/.libcxx-built
 	$(makedir)
 	$(call quiet, $(CXX) $(CXXFLAGS) -c -o $@ $<, CXX $*.cc)
 
+# Same as the .cc rule, for app sources that use the .cpp extension (leanstore).
+$(out)/%.o: %.cpp | generated-headers $(out)/.libcxx-built
+	$(makedir)
+	$(call quiet, $(CXX) $(CXXFLAGS) -c -o $@ $<, CXX $*.cpp)
+
 $(out)/%.o: %.c | generated-headers
 	$(makedir)
 	$(call quiet, $(CC) $(CFLAGS) -c -o $@ $<, CC $*.c)
@@ -493,6 +498,13 @@ endif
 ifeq ($(conf_drivers_ide),1)
 drivers += drivers/ide.o
 endif
+# NVMe user-queue driver (no block-device interface; consumed directly by the
+# in-kernel app via core/nvme.o and <osv/nvme.hh>).
+ifeq ($(conf_drivers_nvme),1)
+drivers += drivers/nvme.o
+drivers += drivers/nvme-queue.o
+drivers += drivers/nvme-user-queue.o
+endif
 endif # x64
 
 ifeq ($(arch),aarch64)
@@ -514,6 +526,11 @@ endif
 drivers += drivers/virtio-vring.o
 # Block-device and filesystem drivers are gone with the filesystem.
 drivers += drivers/virtio-rng.o
+endif
+ifeq ($(conf_drivers_nvme),1)
+drivers += drivers/nvme.o
+drivers += drivers/nvme-queue.o
+drivers += drivers/nvme-user-queue.o
 endif
 endif # aarch64
 
@@ -654,6 +671,11 @@ objects += core/async.o
 objects += core/libaio.o
 objects += core/options.o
 objects += core/string_utils.o
+# C interface (<osv/nvme.hh>) bridging the in-kernel app to the NVMe user-queue
+# driver. Built only when the NVMe driver is enabled.
+ifeq ($(conf_drivers_nvme),1)
+objects += core/nvme.o
+endif
 
 #include $(src)/libc/build.mk:
 libc =
@@ -803,6 +825,19 @@ endif
 # Boost.System is header-only in modern Boost, so no Boost library is linked.
 boost-includes = -isystem external/boost
 boost-libs :=
+
+# The leanstore app links the precompiled boost.context archive (the fiber/
+# context backend for leanstore's Mean tasking). It is almost pure assembly
+# (fcontext) and pulls in no libstdc++/glibc symbols, so the host archive is ABI-
+# compatible. gflags, by contrast, is compiled from vendored source as app
+# objects (see app/Makefile) so it uses the kernel's libc++ ABI.
+ifeq ($(arch),x64)
+boost-libs += /usr/lib/x86_64-linux-gnu/libboost_context.a
+else
+# aarch64 app archives come from scripts/download_aarch64_libs.sh
+aarch64_libs = build/downloaded_packages/aarch64/lib
+boost-libs += $(aarch64_libs)/libboost_context.a
+endif
 
 # nfs/ext null vfsops went with the filesystem.
 
