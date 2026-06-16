@@ -85,8 +85,16 @@ SECTIONS
 
     .data : { *(.data .data.*) } : text
 
+    /* Align the location counter BEFORE recording _init_array_start so the
+     * symbol equals the section start. Putting ALIGN(16) on the section output
+     * instead would advance the section past the already-recorded symbol when
+     * the preceding section ends 8-mod-16, leaving an 8-byte zero gap that
+     * premain reads as a bogus (null) constructor pointer -> branch to 0 at
+     * boot. This was layout-sensitive: it only fired when .data's size made
+     * the gap appear (e.g. after removing other objects). */
+    . = ALIGN(16);
     HIDDEN(_init_array_start = .);
-    .init_array : ALIGN(16) {
+    .init_array : {
         *(SORT_BY_NAME(.preinit_array.*) .preinit_array)
         *(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*))
         *(.init_array .ctors)
