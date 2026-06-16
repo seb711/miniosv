@@ -3,11 +3,20 @@
 # for the OSv kernel, replacing the host GNU libstdc++.a.
 #
 # Phase 8 of LLVM_LIBC_PLAN.md, the libstdc++ -> libc++ swap. Built against the
-# same pinned llvm-project as llvm-libc (external/llvm-project), with
-# localization OFF - that is the whole point: libstdc++'s locale facets are the
-# only consumer of the wide-ctype / locale-_l / iconv musl families we still
-# carry, so a localization-free libc++ lets those go and kills the last glibc
-# dependency (the host libstdc++.a pulled __isoc23_strtoul et al.).
+# same pinned llvm-project as llvm-libc (external/llvm-project).
+#
+# Localization is ON, but narrow-only: a single static "C"/US locale, no wide
+# characters, no Unicode, no <filesystem>. This is what gives us <iostream>
+# (std::cout/std::endl) and the num_put/num_get/ctype facets. libc++'s locale
+# backend is the plain POSIX one (__locale_dir/support/linux.h, selected by the
+# linux triple): it maps every facet operation onto standard *_l functions
+# (toupper_l, strtod_l, strcoll_l, strftime_l, ...) plus newlocale/uselocale/
+# localeconv, all of which llvm-libc provides natively. There is no glibc compat
+# shim and no musl locale machinery underneath - just llvm-libc.
+#
+# Wide characters / Unicode stay OFF on purpose: those are the only consumers of
+# the wide-ctype families, and we don't need them. Keeping them off keeps the
+# locale surface to the narrow "C" locale.
 #
 # Produces, for the requested arch:
 #   build/libcxx/<arch>/lib/{libc++.a,libc++abi.a,libunwind.a}
@@ -58,7 +67,8 @@ if grep -q '^#define _LIBUNWIND_CHECK_LINUX_SIGRETURN 1' "$UNWCURSOR"; then
     sed -i 's@^#define _LIBUNWIND_CHECK_LINUX_SIGRETURN 1@// OSv: no Linux signal frames / no syscall ABI - disable sigreturn unwinding@' "$UNWCURSOR"
 fi
 
-# 2. configure + build (static, no localization, exceptions+RTTI on, llvm unwinder)
+# 2. configure + build (static, narrow "C"-locale localization, exceptions+RTTI
+#    on, llvm unwinder)
 # Codegen must match the kernel (see COMMON in the top-level Makefile).
 #
 # Header environment must also match the kernel: put OSv's own libc headers
@@ -76,7 +86,14 @@ GEN_INC="$BUILD_DIR/gen/include"
 mkdir -p "$GEN_INC/bits"
 sh "$OSV_ROOT/include/api/$osv_arch/bits/alltypes.h.sh" > "$GEN_INC/bits/alltypes.h"
 OSV_HEADERS="-isystem $OSV_ROOT/include/api -isystem $OSV_ROOT/include/api/$osv_arch -isystem $GEN_INC"
-KERNEL_FLAGS="-fno-pie -fno-stack-protector -ftls-model=local-exec -fno-omit-frame-pointer $OSV_HEADERS"
+# _LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE: use libc++'s own platform-independent
+# ctype rune table (alpha/digit/space... mask bits) rather than a platform
+# libc's. We dropped __GLIBC__ and use llvm-libc (which libc++ doesn't recognise
+# as a rune-table provider here), so without this libc++'s <__locale> hits its
+# "unknown rune table for this platform" #error. The kernel build defines the
+# same macro (Makefile, libcxx-includes) so locale.cpp's classic_table here and
+# every ctype<char> consumer there agree on the mask layout.
+KERNEL_FLAGS="-fno-pie -fno-stack-protector -ftls-model=local-exec -fno-omit-frame-pointer -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE $OSV_HEADERS"
 
 # Pure-LLVM cross-compile when targeting a non-host arch: one clang driven at the
 # target triple (no GNU cross toolchain). cmake needs the cross vars explicitly.
@@ -121,7 +138,7 @@ cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
     -DLIBCXX_ENABLE_STATIC=ON \
     -DLIBCXXABI_ENABLE_STATIC=ON \
     -DLIBUNWIND_ENABLE_STATIC=ON \
-    -DLIBCXX_ENABLE_LOCALIZATION=OFF \
+    -DLIBCXX_ENABLE_LOCALIZATION=ON \
     -DLIBCXX_ENABLE_UNICODE=OFF \
     -DLIBCXX_ENABLE_FILESYSTEM=OFF \
     -DLIBCXX_ENABLE_RANDOM_DEVICE=OFF \

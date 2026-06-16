@@ -214,13 +214,23 @@ endif
 
 # --- libc++ replaces GNU libstdc++ (LLVM_LIBC_PLAN.md, Phase 8) ---
 # Compile the entire C++ surface (kernel + app + vendored boost) against our
-# localization-free libc++ headers instead of the system GNU C++ headers; the
-# libc++ c++/v1 dir itself is added C++-only in CXXFLAGS (with -nostdinc++), so
-# it does not shadow C headers (e.g. its wchar.h wrapper) for C compiles.
+# libc++ headers instead of the system GNU C++ headers; the libc++ c++/v1 dir
+# itself is added C++-only in CXXFLAGS (with -nostdinc++), so it does not shadow
+# C headers (e.g. its wchar.h wrapper) for C compiles.
 # libunwind's unwind.h/libunwind.h are needed by backtrace.cc (C++ only, but
 # harmless for C) and libc++abi's cxxabi.h is installed alongside under c++/v1.
+#
+# _LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE: libc++'s narrow ctype facet needs a ctype
+# "rune table" (the alpha/digit/space... mask bits). Normally libc++ derives the
+# layout from the platform libc (__GLIBC__, newlib, BSD, ...). We dropped
+# __GLIBC__ and use llvm-libc, which is none of those, so we tell libc++ to use
+# its OWN platform-independent table instead (the same default it auto-selects
+# for __LLVM_LIBC__). This MUST match the flag in scripts/build-libcxx.sh: the
+# mask type/bit values appear in both libc++.a (locale.cpp's classic_table) and
+# every consumer's ctype<char>, so the two have to agree.
 CXX_INCLUDES = -isystem external/llvm-project/libunwind/include
-libcxx-includes = -nostdinc++ -isystem build/libcxx/$(arch)/include/c++/v1
+libcxx-includes = -nostdinc++ -isystem build/libcxx/$(arch)/include/c++/v1 \
+                  -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE
 
 ifeq ($(arch),aarch64)
 libfdt_base = external/$(arch)/libfdt
