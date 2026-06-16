@@ -405,7 +405,8 @@ namespace nvme
 
         }
 
-        return 1;
+        ring_sq_doorbell(); 
+	return 1;
     }
 
     void io_user_queue_pair::wait_for_completion_queue_entries()
