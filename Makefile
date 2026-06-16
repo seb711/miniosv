@@ -655,7 +655,6 @@ objects += core/string_utils.o
 #include $(src)/libc/build.mk:
 libc =
 
-libc += internal/_chk_fail.o
 libc += internal/libc.o
 
 
@@ -678,12 +677,8 @@ libc += misc/error.o
 libc += misc/getopt.o
 libc += misc/getopt_long.o
 libc += misc/backtrace.o
-libc += misc/__longjmp_chk.o
 
 
-libc += multibyte/__mbsnrtowcs_chk.o
-libc += multibyte/__mbsrtowcs_chk.o
-libc += multibyte/__mbstowcs_chk.o
 
 
 libc += prng/random.o
@@ -722,29 +717,15 @@ ifeq ($(arch),x64)
 libc += stdlib/unimplemented.o
 endif
 
-libc += string/__memcpy_chk.o
 libc += string/explicit_bzero.o
-libc += string/__explicit_bzero_chk.o
 ifeq ($(conf_memory_optimize),1)
 libc += string/memcpy.o
 else
 endif
-libc += string/__memmove_chk.o
 libc += string/memset.o
-libc += string/__memset_chk.o
 libc += string/rawmemchr.o
-libc += string/__stpcpy_chk.o
-libc += string/__strcat_chk.o
-libc += string/__strcpy_chk.o
 libc += string/strerror_r.o
-libc += string/__strncat_chk.o
-libc += string/__strncpy_chk.o
 libc += string/stresep.o
-libc += string/__wcscpy_chk.o
-libc += string/__wcsncpy_chk.o
-libc += string/__wmemcpy_chk.o
-libc += string/__wmemmove_chk.o
-libc += string/__wmemset_chk.o
 
 
 
@@ -765,11 +746,9 @@ libc += dlfcn.o
 libc += io.o
 # Stdio: the FILE implementation (printf/fopen/fread/scanf/...) comes from the
 # llvm-libc archive; these are the OSv seam (console-backed std streams + FILE
-# stubs), the printf-extension stubs, and the _FORTIFY_SOURCE wrappers.
+# stubs) and the printf-extension stubs.
 libc += stdio/llvm_stdio.o
 libc += stdio/printf-hooks.o
-libc += stdio/__fprintf_chk.o
-libc += stdio/__vfprintf_chk.o
 libc += time.o
 libc += signal.o
 libc += mman.o
@@ -778,7 +757,6 @@ libc += sem.o
 # depend on the (removed) file-descriptor table and filesystem.
 libc += user.o
 libc += resource.o
-libc += syslog.o
 libc += cxa_thread_atexit.o
 libc += cpu_set.o
 libc += malloc_hooks.o
