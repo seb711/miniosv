@@ -20,6 +20,7 @@
 int os_features_main();
 int os_stress_main();
 int os_iostream_main();
+int os_memmove_main();
 
 extern "C" void osv_app_main()
 {
@@ -29,6 +30,8 @@ extern "C" void osv_app_main()
     rc |= os_features_main();
     printf("\n");
     rc |= os_iostream_main();
+    printf("\n");
+    rc |= os_memmove_main();
     printf("\n");
     rc |= os_stress_main();
 

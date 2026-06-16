@@ -111,7 +111,18 @@ __attribute__((optimize("omit-frame-pointer")))
 __attribute__((optimize("unroll-loops")))
 void* do_small_memcpy(void *dest, const void *src)
 {
-#if __GNUC__ < 12
+#if defined(__clang__)
+    // Clang reports __GNUC__ == 4, so it would take the assignment-based
+    // branch below — but clang compiles the packed-struct assignment with
+    // SSE loads/stores in non-monotonic order (e.g. for N=50 it stores the
+    // 2-byte tail BEFORE loading the middle 16-byte chunk), which corrupts
+    // data when dest and src overlap with dest < src. memmove() relies on
+    // this function being overlap-safe in that direction (see comment above).
+    // Clang fully inlines constant-size __builtin_memmove for all N < 64
+    // (verified: no libcall, so no recursion through memmove) and emits
+    // all loads before all stores, which is overlap-safe in both directions.
+    __builtin_memmove(dest, src, N);
+#elif __GNUC__ < 12
     // Until Gcc 12, the following assignment-based implementation worked also
     // for overlapping dest and src (as long as dest < src). It no longer
     // does, as noted in https://gcc.gnu.org/bugzilla/show_bug.cgi?id=108296

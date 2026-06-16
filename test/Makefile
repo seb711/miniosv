@@ -10,9 +10,11 @@
 #   - osv_tests.cc : the osv_app_main() driver that runs the suites below
 #   - os-features  : OS facility conformance checks
 #   - os-iostream  : C++ iostreams / localization checks (std::cout etc.)
+#   - os-memmove   : memmove() overlap-correctness regression test
 #   - os-stress    : concurrency / allocator / TLS stress tests
 
 app-objects =  test/osv_tests.o
 app-objects += test/os-features.o
 app-objects += test/os-iostream.o
+app-objects += test/os-memmove.o
 app-objects += test/os-stress.o
