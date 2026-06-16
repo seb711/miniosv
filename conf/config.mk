@@ -43,7 +43,6 @@ conf_interrupt_stack_size=0x1000
 conf_drivers_acpi=1
 conf_drivers_pci=1
 conf_drivers_hpet=1
-conf_drivers_vga=1
 conf_drivers_ide=0
 conf_drivers_ahci=0
 conf_drivers_virtio=1
