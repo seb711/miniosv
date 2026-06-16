@@ -4,6 +4,9 @@
 extern "C" {
 #endif
 
+/* OSv's ioctl request numbers (was added by include/glibc-compat/sys/ioctl.h,
+ * removed in Phase 9.6). */
+#include <osv/ioctl.h>
 #include <bits/ioctl.h>
 
 int ioctl (int, unsigned long, ...);

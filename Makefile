@@ -192,7 +192,6 @@ cscope:
 
 local-includes =
 INCLUDES = $(local-includes) -Iarch/$(arch) -I. -Iinclude  -Iarch/common
-INCLUDES += -isystem include/glibc-compat
 #
 # C++ standard headers come from our own libc++ (CXX_INCLUDES is set below,
 # overriding anything here). The aarch64 cross-build still needs a sysroot and

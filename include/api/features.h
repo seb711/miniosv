@@ -35,4 +35,18 @@
 #define _Noreturn
 #endif
 
+/* Standard C library header macros that the kernel headers expect. Formerly
+ * supplied by include/glibc-compat/features.h (removed in Phase 9.6); merged
+ * here so include/api is self-sufficient. __BEGIN_DECLS / __THROW come from
+ * <sys/cdefs.h>, which many <osv/*> headers rely on <features.h> already having
+ * pulled in.
+ *
+ * NOTE: we deliberately do NOT define __GLIBC__/__GNU_LIBRARY__ here. OSv is not
+ * glibc, and claiming to be breaks the libc++ build (it selects a glibc-specific
+ * <random> path that clashes with our headers). boost's predef falls back to
+ * architecture-based endian detection without it. */
+#include <sys/cdefs.h>
+
+#define hidden __attribute__((__visibility__("hidden")))
+
 #endif
