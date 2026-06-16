@@ -201,21 +201,14 @@ cscope:
 local-includes =
 INCLUDES = $(local-includes) -Iarch/$(arch) -I. -Iinclude  -Iarch/common
 #
-# C++ standard headers come from our own libc++ (CXX_INCLUDES is set below,
-# overriding anything here). The aarch64 cross-build still needs a sysroot and
-# the target toolchain's standard C headers (e.g. unwind.h) for the freestanding
-# bits; the native x86 build needs nothing extra.
+# C++ standard headers come from our own libc++ (CXX_INCLUDES is set below).
+# There is no GNU toolchain and no sysroot on either arch: C headers come from
+# OSv's own include/api, C++ headers from our libc++, and <unwind.h> from
+# libunwind (already on the include path). The aarch64 cross build compiles
+# -nostdinc so it does not pick up the host's headers.
 ifeq ($(arch),aarch64)
-  # Pure-LLVM aarch64 cross build: clang cross-compiles (--target below), the C
-  # headers come from OSv's own include/api (compiled -nostdinc), the C++ headers
-  # from our libc++, and <unwind.h> (the only freestanding header the kernel
-  # needs, for backtrace.cc) from libunwind, which is already on the include path
-  # (external/llvm-project/libunwind/include). No GNU cross toolchain, no sysroot.
-  STANDARD_GCC_INCLUDES =
-  gcc-sysroot =
   standard-includes-flag = -nostdinc
 else
-  STANDARD_GCC_INCLUDES =
   standard-includes-flag =
 endif
 
@@ -244,8 +237,6 @@ INCLUDES += $(CXX_INCLUDES)
 INCLUDES += $(pre-include-api)
 INCLUDES += -isystem include/api
 INCLUDES += -isystem include/api/$(arch)
-# must be after include/api, since it includes some libc-style headers:
-INCLUDES += $(STANDARD_GCC_INCLUDES)
 INCLUDES += -isystem $(out)/gen/include
 INCLUDES += $(post-includes-bsd)
 
@@ -305,7 +296,7 @@ COMMON = $(autodepend) -g -Wall -Wno-pointer-arith $(CFLAGS_WERROR) -Wformat=0 -
 	$(kernel-defines) \
 	-fno-omit-frame-pointer $(compiler-specific) \
 	-include compiler/include/intrinsics.hh \
-	$(conf_compiler_cflags) $(conf_compiler_opt) $(tracing-flags) $(gcc-sysroot) \
+	$(conf_compiler_cflags) $(conf_compiler_opt) $(tracing-flags) \
 	-D__OSV__ -DARCH_STRING=$(ARCH_STR) $(EXTRA_FLAGS)
 COMMON += $(standard-includes-flag)
 COMMON += $(wno-unused-private-field)
@@ -390,8 +381,9 @@ ifeq ($(arch),x64)
 kernel_base := 0x200000
 kernel_vm_base := 0x40200000
 
-# the default of 512 bytes can be overridden by passing the app_local_exec_tls_size
-# environment variable to the make or scripts/build
+# Reserve, in the kernel TLS block, space for the statically-linked app's
+# local-exec TLS variables (see loader.ld). Required: removing it corrupts the
+# per-thread TLS layout (preemptable() assert at boot).
 app_local_exec_tls_size := 0x200
 
 # The x64 boot path is 'qemu -kernel loader[-stripped].elf' (multiboot/PVH),
@@ -442,15 +434,6 @@ COMMON += $(wno-extern-c-compat) $(wno-ignored-attributes) $(wno-sometimes-unini
 
 
 
-wno-vla-cxx-extension := $(call compiler-flag, -Wno-vla-cxx-extension, -Wno-vla-cxx-extension, compiler/empty.cc)
-wno-c99-designator    := $(call compiler-flag, -Wno-c99-designator,    -Wno-c99-designator,    compiler/empty.cc)
-$(out)/drivers/libtsm/%.o: CXXFLAGS += $(wno-vla-cxx-extension) $(wno-c99-designator)
-libtsm :=
-libtsm += drivers/libtsm/tsm_render.o
-libtsm += drivers/libtsm/tsm_screen.o
-libtsm += drivers/libtsm/tsm_vte.o
-libtsm += drivers/libtsm/tsm_vte_charsets.o
-
 drivers :=
 drivers += core/mmu.o
 drivers += arch/$(arch)/early-console.o
@@ -474,10 +457,6 @@ endif
 drivers += drivers/driver.o
 
 ifeq ($(arch),x64)
-ifeq ($(conf_drivers_vga),1)
-drivers += $(libtsm)
-drivers += drivers/vga.o
-endif
 drivers += drivers/kbd.o drivers/isa-serial.o
 drivers += arch/$(arch)/pvclock-abi.o
 
@@ -872,6 +851,7 @@ $(loader_options_dep): stage1
 	@if [ '$(shell cat $(loader_options_dep) 2>&1)' != 'APP_LOCAL_EXEC_TLS_SIZE = $(app_local_exec_tls_size);' ]; then \
 		echo -n "APP_LOCAL_EXEC_TLS_SIZE = $(app_local_exec_tls_size);" > $(loader_options_dep) ; \
 	fi
+
 
 # The C++ runtime (libc++ / libc++abi / libunwind) is linked on demand inside a
 # --start-group, not whole-archived: the slim kernel links its single app at
