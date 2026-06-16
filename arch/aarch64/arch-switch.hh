@@ -40,7 +40,7 @@ void switch_to_first_with_new_tp(thread* t, cpu* c)
 
 void thread::switch_to_first()
 {
-    asm volatile ("msr tpidr_el0, %0; msr tpidr_el1, %0; isb; " :: "r"(_tcb) : "memory");
+    asm volatile ("msr tpidr_el0, %0; isb; " :: "r"(_tcb) : "memory");
 
     switch_to_first_with_new_tp(this, _detached_state->_cpu);
 
@@ -90,39 +90,13 @@ void thread::init_stack()
 
 void thread::setup_tcb()
 {   //
-    // Most importantly this method allocates TLS memory region and
-    // sets up TCB (Thread Control Block) that points to that allocated
-    // memory region. The TLS memory region is designated to a specific thread
-    // and holds thread local variables (with __thread modifier) defined
-    // in OSv kernel and the application ELF objects including dependant ones
-    // through DT_NEEDED tag.
+    // This method allocates the per-thread TLS memory region and sets up the
+    // TCB (Thread Control Block) that points to it. The region holds the
+    // thread-local variables (with __thread modifier) defined in the kernel
+    // and the statically-linked application.
     //
-    // Each ELF object and OSv kernel gets its own TLS block with offsets
-    // specified in DTV structure (the offsets get calculated as ELF is loaded and symbols
-    // resolved before we get to this point).
-    //
-    // Because both OSv kernel and position-in-dependant (pie) or position-dependant
-    // executable (non library) are compiled to use local-exec mode to access the thread
-    // local variables, we need to setup the offsets and TLS blocks in a special way
-    // to avoid any collisions. Specifically we define OSv TLS segment
-    // (see arch/aarch64/loader.ld for specifics) with an extra buffer at
-    // the beginning of the kernel TLS to accommodate TLS block of pies and
-    // position-dependant executables.
-    //
-    // Please note that the TLS layout conforms to the variant I (1),
-    // which means for example that all variable offsets are positive.
-    // It also means that individual objects are laid out from the left to the right.
-
-    // (1) - TLS memory area layout with app shared library
-    // |------|--------------|-----|-----|-----|
-    // |<NONE>|KERNEL        |SO_1 |SO_2 |SO_3 |
-    // |------|--------------|-----|-----|-----|
-
-    // (2) - TLS memory area layout with pie or
-    // position dependant executable
-    // |------|--------------|-----|-----|
-    // | EXE  |KERNEL        |SO_2 |SO_3 |
-    // |------|--------------|-----|-----|
+    // The TLS layout conforms to variant I (1), which means all variable
+    // offsets are positive (the block is laid out to the right of the TCB).
 
     assert(tls.size);
 

@@ -5,7 +5,6 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
-INCLUDE "loader_options.ld"
 SECTIONS
 {
 	/* Set the initial program counter to one page beyond the minimal
@@ -101,11 +100,8 @@ SECTIONS
     .tdata : AT(ADDR(.tdata) - OSV_KERNEL_VM_SHIFT) { *(.tdata .tdata.* .gnu.linkonce.td.*) } :tls :text
     .tbss : AT(ADDR(.tbss) - OSV_KERNEL_VM_SHIFT) {
         *(.tbss .tbss.* .gnu.linkonce.tb.*)
-        HIDDEN(_pie_static_tls_start = .);
-        /* This is a reserve intended for executables' (pie or non-pie) TLS block */
-        . = . + APP_LOCAL_EXEC_TLS_SIZE;
+        /* Keep the TLS template a multiple of 64 bytes; setup_tcb() asserts it. */
         . = ALIGN(64);
-        HIDDEN(_pie_static_tls_end = .);
     } :tls :text
     HIDDEN(.tls_template_size = SIZEOF(.tdata) + SIZEOF(.tbss));
     .bss : AT(ADDR(.bss) - OSV_KERNEL_VM_SHIFT) { *(.bss .bss.*) } :text
