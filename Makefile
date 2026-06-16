@@ -678,9 +678,7 @@ libc += math/finitel.o
 libc += misc/error.o
 libc += misc/getopt.o
 libc += misc/getopt_long.o
-libc += misc/realpath.o
 libc += misc/backtrace.o
-libc += misc/lockf.o
 libc += misc/__longjmp_chk.o
 
 
@@ -692,8 +690,6 @@ libc += multibyte/__mbstowcs_chk.o
 libc += prng/random.o
 libc += random.o
 
-libc += process/execve.o
-libc += process/waitpid.o
 
 libc += arch/$(arch)/setjmp/sigsetjmp.o
 libc += signal/block.o
