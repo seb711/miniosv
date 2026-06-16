@@ -1,12 +1,18 @@
 #!/usr/bin/env python3
 
+# Launcher for the slim OSv unikernel under QEMU.
+#
+# The kernel boots diskless via QEMU -kernel (PVH on x86_64, the loader.img
+# preboot on aarch64) with the single application linked in. There is no
+# filesystem, no block device for a root image, and no networking, so this
+# script is a thin QEMU wrapper: memory/cpus, an optional emulated NVMe drive,
+# optional PCI passthrough, and the serial console / gdb stub.
+
 import subprocess
 import sys
 import argparse
 import os
-import tempfile
 import errno
-import re
 
 stty_params = None
 
@@ -32,7 +38,9 @@ def cleanups():
 
 def format_args(args):
     def format_arg(arg):
-        if ' ' in arg:
+        if arg == '':
+            return '""'
+        elif ' ' in arg:
             return '"%s"' % arg
         elif arg[0] == '-':
             return '\\\n' + arg
@@ -42,126 +50,57 @@ def format_args(args):
     return ' '.join(map(format_arg, args))
 
 def set_imgargs(options):
-    execute = options.execute
+    # The slim kernel does not parse a guest command line; -append is passed for
+    # completeness only. Honour an explicit --execute or a build/<opt>/cmdline
+    # file if one exists, otherwise leave it empty.
+    execute = options.execute or ""
     if not execute:
-        # The slim kernel boots diskless with an in-kernel app; there is no
-        # image to read a command line from. Default to an empty command line
-        # (a build/<opt>/cmdline file is honoured if one happens to exist).
-        cmdline_path = "build/%s/cmdline" % (options.opt_path)
-        execute = open(cmdline_path).read() if os.path.exists(cmdline_path) else ""
-    if options.verbose:
-        execute = "--verbose " + execute
-
-    if options.jvm_debug or options.jvm_suspend:
-        if '-agentlib:jdwp' in execute:
-            raise Exception('The command line already has debugger options')
-        if not 'java.so' in execute:
-            raise Exception('java.so is not part of the command line')
-
-        debug_options = '-agentlib:jdwp=transport=dt_socket,server=y,suspend=%s,address=5005' % \
-            ('n', 'y')[options.jvm_suspend]
-        execute = execute.replace('java.so', 'java.so ' + debug_options)
-
-    if options.trace:
-        execute = ' '.join('--trace=%s' % name for name in options.trace) + ' ' + execute
-
-    if options.trace_backtrace:
-        execute = '--trace-backtrace ' + execute
-
-    if options.sampler:
-        execute = '--sampler=%d %s' % (int(options.sampler), execute)
-
-    if options.hypervisor == 'qemu_microvm':
-        execute = '--nopci ' + execute
-
-    if options.mount_fs:
-        execute = ' '.join('--mount-fs=%s' % m for m in options.mount_fs) + ' ' + execute
-
-    if options.bootchart:
-        execute = '--bootchart ' + execute
-
+        cmdline_path = "build/%s/cmdline" % options.opt_path
+        if os.path.exists(cmdline_path):
+            execute = open(cmdline_path).read()
     options.osv_cmdline = execute
 
-def is_direct_io_supported(path):
-    if not os.path.exists(path):
-        raise Exception('Path not found: ' + path)
-
-    try:
-        file = os.open(path, os.O_RDONLY | os.O_DIRECT)
-        os.close(file)
-        return True
-    except OSError as e:
-        if e.errno == errno.EINVAL:
-            return False
-        raise
-
 def start_osv_qemu(options):
-
     args = [
         "-m", options.memsize,
         "-smp", options.vcpus]
 
     if not options.novnc and options.hypervisor != 'qemu_microvm' and options.arch == 'x86_64':
-        args += [
-        "-vnc", options.vnc]
+        args += ["-vnc", options.vnc]
     else:
-        args += [
-        "--nographic"]
+        args += ["--nographic"]
 
     if not options.nogdb:
-        args += [
-        "-gdb", "tcp::%s,server,nowait" % options.gdb]
+        args += ["-gdb", "tcp::%s,server,nowait" % options.gdb]
 
     if options.graphics:
-        args += [
-        "-display", "sdl"]
+        args += ["-display", "sdl"]
 
-    if options.kernel or options.hypervisor == 'qemu_microvm' or options.arch == 'aarch64':
-        boot_index = ""
-        args += [
+    # Always loaded via QEMU -kernel; the kernel boots diskless.
+    args += [
         "-kernel", options.kernel_file,
         "-append", options.osv_cmdline]
-    else:
-        boot_index = ",bootindex=0"
 
     if options.arch == 'aarch64':
         if options.hypervisor == 'qemu':
             args += ["-machine", "gic-version=%s" % options.gic_version, "-cpu", "cortex-a57"]
         args += ["-machine", "virt"]
 
-    # The slim kernel has no filesystem and boots diskless via -kernel (PVH on
-    # x64, the loader.img preboot on aarch64); no primary data disk is attached.
     if options.hypervisor == 'qemu_microvm' and options.arch != 'aarch64':
         args += [
         "-M", "microvm,x-option-roms=off,pit=off,pic=off,rtc=off,auto-kernel-cmdline=on,acpi=off",
         "-nodefaults", "-no-user-config", "-no-reboot", "-global", "virtio-mmio.force-legacy=off"]
 
-    if options.cloud_init_image:
-        args += [
-        "-device", "virtio-blk-pci,id=blk1,bootindex=1,drive=hd1%s" % options.virtio_device_suffix,
-        "-drive", "file=%s,if=none,id=hd1" % (options.cloud_init_image)]
-
-    if options.second_disk_image:
-        args += [
-        "-device", "virtio-blk-pci,id=blk1,drive=hd1%s" % options.virtio_device_suffix,
-        "-drive", "file=%s,if=none,id=hd1" % (options.second_disk_image)]
-
-    if options.virtio_fs_tag:
-        dax = (",cache-size=%s" % options.virtio_fs_dax) if options.virtio_fs_dax else ""
-        args += [
-        "-chardev", "socket,id=char0,path=/tmp/vhostqemu",
-        "-device", "vhost-user-fs-pci,queue-size=1024,chardev=char0,tag=%s%s" % (options.virtio_fs_tag, dax),
-        "-object", "memory-backend-file,id=mem,size=%s,mem-path=/dev/shm,share=on" % options.memsize,
-        "-numa", "node,memdev=mem"]
-
+    # Optional emulated NVMe drive (e.g. a backing store for the in-kernel app).
     if options.second_nvme_image:
         args += [
-        "-drive", "file=%s,if=none,id=nvm1" % (options.second_nvme_image),
-        "-device", "nvme,serial=deadbeef,drive=nvm1,"]
+        "-drive", "file=%s,if=none,id=nvm1" % options.second_nvme_image,
+        "-device", "nvme,serial=deadbeef,drive=nvm1"]
 
-    if options.pass_pci:
-        args += [
-        "-device", "vfio-pci,host=%s" % (options.pass_pci)]
+    # PCI passthrough: one -device per address. The devices must be bound to
+    # vfio-pci on the host, and QEMU must run with enough privilege (sudo).
+    for pci in options.pass_pci or []:
+        args += ["-device", "vfio-pci,host=%s" % pci]
 
     if options.no_shutdown:
         args += ["-no-reboot", "-no-shutdown"]
@@ -169,19 +108,17 @@ def start_osv_qemu(options):
     if options.wait:
         args += ["-S"]
 
-    # Networking was removed from the slim kernel (Phase 9.2): no NIC at all.
+    # Networking was removed from the slim kernel: no NIC at all.
     args += ["-nic", "none"]
 
     if options.hypervisor != 'qemu_microvm':
-        args += ["-device", "virtio-rng-pci%s" % options.virtio_device_suffix]
+        args += ["-device", "virtio-rng-pci"]
 
     if options.hypervisor == "kvm" or options.hypervisor == 'qemu_microvm':
         if options.arch == 'aarch64':
             args += ["-enable-kvm", "-cpu", "host", "-machine", "gic-version=max"]
         else:
             args += ["-enable-kvm", "-cpu", "host,+x2apic"]
-    elif options.hypervisor == "none" or options.hypervisor == "qemu":
-        pass
 
     if options.hypervisor == 'qemu_microvm':
         args += ["-serial", "stdio"]
@@ -192,238 +129,31 @@ def start_osv_qemu(options):
         args += ["-chardev", "stdio,mux=on,id=stdio,signal=%s" % signal_option]
         args += ["-mon", "chardev=stdio,mode=readline"]
         args += ["-device", "isa-serial,chardev=stdio"]
-    else:
-        pass
 
     for a in options.pass_args or []:
         args += a.split()
 
-    virtiofsd = None
-    if options.virtio_fs_dir:
-        virtiofsd_cmdline = ["virtiofsd", "--socket-path=/tmp/vhostqemu", "-o",
-            "source=%s" % options.virtio_fs_dir]
-        if options.dry_run:
-            print(format_args(virtiofsd_cmdline))
-        else:
-            try:
-                virtiofsd = subprocess.Popen(virtiofsd_cmdline, stdout=devnull,
-                    stderr=devnull)
-            except OSError as e:
-                if e.errno == errno.ENOENT:
-                    print("virtiofsd binary not found. Please install the qemu-system-%s package "
-                        "that comes with it (>= 4.2) and is in path." % options.arch,
-                        file=sys.stderr)
-                else:
-                    print("OS error(%d): \"%s\" while running virtiofsd %s" % \
-                        (e.errno, e.strerror, " ".join(args)), file=sys.stderr)
-                sys.exit()
+    qemu_path = options.qemu_path or os.environ.get('QEMU_PATH') or ('qemu-system-%s' % options.arch)
+    cmdline = [qemu_path] + args
+
+    if options.dry_run:
+        print(format_args(cmdline))
+        return
 
     try:
-        # Save the current settings of the stty
         stty_save()
-
-        # Launch qemu
-        qemu_env = os.environ.copy()
-
-        qemu_path = options.qemu_path or qemu_env.get('QEMU_PATH') or ('qemu-system-%s' % options.arch)
-        cmdline = [qemu_path] + args
-        if options.dry_run:
-            print(format_args(cmdline))
-        else:
-            ret = subprocess.call(cmdline, env=qemu_env)
-            if ret != 0:
-                sys.exit("qemu failed.")
+        ret = subprocess.call(cmdline, env=os.environ.copy())
+        if ret != 0:
+            sys.exit("qemu failed.")
     except OSError as e:
         if e.errno == errno.ENOENT:
-            print("'%s' binary not found. Please install the qemu-system-%s package." % \
+            print("'%s' binary not found. Please install the qemu-system-%s package." %
                 (qemu_path, options.arch), file=sys.stderr)
         else:
-            print("OS error(%d): \"%s\" while running qemu-system-%s %s" %
-                (e.errno, e.strerror, options.arch, " ".join(args)), file=sys.stderr)
+            print("OS error(%d): \"%s\" while running %s" %
+                (e.errno, e.strerror, " ".join(cmdline)), file=sys.stderr)
     finally:
         cleanups()
-        # Clean up the spawned virtiofsd, if any
-        if virtiofsd is not None:
-            if virtiofsd.poll() is None:
-                virtiofsd.terminate()
-                try:
-                    virtiofsd.wait(5)
-                except subprocess.TimeoutExpired:
-                    virtiofsd.kill()
-
-def start_osv_xen(options):
-    if options.hypervisor == "xen":
-        args = [
-            "builder='hvm'",
-            "xen_platform_pci=1",
-            "acpi=1",
-            "apic=1",
-            "boot='c'",
-        ]
-    else:
-        args = ["kernel='%s/build/%s/loader.elf'" % (os.getcwd(), options.opt_path)]
-
-    try:
-        memory = int(options.memsize)
-    except ValueError:
-        memory = options.memsize
-
-        if memory[-1:].upper() == "M":
-            memory = int(memory[:-1])
-        elif memory[-2:].upper() == "MB":
-            memory = int(memory[:-2])
-        elif memory[-1:].upper() == "G":
-            memory = 1024 * int(memory[:-1])
-        elif memory[-2:].upper() == "GB":
-            memory = 1024 * int(memory[:-2])
-        else:
-            print("Unrecognized memory size", file=sys.stderr)
-            return
-
-    disk_type = "qcow2" if options.image_file.endswith(".img") else "raw"
-    disk_value = "'%s,%s,hda,rw'" % (options.image_file, disk_type)
-
-    if cmdargs.second_disk_image:
-        second_disk_type = "qcow2" if options.second_disk_image.endswith(".img") else "raw"
-        disk_value = disk_value + ",'%s,%s,hda,rw'" % (options.second_disk_image, second_disk_type)
-
-    if not options.novnc:
-        vncoptions = re.match("^(?P<vncaddr>[^:]*):?(?P<vncdisplay>[0-9]*$)", options.vnc)
-
-        if not vncoptions:
-            raise Exception('Invalid vnc option format: \"' + options.vnc + "\"")
-
-        if vncoptions.group("vncaddr"):
-            args += ["vnclisten=%s" % (vncoptions.group("vncaddr"))]
-
-        if vncoptions.group("vncdisplay"):
-            args += ["vncdisplay=%s" % (vncoptions.group("vncdisplay"))]
-
-    args += [
-        "memory=%d" % (memory),
-        "vcpus=%s" % (options.vcpus),
-        "maxcpus=%s" % (options.vcpus),
-        "name='osv-%d'" % (os.getpid()),
-        "disk=[%s]" % (disk_value),
-        "serial='pty'",
-        "paused=0",
-        "on_crash='preserve'"
-    ]
-
-    # Using xm would allow us to get away with creating the file, but it comes
-    # with its set of problems as well. Stick to xl.
-    xenfile = tempfile.NamedTemporaryFile(mode="w")
-    xenfile.writelines("%s\n" % item for item in args)
-    xenfile.flush()
-
-    try:
-        # Save the current settings of the stty
-        stty_save()
-
-        # Launch qemu
-        cmdline = ["xl", "create"]
-        if not options.detach:
-            cmdline += ["-c"]
-        cmdline += [xenfile.name]
-        if options.dry_run:
-            print(format_args(cmdline))
-            print("\nContent of %s\n---------------------------" % xenfile.name)
-            for item in args:
-                print("%s" % item)
-        else:
-            subprocess.call(cmdline)
-    except:
-        pass
-    finally:
-        xenfile.close()
-        cleanups()
-
-def start_osv_vmware(options):
-    args = [
-        '#!/usr/bin/vmware',
-        '.encoding = "UTF-8"',
-        'config.version = "8"',
-        'virtualHW.version = "8"',
-        'scsi0.present = "TRUE"',
-        'scsi0.virtualDev = "pvscsi"',
-        'scsi0:0.fileName = "osv.vmdk"',
-        'pciBridge0.present = "TRUE"',
-        'pciBridge4.present = "TRUE"',
-        'pciBridge4.virtualDev = "pcieRootPort"',
-        'pciBridge4.functions = "8"',
-        'hpet0.present = "TRUE"',
-        'guestOS = "ubuntu-64"',
-        'scsi0:0.present = "TRUE"',
-        'floppy0.present = "FALSE"',
-        'serial0.present = "TRUE"',
-        'serial0.fileType = "network"',
-        'serial0.fileName = "telnet://127.0.0.1:10000"',
-        'debugStub.listen.guest64 = "TRUE"',
-        'debugStub.listen.guest64.remote = "TRUE"',
-    ]
-    try:
-        memory = int(options.memsize)
-    except ValueError:
-        memory = options.memsize
-
-        if memory[-1:].upper() == "M":
-            memory = int(memory[:-1])
-        elif memory[-2:].upper() == "MB":
-            memory = int(memory[:-2])
-        elif memory[-1:].upper() == "G":
-            memory = 1024 * int(memory[:-1])
-        elif memory[-2:].upper() == "GB":
-            memory = 1024 * int(memory[:-2])
-        else:
-            print("Unrecognized memory size", file=sys.stderr)
-            return
-
-    args += [
-        'memsize = "%d"' % (memory),
-        'numvcpus = "%s"' % (options.vcpus),
-        'displayName = "osv-%d"' % (os.getpid()),
-    ]
-
-    vmxfile = open("build/%s/osv.vmx" % options.opt_path, "w")
-    vmxfile.writelines("%s\n" % item for item in args)
-    vmxfile.flush()
-
-    try:
-        # Convert disk image to vmdk
-        subprocess.call(["qemu-img", "convert", "-O", "vmdk", options.image_file, "build/%s/osv.vmdk" % options.opt_path])
-        # Launch vmware
-        cmdline = ["vmrun", "start", vmxfile.name]
-        if options.graphics:
-            cmdline += ["gui"]
-        else:
-            cmdline += ["nogui"]
-        if options.dry_run:
-            print(format_args(cmdline))
-        else:
-            subprocess.call(cmdline)
-        # Connect serial console via TCP
-        subprocess.call(["telnet", "127.0.0.1", "10000"])
-    except:
-        pass
-    finally:
-        vmxfile.close()
-        cleanups()
-
-def start_osv(options):
-    launchers = {
-            "xen" : start_osv_xen,
-            "xenpv" : start_osv_xen,
-            "none" : start_osv_qemu,
-            "qemu" : start_osv_qemu,
-            "qemu_microvm" : start_osv_qemu,
-            "kvm" : start_osv_qemu,
-            "vmware" : start_osv_vmware,
-    }
-    try:
-        launchers[options.hypervisor](options)
-    except KeyError:
-        print("Unrecognized hypervisor selected", file=sys.stderr)
-        return
 
 def choose_hypervisor(arch):
     if os.path.exists('/dev/kvm') and arch == host_arch:
@@ -432,10 +162,12 @@ def choose_hypervisor(arch):
 
 def main(options):
     set_imgargs(options)
-    start_osv(options)
+    if options.hypervisor not in ("none", "qemu", "qemu_microvm", "kvm"):
+        print("Unrecognized hypervisor selected", file=sys.stderr)
+        return
+    start_osv_qemu(options)
 
 if __name__ == "__main__":
-    # Parse arguments
     parser = argparse.ArgumentParser(prog='run')
     parser.add_argument("-d", "--debug", action="store_true",
                         help="start debug version")
@@ -443,84 +175,44 @@ if __name__ == "__main__":
                         help="start release version")
     parser.add_argument("-w", "--wait", action="store_true",
                         help="don't start OSv till otherwise specified, e.g. through the QEMU monitor or a remote gdb")
-    parser.add_argument("-i", "--image", action="store", default=None, metavar="IMAGE",
-                        help="path to disk image file. defaults to build/$mode/usr.img")
-    parser.add_argument("-N", "--nvme",action="store_true", default=False,
-                        help="use NVMe instead of virtio-blk")
-    parser.add_argument("-A", "--sata", action="store_true", default=False,
-                        help="use AHCI instead of virtio-blk")
-    parser.add_argument("-I", "--ide", action="store_true", default=False,
-                        help="use ide instead of virtio-blk")
     parser.add_argument("-m", "--memsize", action="store", default="2G",
                         help="specify memory: ex. 1G, 2G, ...")
     parser.add_argument("-c", "--vcpus", action="store", default="4",
                         help="specify number of vcpus")
     parser.add_argument("-e", "--execute", action="store", default=None, metavar="CMD",
-                        help="edit command line before execution")
+                        help="edit the kernel command line before execution")
     parser.add_argument("-p", "--hypervisor", action="store", default="auto",
-                        help="choose hypervisor to run: kvm, qemu_microvm, xen, xenpv, vmware, none (plain qemu)")
+                        help="choose hypervisor to run: kvm, qemu, qemu_microvm, none (plain qemu)")
     parser.add_argument("-D", "--detach", action="store_true",
                         help="run in background, do not connect the console")
     parser.add_argument("-H", "--no-shutdown", action="store_true",
                         help="don't restart qemu automatically (allow debugger to connect on early errors)")
     parser.add_argument("-s", "--with-signals", action="store_true", default=False,
                         help="qemu only. handle signals instead of passing keys to the guest. pressing ctrl+c from console will kill the emulator")
-    parser.add_argument("--block-device-cache", action="store", default=None,
-                        help="Set QEMU block device cache to: none, writethrough, writeback, directsync or unsafe.")
     parser.add_argument("-g", "--graphics", action="store_true",
                         help="Enable graphics mode.")
-    parser.add_argument("-V", "--verbose", action="store_true",
-                        help="pass --verbose to OSv, to display more debugging information on the console")
     parser.add_argument("--dry-run", action="store_true",
                         help="do not run, just print the command line")
-    parser.add_argument("--jvm-debug", action="store_true",
-                        help="start JVM with a debugger server")
-    parser.add_argument("--jvm-suspend", action="store_true",
-                        help="start JVM with a suspended debugger server")
     parser.add_argument("--vnc", action="store", default=":1",
                         help="specify vnc port number")
-    parser.add_argument("--pass-args", action="append",
-                        help="pass arguments to underlying hypervisor (e.g. qemu)")
-    parser.add_argument("--trace", default=[], action='append',
-                        help="enable tracepoints")
-    parser.add_argument("--trace-backtrace", action="store_true",
-                        help="enable collecting of backtrace at tracepoints")
-    parser.add_argument("--sampler", action="store", nargs='?', const='1000',
-                        help="start sampling profiler. optionally specify sampling frequency in Hz")
-    parser.add_argument("--qemu-path", action="store",
-                        help="specify qemu command path")
     parser.add_argument("--novnc", action="store_true",
                         help="disable vnc")
     parser.add_argument("--nogdb", action="store_true",
                         help="disable gdb")
     parser.add_argument("--gdb", action="store", default="1234",
                         help="specify gdb port number")
-    parser.add_argument("--second-disk-image", action="store",
-                        help="Path to the optional second disk image that should be attached to the instance")
-    parser.add_argument("--cloud-init-image", action="store",
-                        help="Path to the optional cloud-init image that should be attached to the instance")
-    parser.add_argument("-k", "--kernel", action="store_true",
-                        help="Run OSv in QEMU kernel mode as PVH.")
+    parser.add_argument("--pass-args", action="append",
+                        help="pass arguments to the underlying QEMU command line")
+    parser.add_argument("--qemu-path", action="store",
+                        help="specify qemu command path")
     parser.add_argument("--kernel-path", action="store",
-                        help="path to loader-stripped.elf. defaults to build/$mode/loader-stripped.elf")
-    parser.add_argument("--virtio", action="store", choices=["legacy","transitional","modern"], default="transitional",
-                        help="specify virtio version: legacy, transitional or modern")
-    parser.add_argument("--arch", action="store", choices=["x86_64","aarch64"], default=host_arch,
+                        help="path to the kernel. defaults to build/$mode/loader-stripped.elf (loader.img on aarch64)")
+    parser.add_argument("--arch", action="store", choices=["x86_64", "aarch64"], default=host_arch,
                         help="specify QEMU architecture: x86_64, aarch64")
-    parser.add_argument("--virtio-fs-tag", action="store",
-                        help="virtio-fs device tag")
-    parser.add_argument("--virtio-fs-dir", action="store",
-                        help="path to the directory exposed via virtio-fs mount")
-    parser.add_argument("--virtio-fs-dax", action="store",
-                        help="DAX window size for virtio-fs device (disabled if not specified)")
-    parser.add_argument("--mount-fs", default=[], action="append",
-                        help="extra mounts (forwarded to respective kernel command line option)")
-    parser.add_argument("--bootchart", action="store_true",
-                        help="bootchart mode (forwarded to respective kernel command line option")
     parser.add_argument("--second-nvme-image", action="store",
-                        help="Path to an optional disk image that should be attached to the instance as NVMe device")
-    parser.add_argument("--pass-pci", action="store",
-                        help="passthrough a pci device in given slot if bound to vfio driver")
+                        help="path to a disk image to attach as an emulated NVMe device")
+    parser.add_argument("--pass-pci", action="store", nargs='+', metavar="ADDR",
+                        help="passthrough one or more PCI devices (bound to vfio-pci), e.g. 0000:01:00.0")
     parser.add_argument("--gic-version", action="store", default="max",
                         help="specify GIC version (only applicable on aarch64)")
     cmdargs = parser.parse_args()
@@ -528,42 +220,14 @@ if __name__ == "__main__":
     cmdargs.opt_path = "debug" if cmdargs.debug else "release" if cmdargs.release else "last"
     if cmdargs.arch == 'aarch64':
         default_kernel_file_name = "loader.img"
-        default_image_file_name = "disk.img"
     else:
         default_kernel_file_name = "loader-stripped.elf"
-        default_image_file_name = "disk.img"
-        # x64 no longer has a BIOS boot sector; the kernel is always loaded
-        # via QEMU -kernel (multiboot/PVH) with a kernel-less data disk.
-        cmdargs.kernel = True
-    cmdargs.kernel_file = os.path.abspath(cmdargs.kernel_path or os.path.join(osv_base, "build/%s/%s" % (cmdargs.opt_path, default_kernel_file_name)))
-    # The slim kernel boots diskless; there is no data image. image_file is only
-    # used by the legacy xen/vmware/convert paths, so it is optional now.
-    cmdargs.image_file = os.path.abspath(cmdargs.image or os.path.join(osv_base, "build/%s/%s" % (cmdargs.opt_path, default_image_file_name)))
+    cmdargs.kernel_file = os.path.abspath(cmdargs.kernel_path or
+        os.path.join(osv_base, "build/%s/%s" % (cmdargs.opt_path, default_kernel_file_name)))
     if not os.path.exists(cmdargs.kernel_file):
         raise Exception('Kernel file %s does not exist.' % cmdargs.kernel_file)
-
-    if cmdargs.cloud_init_image:
-        cmdargs.cloud_init_image = os.path.abspath(cmdargs.cloud_init_image)
-        if not os.path.exists(cmdargs.cloud_init_image):
-            raise Exception('Cloud-init image %s does not exist.' % cmdargs.cloud_init_image)
-
-    if cmdargs.second_disk_image:
-        cmdargs.second_disk_image = os.path.abspath(cmdargs.second_disk_image)
-        if not os.path.exists(cmdargs.second_disk_image):
-            raise Exception('Second disk image %s does not exist.' % cmdargs.second_disk_image)
-
-    if cmdargs.virtio_fs_dir and not os.path.exists(cmdargs.virtio_fs_dir):
-        raise Exception('Directory %s to be exposed through virtio-fs does not exist.' % cmdargs.virtio_fs_dir)
 
     if cmdargs.hypervisor == "auto":
         cmdargs.hypervisor = choose_hypervisor(cmdargs.arch)
 
-    if cmdargs.virtio == "legacy":
-        cmdargs.virtio_device_suffix = ",disable-legacy=off,disable-modern=on"
-    elif cmdargs.virtio == "modern":
-        cmdargs.virtio_device_suffix = ",disable-legacy=on,disable-modern=off"
-    else:
-        cmdargs.virtio_device_suffix = ""
-
-    # Call main
     main(cmdargs)
