@@ -7,6 +7,27 @@ extern "C" {
 
 #include <features.h>
 
+/* glibc-style ctype classification bit positions, consumed by the locale
+ * machinery (runtime.cc's c_locale table, libc/internal/locale_impl.h).
+ * Formerly in include/glibc-compat/ctype.h (removed in Phase 9.6). */
+// FIXME: for big endian
+#define __CTYPE_NTOHS(x) (((1 << x) >> 8) | (((1 << x) & 0xff) << 8))
+
+enum {
+  _ISupper  = __CTYPE_NTOHS(0),
+  _ISlower  = __CTYPE_NTOHS(1),
+  _ISalpha  = __CTYPE_NTOHS(2),
+  _ISdigit  = __CTYPE_NTOHS(3),
+  _ISxdigit = __CTYPE_NTOHS(4),
+  _ISspace  = __CTYPE_NTOHS(5),
+  _ISprint  = __CTYPE_NTOHS(6),
+  _ISgraph  = __CTYPE_NTOHS(7),
+  _ISblank  = __CTYPE_NTOHS(8),
+  _IScntrl  = __CTYPE_NTOHS(9),
+  _ISpunct  = __CTYPE_NTOHS(10),
+  _ISalnum  = __CTYPE_NTOHS(11),
+};
+
 int   isalnum(int);
 int   isalpha(int);
 int   isblank(int);

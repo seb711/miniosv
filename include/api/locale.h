@@ -6,6 +6,9 @@ extern "C" {
 #endif
 
 #include <features.h>
+/* OSv's __locale_struct / locale_t layout (was pulled in by
+ * include/glibc-compat/locale.h, removed in Phase 9.6). */
+#include "libc/internal/locale_impl.h"
 
 #ifdef __cplusplus
 #define NULL 0L
