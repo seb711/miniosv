@@ -21,16 +21,31 @@ not Linux compatibility.
 
 ## Build & run
 
-```bash
-./scripts/build                    # build x86-64 kernel (app/app.cc)
-./scripts/run.py                   # boot under QEMU/KVM
+The default app (`app/app.cc`) is the LeanStore YCSB benchmark. It stores its data
+on an **NVMe device**, so before running you must attach one — either an emulated
+drive backed by a raw image, or a real NVMe device passed through from the host.
+One of the two is required; the kernel has no other storage.
 
-./scripts/build arch=aarch64
-QEMU_PATH=/usr/bin/qemu-system-aarch64 ./scripts/run.py --arch aarch64
+```bash
+./scripts/build                    # build x86-64 kernel (LeanStore app)
+
+# Option A — emulated NVMe backed by a raw disk image:
+truncate -s 4G /tmp/nvme.raw
+./scripts/run.py --emulated-nvme /tmp/nvme.raw
+
+# Option B — pass through a real NVMe device (first bind it to vfio-pci on the
+# host); needs sudo. Pass one or more PCI addresses:
+sudo ./scripts/run.py --pass-pci 0000:01:00.0
 ```
 
-The default app (`app/app.cc`) is a conformance gate that prints a `PASS`/`FAIL` line per check.
-Build the larger test suite with `make app=tests`.
+aarch64:
+
+```bash
+./scripts/build arch=aarch64
+QEMU_PATH=/usr/bin/qemu-system-aarch64 ./scripts/run.py --arch aarch64 --emulated-nvme /tmp/nvme.raw
+```
+
+Build the test suite (no NVMe needed) with `make app=tests`.
 
 ## License
 
