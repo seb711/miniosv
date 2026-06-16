@@ -31,7 +31,13 @@
 
 extern "C" OSV_LIBC_API long gettid()
 {
-    return sched::thread::current()->id();
+    // During early boot (before the scheduler starts its first thread) there is
+    // no current thread yet, but libc++abi's __cxa_guard_acquire - used to guard
+    // function-local static initialization, e.g. in C++ global constructors run
+    // from premain() - calls gettid() via syscall(SYS_gettid) to tag the
+    // initializing thread. Return a sentinel rather than dereferencing null.
+    auto* t = sched::thread::current();
+    return t ? t->id() : 0;
 }
 
 // We don't expect applications to use the Linux futex() system call (it is

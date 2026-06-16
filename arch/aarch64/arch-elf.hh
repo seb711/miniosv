@@ -33,8 +33,9 @@ inline void run_entry_point(void* ep, int argc, char** argv, int argv_size)
     //is the inlined assembly
     int argc_plus_argv_stack_size = argv_size + 1;
 
-    //Capture current stack pointer
-    void *stack;
+    //Capture current stack pointer (char* so the byte arithmetic below is
+    //well-formed under Clang, which rejects arithmetic on void*).
+    char *stack;
     asm volatile ("mov %0, sp" : "=r"(stack));
 
     //The code below puts argv and auxv vector onto the stack but it may

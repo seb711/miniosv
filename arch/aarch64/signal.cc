@@ -50,13 +50,13 @@ void build_signal_frame(exception_frame* ef,
         if (!(sigstack.ss_flags & SS_DISABLE)) {
             // ss_sp points to the beginning of the stack region, but aarch64
             // stacks grow downward, from the end of the region
-            sp = sigstack.ss_sp + sigstack.ss_size;
+            sp = static_cast<char*>(sigstack.ss_sp) + sigstack.ss_size;
         }
     }
     if (!sp) {
         sp = reinterpret_cast<void*>(ef->sp);
     }
-    sp -= sizeof(signal_frame); // Make space for signal frame on stack
+    sp = static_cast<char*>(sp) - sizeof(signal_frame); // Make space for signal frame on stack
     sp = align_down(sp, 16);
     signal_frame* frame = static_cast<signal_frame*>(sp);
     frame->state = *ef;         // Save original exception frame and si and sa on stack

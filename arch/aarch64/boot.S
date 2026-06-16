@@ -48,10 +48,9 @@ start_elf:
         mov     x29, xzr
         bl      premain
 
-        adrp    x3, __loader_argc
-        ldr     w0, [x3, #:lo12:__loader_argc]
-        adrp    x3, __loader_argv
-        ldr     x1, [x3, #:lo12:__loader_argv]
+        // The slim kernel's main() takes no arguments - the application is
+        // statically linked in (osv_app_main) and there is no kernel cmdline
+        // to turn into argc/argv (see x64 boot.S, which also just calls main).
         bl      main
 
         bl      halt

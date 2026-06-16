@@ -427,12 +427,18 @@ extern "C" void destroy_current_cpu_terminating_thread()
 }
 
 #ifdef __aarch64__
+// Called from the aarch64 context-switch assembly. thread_switch_data is two
+// pointers returned in registers, but its in-class initializers make it
+// non-POD, so Clang warns it is not C-compatible - harmless here, suppress it.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
 extern "C" thread_switch_data cpu_schedule_next_thread(cpu* cpu,
                                                        bool called_from_yield,
                                                        thread_runtime::duration preempt_after)
 {
     return cpu->schedule_next_thread(called_from_yield, preempt_after);
 }
+#pragma clang diagnostic pop
 #endif
 
 void cpu::timer_fired()

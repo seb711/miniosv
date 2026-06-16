@@ -184,7 +184,7 @@ unsigned get_pci_irq_line(pci::device &dev)
     return irq_id;
 }
 
-static inline volatile
+static inline
 u32 build_config_address(u8 bus, u8 slot, u8 func, u8 offset)
 {
     u32 addr;

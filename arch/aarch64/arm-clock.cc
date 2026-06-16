@@ -41,7 +41,10 @@ private:
 };
 
 arm_clock::arm_clock() {
-    asm volatile ("mrs %0, cntfrq_el0; isb; " : "=r"(freq_hz) :: "memory");
+    // mrs targets a 64-bit Xn register, so read into a u64 and narrow.
+    u64 freq;
+    asm volatile ("mrs %0, cntfrq_el0; isb; " : "=r"(freq) :: "memory");
+    freq_hz = freq;
     /* spec documents a typical range of 1-50 MHZ,
      * the ampere-1a however, runs on 1Ghz, so allow up to that frequency */
     if (freq_hz < 1 * MHZ || freq_hz > 1000 * MHZ) {
@@ -168,7 +171,7 @@ void arm_clock_events::setup_on_cpu()
 
 unsigned int arm_clock_events::read_ctl()
 {
-    unsigned int cntv_ctl;
+    u64 cntv_ctl;
     asm volatile ("isb; mrs %0, cntv_ctl_el0; isb;" : "=r"(cntv_ctl)
                   :: "memory");
     return cntv_ctl;
@@ -176,13 +179,13 @@ unsigned int arm_clock_events::read_ctl()
 
 void arm_clock_events::write_ctl(unsigned int cntv_ctl)
 {
-    asm volatile ("isb; msr cntv_ctl_el0, %0; isb;" :: "r"(cntv_ctl)
+    asm volatile ("isb; msr cntv_ctl_el0, %0; isb;" :: "r"((u64)cntv_ctl)
                   : "memory");
 }
 
 unsigned int arm_clock_events::read_tval()
 {
-    unsigned int cntv_tval;
+    u64 cntv_tval;
     asm volatile ("isb; mrs %0, cntv_tval_el0; isb;" : "=r"(cntv_tval)
                   :: "memory");
     return cntv_tval;
@@ -190,7 +193,7 @@ unsigned int arm_clock_events::read_tval()
 
 void arm_clock_events::write_tval(unsigned int cntv_tval)
 {
-    asm volatile ("isb; msr cntv_tval_el0, %0; isb;" :: "r"(cntv_tval)
+    asm volatile ("isb; msr cntv_tval_el0, %0; isb;" :: "r"((u64)cntv_tval)
                   : "memory");
 }
 

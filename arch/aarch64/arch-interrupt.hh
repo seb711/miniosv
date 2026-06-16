@@ -16,7 +16,7 @@
 /* Software-Generated Interrupts */
 
 namespace sched {
-    class cpu;
+    struct cpu;
 }
 
 class sgi_interrupt : public interrupt {

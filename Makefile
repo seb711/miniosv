@@ -64,9 +64,10 @@ detect_arch = $(word 1, $(shell { echo "x64        __x86_64__";  \
 host_arch := $(call detect_arch, $(HOST_CXX))
 
 # As an alternative to setting ARCH or arch, let's allow the user to
-# directly set the CROSS_PREFIX environment variable, and learn its arch:
+# directly set the CROSS_PREFIX environment variable, and learn its arch.
+# Pure-LLVM: probe with clang aimed at the triple, not the GNU cross gcc.
 ifdef CROSS_PREFIX
-    ARCH := $(call detect_arch, $(CROSS_PREFIX)gcc)
+    ARCH := $(call detect_arch, clang --target=$(CROSS_PREFIX:%-=%))
 endif
 
 ifndef ARCH
@@ -83,8 +84,15 @@ endif
 include conf/$(arch).mk
 
 CROSS_PREFIX ?= $(if $(filter-out $(arch),$(host_arch)),$(arch)-linux-gnu-)
-CXX=clang++
-CC=clang
+# Pure-LLVM toolchain: one clang/clang++ that cross-compiles by target triple
+# (no per-arch GNU gcc). When building for a non-host arch, point clang at the
+# target with --target=<triple> derived from CROSS_PREFIX (strip trailing '-').
+# The linker stays binutils ld.bfd (the kernel's linker scripts rely on it).
+ifneq ($(CROSS_PREFIX),)
+CROSS_TARGET = --target=$(CROSS_PREFIX:%-=%)
+endif
+CXX=clang++ $(CROSS_TARGET)
+CC=clang $(CROSS_TARGET)
 LD=$(CROSS_PREFIX)ld.bfd
 export STRIP=$(shell which llvm-strip 2>/dev/null || which llvm-strip-20 2>/dev/null || echo strip)
 OBJCOPY=$(shell which llvm-objcopy 2>/dev/null || which llvm-objcopy-20 2>/dev/null || echo objcopy)
@@ -197,17 +205,14 @@ INCLUDES = $(local-includes) -Iarch/$(arch) -I. -Iinclude  -Iarch/common
 # overriding anything here). The aarch64 cross-build still needs a sysroot and
 # the target toolchain's standard C headers (e.g. unwind.h) for the freestanding
 # bits; the native x86 build needs nothing extra.
-ifeq ($(CROSS_PREFIX),aarch64-linux-gnu-)
-  aarch64_gccbase = build/downloaded_packages/aarch64/gcc/install
-  ifeq (,$(wildcard $(aarch64_gccbase)))
-   $(error Missing $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
-  endif
-  cross-inc-base := $(dir $(shell find $(aarch64_gccbase)/ -name unwind.h))
-  ifeq (,$(cross-inc-base))
-    $(error Could not find standard headers like "unwind.h" under $(aarch64_gccbase) directory. Please run "./scripts/download_aarch64_packages.py")
-  endif
-  STANDARD_GCC_INCLUDES = -isystem $(cross-inc-base)
-  gcc-sysroot = --sysroot $(aarch64_gccbase)
+ifeq ($(arch),aarch64)
+  # Pure-LLVM aarch64 cross build: clang cross-compiles (--target below), the C
+  # headers come from OSv's own include/api (compiled -nostdinc), the C++ headers
+  # from our libc++, and <unwind.h> (the only freestanding header the kernel
+  # needs, for backtrace.cc) from libunwind, which is already on the include path
+  # (external/llvm-project/libunwind/include). No GNU cross toolchain, no sysroot.
+  STANDARD_GCC_INCLUDES =
+  gcc-sysroot =
   standard-includes-flag = -nostdinc
 else
   STANDARD_GCC_INCLUDES =
@@ -362,7 +367,11 @@ build-so = $(CC) $(CFLAGS) -o $@ $^ $(EXTRA_LDFLAGS) $(EXTRA_LIBS)
 q-build-so = $(call quiet, $(build-so), LINK $@)
 
 
-$(out)/%.o: %.cc include/osv/kernel_config_hide_symbols.h | generated-headers
+# Order-only dep on the libc++ build: every C++ TU includes our libc++ headers
+# (libcxx-includes in CXXFLAGS), so they must exist before any .cc compiles. In
+# a from-scratch -j build the libc++ build would otherwise race the kernel
+# compiles (and fail with e.g. "'functional' file not found").
+$(out)/%.o: %.cc include/osv/kernel_config_hide_symbols.h | generated-headers $(out)/.libcxx-built
 	$(makedir)
 	$(call quiet, $(CXX) $(CXXFLAGS) -c -o $@ $<, CXX $*.cc)
 
@@ -379,7 +388,9 @@ $(out)/%.o: %.s include/osv/kernel_config_hide_symbols.h
 	$(call quiet, $(ASCOMPILE) $(ASFLAGS) -c -o $@ $<, AS $*.s)
 
 %.so: EXTRA_FLAGS = -fPIC
-%.so: EXTRA_LDFLAGS = -shared -Wl,-z,relro -Wl,-z,lazy
+# -nostartfiles: kernel-space .so's need no CRT, and the aarch64 cross build has
+# no GNU sysroot to supply crti.o/crtn.o/Scrt1.o.
+%.so: EXTRA_LDFLAGS = -shared -nostartfiles -Wl,-z,relro -Wl,-z,lazy
 %.so: %.o
 	$(makedir)
 	$(q-build-so)
@@ -433,6 +444,9 @@ app_local_exec_tls_size := 0x200
 include $(libfdt_base)/Makefile.libfdt
 libfdt-source := $(patsubst %.c, $(libfdt_base)/%.c, $(LIBFDT_SRCS))
 libfdt = $(patsubst %.c, %.o, $(libfdt-source))
+# libfdt is third-party; its pointer-overflow checks (p + len < p) trip Clang's
+# -Wtautological-compare, which -Werror would otherwise make fatal.
+$(addprefix $(out)/, $(libfdt)): CFLAGS += -Wno-tautological-compare
 
 $(out)/preboot.elf: arch/$(arch)/preboot.ld $(out)/arch/$(arch)/preboot.o
 	$(call quiet, $(LD) -o $@ -T $^, LD $@)
@@ -585,8 +599,8 @@ $(app_mode_dep): app_mode_phony
 		echo -n "$(app)" > $(app_mode_dep); \
 	fi
 # Minimal boot-time self-relocator (replaces the relocation half of the old
-# ELF loader).
-objects += arch/x64/relocate.o
+# ELF loader). Per-arch: the relocation-type switch differs (x64 vs aarch64).
+objects += arch/$(arch)/relocate.o
 objects += arch/$(arch)/arch-setup.o
 objects += arch/$(arch)/signal.o
 objects += arch/$(arch)/arch-cpu.o
@@ -620,7 +634,9 @@ objects += arch/$(arch)/gic-common.o
 objects += arch/$(arch)/gic-v2.o
 objects += arch/$(arch)/gic-v3.o
 objects += arch/$(arch)/arch-dtb.o
-objects += arch/$(arch)/hypercall.o
+# cpuid.cc uses array designators ([HWCAP_BIT_FP] = ...) - a C99 extension in
+# C++ that Clang flags under -Werror; the initializer order is deliberate.
+$(out)/arch/aarch64/cpuid.o: CXXFLAGS += -Wno-c99-designator
 ifeq ($(conf_memory_optimize),1)
 objects += arch/$(arch)/memset.o
 objects += arch/$(arch)/memcpy.o
@@ -964,9 +980,24 @@ $(libc_objects_to_hide): cxx-hide-flags = $(cxx-hide-flags-$(conf_hide_symbols))
 # not GNU libgcc - no GCC anywhere in the toolchain. The C++ exception unwinder
 # that used to come from libgcc_eh.a is now libunwind (Phase 8.7), and the C++
 # runtime that used to come from libstdc++.a is now libc++/libc++abi (Phase 8.7).
+#
+# The host clang package only ships the builtins for the host arch, so for a
+# native build we just point at the installed archive, but a cross build
+# (aarch64) builds them from the pinned llvm-project via scripts/build-compiler-rt.sh
+# (auto-invoked, no manual step), exactly like llvm-libc and libc++.
+ifeq ($(filter-out $(arch),$(host_arch)),)
 compiler_rt_builtins := $(shell $(CC) --rtlib=compiler-rt --print-libgcc-file-name)
 ifeq ($(filter /%,$(compiler_rt_builtins)),)
     $(error Error: LLVM compiler-rt builtins not found. Install the clang/compiler-rt runtime.)
+endif
+compiler_rt_dep =
+else
+compiler_rt_builtins = build/compiler-rt/$(arch)/lib/libclang_rt.builtins.a
+$(out)/.compiler-rt-built: scripts/build-compiler-rt.sh
+	$(call quiet, scripts/build-compiler-rt.sh $(arch), COMPILER-RT $(arch))
+	$(call very-quiet, touch $@)
+$(compiler_rt_builtins): $(out)/.compiler-rt-built
+compiler_rt_dep = $(compiler_rt_builtins)
 endif
 
 #Allow user specify non-default location of boost
@@ -988,11 +1019,15 @@ $(out)/core/trace.o: CXXFLAGS += -DHIDE_SYMBOLS=$(conf_hide_symbols)
 $(objects:%=$(out)/%) $(drivers:%=$(out)/%) $(out)/arch/$(arch)/boot.o $(out)/loader.o $(out)/runtime.o: COMMON += -fno-pie
 
 # ld has a known bug (https://sourceware.org/bugzilla/show_bug.cgi?id=6468)
-# where if the executable doesn't use shared libraries, its .dynamic section
-# is dropped, even when we use the "--export-dynamic" (which is silently
-# ignored). The workaround is to link loader.elf with a do-nothing library.
+# where if the executable doesn't use shared libraries, its .dynamic section is
+# dropped, even with --export-dynamic. We need .dynamic: OSv self-relocates at
+# boot via .rela.dyn / DT_RELA (removing this makes the kernel reboot-loop -
+# empirically verified). The workaround is to link loader.elf against a
+# do-nothing shared library.
+# -nostartfiles: this do-nothing .so needs no CRT init/fini, and the aarch64
+# cross build has no GNU sysroot to supply crti.o/crtn.o/Scrt1.o.
 $(out)/dummy-shlib.so: $(out)/dummy-shlib.o
-	$(call quiet, $(CXX) -nodefaultlibs -shared $(gcc-sysroot) -o $@ $^, LINK $@)
+	$(call quiet, $(CXX) -nodefaultlibs -nostartfiles -shared $(gcc-sysroot) -o $@ $^, LINK $@)
 
 stage1_targets = $(out)/arch/$(arch)/boot.o $(out)/loader.o $(out)/runtime.o $(drivers:%=$(out)/%) $(objects:%=$(out)/%) $(out)/dummy-shlib.so
 stage1: $(stage1_targets) links
@@ -1100,10 +1135,10 @@ def_symbols = --defsym=OSV_KERNEL_BASE=$(kernel_base) \
               --defsym=OSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 endif
 
-$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file) $(llvm_libc_dep) $(libcxx_dep)
+$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(out)/bootfs.o $(out)/libvdso-content.o $(loader_options_dep) $(app_mode_dep) $(version_script_file) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
 		-Bdynamic --export-dynamic --eh-frame-hdr --enable-new-dtags -L$(out)/arch/$(arch) \
-            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep),$^))) \
+            $(patsubst %version_script,--version-script=%version_script,$(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep),$^))) \
 	    $(linker_archives_options) $(conf_linker_extra_options), \
 		LINK loader.elf)
 	@# Build libosv.so matching this loader.elf. This is not a separate
@@ -1124,7 +1159,7 @@ $(out)/libenviron.so: source-dialects =
 
 $(out)/libenviron.so: $(environ_sources)
 	$(makedir)
-	 $(call quiet, $(CC) $(CFLAGS) -shared -o $(out)/libenviron.so $(environ_sources), CC libenviron.so)
+	 $(call quiet, $(CC) $(CFLAGS) -shared -nostartfiles -nodefaultlibs -o $(out)/libenviron.so $(environ_sources), CC libenviron.so)
 
 $(out)/libvdso.so: libc/vdso/vdso.cc
 	$(makedir)

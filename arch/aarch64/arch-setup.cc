@@ -93,7 +93,7 @@ void arch_setup_free_memory()
 
     /* linear_map [TTBR1] */
     for (auto&& area : mmu::identity_mapped_areas) {
-        auto base = reinterpret_cast<void*>(get_mem_area_base(area));
+        auto base = reinterpret_cast<char*>(get_mem_area_base(area));
         mmu::linear_map(base + addr, addr, memory::phys_mem_size,
             area == mmu::mem_area::main ? "main" :
             area == mmu::mem_area::page ? "page" : "mempool");
@@ -140,9 +140,10 @@ void arch_setup_free_memory()
     }
 #endif
 
-    // get rid of the command line, before memory is unmapped
+    // Strip console= options from the command line before memory is unmapped.
+    // The slim kernel does not turn the cmdline into commands (the app is
+    // statically linked in), so there is no parse_cmdline step.
     console::mmio_isa_serial_console::clean_cmdline(cmdline);
-    osv::parse_cmdline(cmdline);
 
 #if CONF_drivers_mmio
     dtb_collect_parsed_mmio_virtio_devices();
@@ -151,6 +152,15 @@ void arch_setup_free_memory()
     mmu::switch_to_runtime_page_tables();
 
     console::mmio_isa_serial_console::memory_map();
+}
+
+// Not inlined into arch_setup_tls: clang CSEs "mrs tpidr_el0" within a
+// function, so a TLS read inlined after the msr that installs the
+// thread pointer may use a stale base (see also arch-switch.hh).
+static __attribute__((noinline)) void check_boot_tls()
+{
+    /* check that the tls variable preempt_counter is correct */
+    assert(sched::get_preempt_counter() == 1);
 }
 
 void arch_setup_tls(void *tls, const elf::tls_data& info)
@@ -164,8 +174,7 @@ void arch_setup_tls(void *tls, const elf::tls_data& info)
     memcpy(&tcb[1], info.start, info.filesize);
     asm volatile ("msr tpidr_el0, %0; msr tpidr_el1, %0; isb; " :: "r"(tcb) : "memory");
 
-    /* check that the tls variable preempt_counter is correct */
-    assert(sched::get_preempt_counter() == 1);
+    check_boot_tls();
 }
 
 void arch_init_premain()

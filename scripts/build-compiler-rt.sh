@@ -1,0 +1,122 @@
+#!/bin/bash
+# Build LLVM compiler-rt's builtins (the soft-int / arithmetic helpers like
+# __umodti3) as a static archive for the OSv kernel - the compiler-rt
+# replacement for GNU libgcc.a (no GCC anywhere in the toolchain).
+#
+# The host clang package only ships the builtins for the host arch
+# (libclang_rt.builtins-x86_64.a), so a cross build (aarch64) has to build them
+# from the same pinned llvm-project we use for llvm-libc and libc++. Built
+# baremetal/freestanding - builtins pull no libc, only the compiler's own
+# headers.
+#
+# Produces, for the requested arch:
+#   build/compiler-rt/<arch>/lib/libclang_rt.builtins.a
+# Invoked automatically by the Makefile (a prerequisite of the kernel link).
+# Only x86_64 ("x64") and aarch64 ("arm") are supported.
+
+set -euo pipefail
+
+osv_arch="${1:-x64}"
+case "$osv_arch" in
+    x64|x86_64|x86)    osv_arch=x64;     llvm_arch=x86_64 ;;
+    aarch64|arm|arm64) osv_arch=aarch64; llvm_arch=aarch64 ;;
+    *)
+        echo "build-compiler-rt.sh: unsupported arch '$osv_arch' (only x86/arm)" >&2
+        exit 2 ;;
+esac
+
+LLVM_TAG=llvmorg-22.1.7
+OSV_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LLVM_DIR="$OSV_ROOT/external/llvm-project"
+BUILD_DIR="$OSV_ROOT/build/compiler-rt/$osv_arch"
+
+# 1. fetch (shares the llvm-libc/libcxx checkout; just widen the sparse set).
+# third-party is needed for the aarch64 emupac builtin's siphash/SipHash.h.
+if [ ! -d "$LLVM_DIR/compiler-rt" ] || [ ! -d "$LLVM_DIR/third-party" ]; then
+    if [ ! -d "$LLVM_DIR/.git" ]; then
+        git clone --depth 1 --branch "$LLVM_TAG" --filter=blob:none --sparse \
+            https://github.com/llvm/llvm-project.git "$LLVM_DIR"
+    fi
+    git -C "$LLVM_DIR" sparse-checkout add compiler-rt third-party runtimes cmake \
+        llvm/cmake llvm/utils
+fi
+
+# 2. configure + build. Codegen must match the kernel (see COMMON in the
+# top-level Makefile). builtins are freestanding but int_lib.h still pulls
+# <limits.h>/<stdint.h>; resolve those to OSv's own headers (include/api, with
+# the generated bits/alltypes.h) instead of the host glibc multiarch headers
+# (which only exist for the host arch) - the same header environment as the
+# libc++ build.
+GEN_INC="$BUILD_DIR/gen/include"
+mkdir -p "$GEN_INC/bits"
+sh "$OSV_ROOT/include/api/$osv_arch/bits/alltypes.h.sh" > "$GEN_INC/bits/alltypes.h"
+OSV_HEADERS="-isystem $OSV_ROOT/include/api -isystem $OSV_ROOT/include/api/$osv_arch -isystem $GEN_INC"
+KERNEL_FLAGS="-fno-pie -fno-stack-protector -ftls-model=local-exec -fno-omit-frame-pointer $OSV_HEADERS"
+
+# The aarch64 cpu_model builtin (runtime CPU feature detection) includes
+# <sys/auxv.h>, which OSv does not provide (a kernel has no ELF auxv). Supply a
+# minimal stub so it compiles; it is never called at runtime and --gc-sections
+# drops it from the kernel.
+mkdir -p "$GEN_INC/sys"
+cat > "$GEN_INC/sys/auxv.h" <<'EOF'
+#ifndef _OSV_STUB_SYS_AUXV_H
+#define _OSV_STUB_SYS_AUXV_H
+/* Minimal stub for compiler-rt's cpu_model builtin - see build-compiler-rt.sh. */
+#define AT_HWCAP  16
+#define AT_HWCAP2 26
+#ifdef __cplusplus
+extern "C"
+#endif
+unsigned long getauxval(unsigned long);
+#endif
+EOF
+
+# Pure-LLVM cross-compile when targeting a non-host arch: one clang driven at the
+# target triple (no GNU cross toolchain). TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY
+# makes cmake's compiler check compile-only (we have no GNU sysroot to link an
+# executable, and don't want one).
+CROSS_CMAKE=
+if [ "$llvm_arch" != "$(uname -m)" ]; then
+    CROSS_CMAKE="-DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=$llvm_arch \
+        -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+        -DCMAKE_C_COMPILER_TARGET=$llvm_arch-linux-gnu \
+        -DCMAKE_CXX_COMPILER_TARGET=$llvm_arch-linux-gnu \
+        -DCMAKE_ASM_COMPILER_TARGET=$llvm_arch-linux-gnu"
+fi
+
+mkdir -p "$BUILD_DIR"
+cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
+    $CROSS_CMAKE \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_COMPILER=clang \
+    -DCMAKE_CXX_COMPILER=clang++ \
+    -DLLVM_ENABLE_RUNTIMES="compiler-rt" \
+    -DCOMPILER_RT_BUILD_BUILTINS=ON \
+    -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
+    -DCOMPILER_RT_BUILD_XRAY=OFF \
+    -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+    -DCOMPILER_RT_BUILD_PROFILE=OFF \
+    -DCOMPILER_RT_BUILD_MEMPROF=OFF \
+    -DCOMPILER_RT_BUILD_ORC=OFF \
+    -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF \
+    -DCOMPILER_RT_BUILD_GWP_ASAN=OFF \
+    -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
+    -DCOMPILER_RT_BAREMETAL_BUILD=ON \
+    -DCMAKE_C_FLAGS="$KERNEL_FLAGS" \
+    -DCMAKE_CXX_FLAGS="$KERNEL_FLAGS" \
+    > "$BUILD_DIR-configure.log" 2>&1 || {
+        echo "configure failed, see $BUILD_DIR-configure.log"; exit 1; }
+
+make -C "$BUILD_DIR" -j"$(nproc)" builtins > "$BUILD_DIR-build.log" 2>&1 || {
+        echo "build failed, see $BUILD_DIR-build.log"; exit 1; }
+
+# cmake names the archive per-arch/triple (libclang_rt.builtins-aarch64.a or
+# .../<triple>/libclang_rt.builtins.a). Settle on one stable path the Makefile
+# can reference.
+SRC=$(find "$BUILD_DIR" -name 'libclang_rt.builtins*.a' | head -1)
+if [ -z "$SRC" ]; then
+    echo "error: libclang_rt.builtins not produced" >&2; exit 1
+fi
+mkdir -p "$BUILD_DIR/lib"
+cp -f "$SRC" "$BUILD_DIR/lib/libclang_rt.builtins.a"
+echo "OK: $BUILD_DIR/lib/libclang_rt.builtins.a (from $SRC, $(du -h "$SRC" | cut -f1))"

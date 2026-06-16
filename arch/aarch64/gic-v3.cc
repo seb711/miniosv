@@ -101,7 +101,7 @@ void gic_v3_redist::init_cpu_base(int smp_idx)
     u64 offset = 0;
     u64 typer;
     do {
-        typer = mmio_getq((mmioaddr_t)_base + (offset + GICR_TYPER));
+        typer = mmio_getq(mmio_a((mmioaddr_t)_base, offset + GICR_TYPER));
 
         if (((mpidr & MPIDR_AFF3_MASK) >> 32) == GICR_TYPER_AFF3(typer) &&
             ((mpidr & MPIDR_AFF2_MASK) >> 16) == GICR_TYPER_AFF2(typer) &&
@@ -130,22 +130,22 @@ void gic_v3_redist::init_lpis(int smp_idx, u64 prop_base, u64 pend_base)
 
 u32 gic_v3_redist::read_at_offset(int smp_idx, u32 offset)
 {
-    return mmio_getl((mmioaddr_t)_cpu_bases[smp_idx] + offset);
+    return mmio_getl(mmio_a((mmioaddr_t)_cpu_bases[smp_idx], offset));
 }
 
 u64 gic_v3_redist::read64_at_offset(int smp_idx, u32 offset)
 {
-    return mmio_getq((mmioaddr_t)_cpu_bases[smp_idx] + offset);
+    return mmio_getq(mmio_a((mmioaddr_t)_cpu_bases[smp_idx], offset));
 }
 
 void gic_v3_redist::write_at_offset(int smp_idx, u32 offset, u32 value)
 {
-    mmio_setl((mmioaddr_t)_cpu_bases[smp_idx] + offset, value);
+    mmio_setl(mmio_a((mmioaddr_t)_cpu_bases[smp_idx], offset), value);
 }
 
 void gic_v3_redist::write64_at_offset(int smp_idx, u32 offset, u64 value)
 {
-    mmio_setq((mmioaddr_t)_cpu_bases[smp_idx] + offset, value);
+    mmio_setq(mmio_a((mmioaddr_t)_cpu_bases[smp_idx], offset), value);
 }
 
 void gic_v3_redist::wait_for_write_complete()
@@ -193,27 +193,27 @@ gic_v3_its::gic_v3_its(mmu::phys b, size_t l) : _base(b)
 
 u64 gic_v3_its::read_reg64(gic_its_reg reg)
 {
-    return mmio_getq((mmioaddr_t)_base + (u32)reg);
+    return mmio_getq(mmio_a((mmioaddr_t)_base, (u32)reg));
 }
 
 u64 gic_v3_its::read_reg64_at_offset(gic_its_reg reg, u32 offset)
 {
-    return mmio_getq((mmioaddr_t)_base + (u32)reg + offset);
+    return mmio_getq(mmio_a((mmioaddr_t)_base, (u32)reg + offset));
 }
 
 void gic_v3_its::write_reg(gic_its_reg reg, u32 value)
 {
-    mmio_setl((mmioaddr_t)_base + (u32)reg, value);
+    mmio_setl(mmio_a((mmioaddr_t)_base, (u32)reg), value);
 }
 
 void gic_v3_its::write_reg64(gic_its_reg reg, u64 value)
 {
-    mmio_setq((mmioaddr_t)_base + (u32)reg, value);
+    mmio_setq(mmio_a((mmioaddr_t)_base, (u32)reg), value);
 }
 
 void gic_v3_its::write_reg64_at_offset(gic_its_reg reg, u32 offset, u64 value)
 {
-    mmio_setq((mmioaddr_t)_base + (u32)reg + offset, value);
+    mmio_setq(mmio_a((mmioaddr_t)_base, (u32)reg + offset), value);
 }
 
 void gic_v3_its::read_type_register()
@@ -249,7 +249,7 @@ void gic_v3_its::enqueue_cmd(its_cmd *cmd)
         cread = read_reg64(gic_its_reg::GICITS_CREADR);
     }
 
-    its_cmd *cmd_to_write = (its_cmd *)(_cmd_queue + cwrite);
+    its_cmd *cmd_to_write = (its_cmd *)((char *)_cmd_queue + cwrite);
     *cmd_to_write = *cmd;
 
     cwrite += sizeof(*cmd);
@@ -443,14 +443,17 @@ void gic_v3_driver::init_dist()
 }
 
 #define __STRINGIFY(x) #x
+// mrs/msr operate on 64-bit Xn registers, so the asm operands must be 64-bit
+// (clang rejects a 32-bit operand against the implicit Xn). Read into a u64 and
+// let the caller truncate to 32 bits; widen the written value to u64.
 #define READ_SYS_REG32(reg)                                       ({ \
-    u32 v;                                                           \
+    u64 v;                                                           \
     asm volatile("mrs %0, " __STRINGIFY(reg) : "=r"(v) :: "memory"); \
-    v;                                                               \
+    (u32)v;                                                          \
 })
 
 #define WRITE_SYS_REG32(reg, v)                                            ({ \
-    asm volatile("msr " __STRINGIFY(reg) ", %0" :: "r"((u32)(v)) : "memory"); \
+    asm volatile("msr " __STRINGIFY(reg) ", %0" :: "r"((u64)(v)) : "memory"); \
 })
 
 #define READ_SYS_REG64(reg)                                       ({ \

@@ -137,7 +137,7 @@ bool opt_maxnic = false;
 int maxnic;
 bool opt_pci_disabled = false;
 
-#if CONF_tracepoints_sampler
+#if CONF_tracepoints_sampler && !defined(AARCH64_PORT_STUB)
 static int sampler_frequency;
 static bool opt_enable_sampler = false;
 #endif
