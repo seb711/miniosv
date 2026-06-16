@@ -744,17 +744,6 @@ environ_libc += string/strchrnul.c
 
 libc += errno/strerror.o
 
-libc += locale/catopen.o
-libc += locale/duplocale.o
-libc += locale/freelocale.o
-libc += locale/intl.o
-libc += locale/langinfo.o
-libc += locale/setlocale.o
-libc += locale/strtod_l.o
-libc += locale/strtof_l.o
-libc += locale/strtold_l.o
-libc += locale/uselocale.o
-
 libc += math/finitel.o
 
 # Issue #867: Gcc 4.8.4 has a bug where it optimizes the trivial round-
@@ -1056,10 +1045,6 @@ endif
 endif
 linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --end-group \
   $(compiler_rt_builtins) $(boost-libs) --gc-sections
-ifneq ($(shell grep -c iconv $(out)/version_script),0)
-else
-libc += locale/iconv_stubs.o
-endif
 else
 # The C++ runtime (libc++ / libc++abi / libunwind) is linked on demand inside a
 # --start-group, not whole-archived: the slim kernel links its single app at
@@ -1222,17 +1207,6 @@ $(out)/gen/include/bits/alltypes.h: include/api/$(arch)/bits/alltypes.h.sh
 	$(makedir)
 	$(call quiet, sh $^ > $@, GEN $@)
 
-# The generated header ctype-data.h is different in that it is only included
-# at one place (runtime.c), so instead of making it a dependency of
-# generated-headers, we can just make it a dependency of runtime.o
-$(out)/runtime.o: $(out)/gen/include/ctype-data.h
-
-$(out)/gen/include/ctype-data.h: $(out)/gen-ctype-data
-	$(makedir)
-	$(call quiet, $(out)/gen-ctype-data > $@, GEN $@)
-
-$(out)/gen-ctype-data: gen-ctype-data.cc
-	$(call quiet, $(HOST_CXX) -o $@ $^, HOST_CXX $@)
 
 ################################################################################
 

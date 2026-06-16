@@ -40,7 +40,6 @@
 #include <semaphore.h>
 #include <signal.h>
 #include <dlfcn.h>
-#include <locale.h>
 #include <time.h>
 #include <sys/time.h>
 #include <sys/random.h>
@@ -483,9 +482,10 @@ static void test_runtime()
         CHECK(h == nullptr);
     }
 
-    section("locale and ctype");
+    section("ctype classification");
     {
-        CHECK(setlocale(LC_ALL, "C") != nullptr);
+        // The locale_t machinery was removed (vestigial - nothing called it);
+        // the narrow ctype functions come straight from llvm-libc.
         CHECK(isalpha('A') && !isalpha('1') && isdigit('7'));
         CHECK(toupper('a') == 'A' && tolower('Z') == 'z');
     }
