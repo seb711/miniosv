@@ -1195,9 +1195,6 @@ $(bootfs_manifest_dep): phony
 	fi
 
 bootfs_dep := scripts/mkbootfs.py $(bootfs_manifest) $(bootfs_manifest_dep) $(out)/libenviron.so
-ifeq ($(fs),ext)
-bootfs_dep += $(out)/modules/libext/libext.so
-endif
 $(out)/bootfs.bin: $(bootfs_dep)
 	$(call quiet, olddir=`pwd`; cd $(out); "$$olddir"/scripts/mkbootfs.py -o bootfs.bin -d bootfs.bin.d -m "$$olddir"/$(bootfs_manifest), MKBOOTFS $@)
 
