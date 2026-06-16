@@ -19,8 +19,6 @@ conf_tracepoints_strace=1
 
 # --- core ------------------------------------------------------------------
 conf_core_c_wrappers=1
-conf_core_epoll=1
-conf_core_namespaces=1
 conf_core_commands_runscript=1
 conf_core_rcu_defer_queue_size=2000
 conf_core_debug_buffer_size=0xc800
@@ -32,10 +30,7 @@ conf_memory_l1_pool_size=512
 conf_memory_page_batch_size=32
 
 # --- filesystem ------------------------------------------------------------
-conf_fs_procfs=1
-conf_fs_sysfs=1
 conf_fs_max_file_descriptors=0x4000
-conf_fs_buffer_cache_size=256
 
 # --- threads / stacks ------------------------------------------------------
 conf_threads_default_kernel_stack_size=65536
