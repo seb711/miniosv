@@ -90,7 +90,7 @@ gflags-objs = \
 # core/leanstore_debug.o is OSv-side glue (sched/trace/NVMe hooks the leanstore
 # Mean runtime calls). Compiled with the kernel's own flags, not the leanstore
 # ones, so it is listed as a plain app object.
-app-objects = app/app.o app/net_stubs.o core/leanstore_debug.o \
+app-objects = app/app.o app/exit_shim.o core/leanstore_debug.o \
               $(leanstore-objs) $(gflags-objs)
 
 # gflags TUs need its public (generated) headers and its internal headers
@@ -179,4 +179,5 @@ leanstore-includes = \
 $(leanstore-objs:%=$(out)/%): CXXFLAGS += $(leanstore-includes)
 $(out)/app/app.o: CXXFLAGS += $(leanstore-includes)
 
-# The net_stubs object provides empty POSIX network stubs (kept from DuckDB era).
+# The exit_shim object provides _exit() (referenced by boost.context, absent
+# from OSv and llvm-libc).
