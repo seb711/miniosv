@@ -463,7 +463,7 @@ endif
 drivers += drivers/driver.o
 
 ifeq ($(arch),x64)
-drivers += drivers/kbd.o drivers/isa-serial.o
+drivers += drivers/isa-serial.o
 drivers += arch/$(arch)/pvclock-abi.o
 
 ifeq ($(conf_drivers_virtio),1)
@@ -489,12 +489,6 @@ ifeq ($(conf_drivers_hpet),1)
 drivers += drivers/hpet.o
 endif
 drivers += drivers/rtc.o
-ifeq ($(conf_drivers_ahci),1)
-drivers += drivers/ahci.o
-endif
-ifeq ($(conf_drivers_ide),1)
-drivers += drivers/ide.o
-endif
 endif # x64
 
 ifeq ($(arch),aarch64)
