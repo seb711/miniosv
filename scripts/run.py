@@ -89,7 +89,7 @@ def start_osv_qemu(options):
     if options.hypervisor == 'qemu_microvm' and options.arch != 'aarch64':
         args += [
         "-M", "microvm,x-option-roms=off,pit=off,pic=off,rtc=off,auto-kernel-cmdline=on,acpi=off",
-        "-nodefaults", "-no-user-config", "-no-reboot", "-global", "virtio-mmio.force-legacy=off"]
+        "-nodefaults", "-no-user-config", "-no-reboot"]
 
     # Optional emulated NVMe drive (e.g. a backing store for the in-kernel app).
     if options.emulated_nvme:
@@ -110,9 +110,6 @@ def start_osv_qemu(options):
 
     # Networking was removed from the slim kernel: no NIC at all.
     args += ["-nic", "none"]
-
-    if options.hypervisor != 'qemu_microvm':
-        args += ["-device", "virtio-rng-pci"]
 
     if options.hypervisor == "kvm" or options.hypervisor == 'qemu_microvm':
         if options.arch == 'aarch64':
