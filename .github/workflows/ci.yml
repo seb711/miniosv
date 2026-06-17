@@ -31,13 +31,14 @@ jobs:
           - arch: aarch64
             run_arch: aarch64
             qemu_pkg: qemu-system-arm
-            # libc++'s atomic.cpp takes its Linux futex backend on an
-            # *-linux-gnu target, which #includes <linux/futex.h> and <asm/*>.
-            # The aarch64 cross build therefore needs the aarch64 system headers
-            # (the local dev env has them via this package); without it the libc++
-            # build fails. gcc-aarch64-linux-gnu pulls libc6-dev-arm64-cross and
-            # the cross binutils clang auto-detects.
-            cross_pkgs: gcc-aarch64-linux-gnu
+            # No aarch64 GNU cross package: the toolchain is pure-LLVM. clang
+            # cross-compiles by target triple (-nostdinc, its own libc/libc++/
+            # compiler-rt archives) and ld.lld links the aarch64 ELF, so neither
+            # the cross gcc nor cross binutils is needed. libc++'s atomic.cpp
+            # still pulls the arch-neutral <linux/futex.h>/asm-generic/* for its
+            # futex backend; those come from the host linux-libc-dev (installed
+            # below) plus the asm/* forwarders scripts/build-libcxx.sh generates.
+            cross_pkgs: ""
 
     steps:
       - uses: actions/checkout@v4
