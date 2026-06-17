@@ -35,4 +35,4 @@ Build the larger test suite with `make app=tests`.
 ## License
 
 3-clause BSD (see [`LICENSE`](LICENSE)), inherited from OSv. Includes musl-derived code under the
-MIT license (see [`documentation/LICENSE-musl`](documentation/LICENSE-musl)).
+MIT license (see [`LICENSE-musl`](LICENSE-musl)).
