@@ -145,10 +145,6 @@ void arch_setup_free_memory()
     // statically linked in), so there is no parse_cmdline step.
     console::mmio_isa_serial_console::clean_cmdline(cmdline);
 
-#if CONF_drivers_mmio
-    dtb_collect_parsed_mmio_virtio_devices();
-#endif
-
     mmu::switch_to_runtime_page_tables();
 
     console::mmio_isa_serial_console::memory_map();
@@ -182,19 +178,6 @@ void arch_init_premain()
 }
 
 #include "drivers/driver.hh"
-#if CONF_drivers_virtio
-#include "drivers/virtio.hh"
-#include "drivers/virtio-mmio.hh"
-#endif
-#if CONF_drivers_virtio_rng
-#include "drivers/virtio-rng.hh"
-#endif
-#if CONF_drivers_virtio_blk
-#include "drivers/virtio-blk.hh"
-#endif
-#if CONF_drivers_virtio_fs
-#include "drivers/virtio-fs.hh"
-#endif
 
 void arch_init_drivers()
 {
@@ -226,22 +209,8 @@ void arch_init_drivers()
     }
 #endif
 
-#if CONF_drivers_mmio
-    // Register any parsed virtio-mmio devices
-    virtio::register_mmio_devices(device_manager::instance());
-#endif
-
     // Initialize all drivers
     hw::driver_manager* drvman = hw::driver_manager::instance();
-#if CONF_drivers_virtio_rng
-    drvman->register_driver(virtio::rng::probe);
-#endif
-#if CONF_drivers_virtio_blk
-    drvman->register_driver(virtio::blk::probe);
-#endif
-#if CONF_drivers_virtio_fs
-    drvman->register_driver(virtio::fs::probe);
-#endif
     boot_time.event("drivers probe");
     drvman->load_all();
     drvman->list_drivers();
