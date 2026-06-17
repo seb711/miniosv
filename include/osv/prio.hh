@@ -30,7 +30,6 @@ enum {
     reclaimer,
     sched,
     clock,
-    hpet,
     tracepoint_base,
     malloc_pools,
     idt,

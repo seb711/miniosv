@@ -20,9 +20,8 @@ extern uint64_t pvh_rsdp_paddr;
 bool is_enabled();
 
 // Minimal subset of the ACPI table definitions that OSv actually uses. These
-// used to come from the ACPICA library; we only need to parse a couple of
-// static tables (MADT for SMP and HPET for the fallback clock), so the few
-// structs are inlined here instead.
+// used to come from the ACPICA library; we only need to parse the MADT table
+// (for SMP), so the few structs are inlined here instead.
 #pragma pack(push, 1)
 
 struct table_header {
@@ -72,30 +71,10 @@ struct madt_local_x2apic {
     uint32_t uid;
 };
 
-// Generic Address Structure, as embedded in the HPET table.
-struct generic_address {
-    uint8_t  space_id;
-    uint8_t  bit_width;
-    uint8_t  bit_offset;
-    uint8_t  access_width;
-    uint64_t address;
-};
-
-// HPET Description Table ("HPET").
-struct hpet {
-    table_header    header;
-    uint32_t        id;
-    generic_address address;
-    uint8_t         sequence;
-    uint16_t        minimum_tick;
-    uint8_t         flags;
-};
-
 #pragma pack(pop)
 
 // 4-character table signatures.
 #define ACPI_SIG_MADT "APIC"
-#define ACPI_SIG_HPET "HPET"
 
 // Return a pointer to the (already mapped) ACPI table with the given 4-byte
 // signature, or nullptr if no such table is present.
