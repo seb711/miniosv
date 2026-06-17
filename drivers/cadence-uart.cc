@@ -77,57 +77,12 @@ void Cadence_Console::flush()
     } while (!(sr & UART_SR_TEMPTY) || (sr & UART_SR_TACTIVE));
 }
 
-bool Cadence_Console::input_ready() {
-    return _input_ready;
-}
-
-char Cadence_Console::readch()
-{
-    _input_ready = false;
-    return _uart_fifo;
-}
-
-bool Cadence_Console::ack_irq()
-{
-    // Intentional bitwise AND inside condition
-    if (uart->cisr & uart->imr) {
-        return true;
-    }
-    return false;
-}
-
-void Cadence_Console::irq_handler()
-{
-    uint32_t cisr = uart->cisr & uart->imr;
-
-    // Intentional bitwise AND inside condition
-    if ((cisr & UART_SR_RTRIG) && !(uart->sr & UART_SR_REMPTY)) {
-        _uart_fifo = uart->fifo;
-        _input_ready = true;
-    }
-
-    // IRQ must be cleared after character is read from FIFO
-    uart->cisr = cisr;
-
-    _thread->wake_with_irq_disabled();
-}
-
 void Cadence_Console::dev_start() {
     flush();
-    // Reset and enable the RX and TX paths
-    uart->cr = UART_CR_RXRES | UART_CR_TXRES | UART_CR_RXEN | UART_CR_TXEN;
+    // Reset and enable the TX path (output-only console).
+    uart->cr = UART_CR_TXRES | UART_CR_TXEN;
 
     uart->mr = UART_MR_PARITY_NONE;
-
-    _irq.reset(new spi_interrupt(gic::irq_type::IRQ_TYPE_LEVEL, this->irqid,
-                                 [this] { return this->ack_irq(); },
-                                 [this] { this->irq_handler(); }));
-
-    uart->rtrig = 1U;
-    uart->cisr = ~0U;
-    uart->idr = ~0U;
-
-    uart->ier = UART_SR_RTRIG;
 }
 
 void Cadence_Console::write(const char *str, size_t len) {

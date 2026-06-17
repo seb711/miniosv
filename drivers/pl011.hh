@@ -16,10 +16,8 @@ namespace console {
 
 class PL011_Console : public console_driver {
 public:
-    virtual void write(const char *str, size_t len);
-    virtual void flush();
-    virtual bool input_ready();
-    virtual char readch();
+    virtual void write(const char *str, size_t len) override;
+    virtual void flush() override;
 
     void set_base_addr(u64 addr);
     u64 get_base_addr();
@@ -27,13 +25,9 @@ public:
 
     static bool active;
 private:
-    virtual void dev_start();
-    virtual const char *thread_name() { return "pl011-input"; }
-    bool ack_irq();
-    void irq_handler();
+    virtual void dev_start() override {}
     /* default UART irq = SPI 1 = 32 + 1 */
     unsigned int irqid = 33;
-    std::unique_ptr<spi_interrupt> _irq;
 };
 
 }

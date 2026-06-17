@@ -8,24 +8,21 @@
 #ifndef DRIVERS_CONSOLE_DRIVER_HH
 #define DRIVERS_CONSOLE_DRIVER_HH
 
-#include <functional>
-#include <osv/sched.hh>
+#include <cstddef>
 
 namespace console {
 
+// The console is output-only: there is no /dev/console and nothing reads
+// console input, so a driver only needs to emit bytes. start() performs any
+// device initialization via dev_start().
 class console_driver {
 public:
     virtual ~console_driver() {}
     virtual void write(const char *str, size_t len) = 0;
     virtual void flush() = 0;
-    virtual bool input_ready() = 0;
-    virtual char readch() = 0;
-    void start(std::function<void()> read_poll);
-protected:
-    sched::thread *_thread;
+    void start();
 private:
     virtual void dev_start() = 0;
-    virtual const char *thread_name() = 0;
 };
 
 };

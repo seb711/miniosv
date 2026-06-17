@@ -46,39 +46,6 @@ void PL011_Console::flush() {
     return;
 }
 
-bool PL011_Console::input_ready() {
-    /* Check if Receive FIFO is not empty */
-    return !(uart[UARTFR] & 0x10); /* RXFE */
-}
-
-char PL011_Console::readch() {
-    return uart[UARTDR];
-}
-
-bool PL011_Console::ack_irq() {
-    /* check Masked Interrupt Status Register for UARTRXINTR */
-    if (uart[UARTMIS] & 0x10) {
-        /* Interrupt Clear Register, clear UARTRXINTR */
-        uart[UARTICR] = 0x10;
-        return true;
-    }
-    return false;
-}
-
-void PL011_Console::irq_handler() {
-    _thread->wake_with_irq_disabled();
-}
-
-void PL011_Console::dev_start() {
-    /* trigger interrupt on Receive */
-    uart[UARTIMSC] = 0x10; /* UARTRXINTR */
-
-    /* UART irq = SPI 1 = 32 + 1 */
-    _irq.reset(new spi_interrupt(gic::irq_type::IRQ_TYPE_EDGE, this->irqid,
-                                 [this] { return this->ack_irq(); },
-                                 [this] { this->irq_handler(); }));
-}
-
 void PL011_Console::write(const char *str, size_t len) {
     while (len > 0) {
         uart[UARTDR] = *str++;

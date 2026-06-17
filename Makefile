@@ -446,7 +446,6 @@ drivers += arch/$(arch)/early-console.o
 drivers += drivers/console.o
 drivers += drivers/console-multiplexer.o
 drivers += drivers/console-driver.o
-drivers += drivers/line-discipline.o
 drivers += drivers/clock.o
 drivers += drivers/isa-serial-base.o
 drivers += drivers/random.o
