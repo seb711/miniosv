@@ -445,9 +445,6 @@ mutex free_page_ranges_lock;
 static std::atomic<size_t> total_memory(0);
 static std::atomic<size_t> free_memory(0);
 static size_t watermark_lo(0);
-#if CONF_memory_jvm_balloon
-static std::atomic<size_t> current_jvm_heap_memory(0);
-#endif
 
 // At least two (x86) huge pages worth of size;
 static size_t constexpr min_emergency_pool_size = 4 << 20;
@@ -477,16 +474,7 @@ static void on_free(size_t mem)
 static void on_alloc(size_t mem)
 {
     free_memory.fetch_sub(mem);
-#if CONF_memory_jvm_balloon
-    if (balloon_api) {
-        balloon_api->adjust_memory(min_emergency_pool_size);
-    }
-#endif
-    if ((stats::free()
-#if CONF_memory_jvm_balloon
-+ stats::jvm_heap()
-#endif
-) < watermark_lo) {
+    if (stats::free() < watermark_lo) {
         reclaimer_thread.wake();
     }
 }
@@ -506,18 +494,6 @@ namespace stats {
         auto total = total_memory.load(std::memory_order_relaxed);
         return total - watermark_lo;
     }
-#if CONF_memory_jvm_balloon
-    void on_jvm_heap_alloc(size_t mem)
-    {
-        current_jvm_heap_memory.fetch_add(mem);
-        assert(current_jvm_heap_memory.load() < total_memory);
-    }
-    void on_jvm_heap_free(size_t mem)
-    {
-        current_jvm_heap_memory.fetch_sub(mem);
-    }
-    size_t jvm_heap() { return current_jvm_heap_memory.load(); }
-#endif
 }
 
 void reclaimer::wake()
@@ -1114,21 +1090,6 @@ void reclaimer::_do_reclaim()
             target = bytes_until_normal();
         }
 
-#if CONF_memory_jvm_balloon
-        // This means that we are currently ballooning, we should
-        // try to serve the waiters from temporary memory without
-        // going on hard mode. A big batch of more memory is likely
-        // in its way.
-        if (_oom_blocked.has_waiters() && throttling_needed()) {
-            _shrinker_loop(target, [] { return false; });
-            WITH_LOCK(free_page_ranges_lock) {
-                if (_oom_blocked.wake_waiters()) {
-                        continue;
-                }
-            }
-        }
-#endif
-
         _shrinker_loop(target, [this] { return _oom_blocked.has_waiters(); });
 
         WITH_LOCK(free_page_ranges_lock) {
@@ -1139,12 +1100,6 @@ void reclaimer::_do_reclaim()
                     oom();
                 }
             }
-
-#if CONF_memory_jvm_balloon
-            if (balloon_api) {
-                balloon_api->voluntary_return();
-            }
-#endif
         }
     }
 }
@@ -2197,22 +2152,6 @@ void free_phys_contiguous_aligned(void* p)
     free_large(p);
 }
 
-bool throttling_needed()
-{
-#if CONF_memory_jvm_balloon
-    if (!balloon_api) {
-        return false;
-    }
-
-    return balloon_api->ballooning();
-#else
-    return false;
-#endif
-}
-
-#if CONF_memory_jvm_balloon
-jvm_balloon_api *balloon_api = nullptr;
-#endif
 }
 
 extern "C" void* alloc_contiguous_aligned(size_t size, size_t align)

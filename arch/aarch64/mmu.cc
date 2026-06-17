@@ -155,10 +155,6 @@ bool is_page_fault_write(unsigned int esr) {
     return (ec == 0x24 || ec == 0x25) && (esr & 0x40);
 }
 
-bool is_page_fault_write_exclusive(unsigned int esr) {
-    return is_page_fault_write(esr);
-}
-
 bool fast_sigsegv_check(uintptr_t addr, exception_frame* ef) {
     return false;
 }
