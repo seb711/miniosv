@@ -94,15 +94,23 @@ CROSS_PREFIX ?= $(if $(filter-out $(arch),$(host_arch)),$(arch)-linux-gnu-)
 # Pure-LLVM toolchain: one clang/clang++ that cross-compiles by target triple
 # (no per-arch GNU gcc). When building for a non-host arch, point clang at the
 # target with --target=<triple> derived from CROSS_PREFIX (strip trailing '-').
-# The linker stays binutils ld.bfd (the kernel's linker scripts rely on it).
+# CROSS_PREFIX only supplies that triple string now; no GNU cross package is
+# needed (the build is -nostdinc and links its own archives, so clang never
+# consumes the cross GCC's headers/crt/libgcc even when one is installed).
 ifneq ($(CROSS_PREFIX),)
 CROSS_TARGET = --target=$(CROSS_PREFIX:%-=%)
 endif
 CXX=clang++ $(CROSS_TARGET)
 CC=clang $(CROSS_TARGET)
-LD=$(CROSS_PREFIX)ld.bfd
+# Linker is LLVM lld for every arch (no GNU binutils): one multi-target linker
+# that auto-detects the ELF arch from its inputs and honours the kernel's GNU-ld
+# linker scripts. --no-dependent-libraries ignores the autolink "-lpthread/-ldl"
+# hints libc++ embeds for a *-linux-gnu target (OSv has no such libraries; ld.bfd
+# silently ignored them, lld errors without this).
+LD=ld.lld --no-dependent-libraries
 export STRIP=$(shell which llvm-strip 2>/dev/null || which llvm-strip-20 2>/dev/null || echo strip)
 OBJCOPY=$(shell which llvm-objcopy 2>/dev/null || which llvm-objcopy-20 2>/dev/null || echo objcopy)
+READELF=$(shell which llvm-readelf 2>/dev/null || which llvm-readelf-20 2>/dev/null || echo readelf)
 
 # Our makefile puts all compilation results in a single directory, $(out),
 # instead of mixing them with the source code. This allows us to compile
@@ -445,7 +453,7 @@ $(out)/preboot.elf: arch/$(arch)/preboot.ld $(out)/arch/$(arch)/preboot.o
 $(out)/preboot.bin: $(out)/preboot.elf
 	$(call quiet, $(OBJCOPY) -O binary $^ $@, OBJCOPY $@)
 
-edata = $(shell readelf --syms $(out)/loader.elf | grep "\.edata" | awk '{print "0x" $$2}')
+edata = $(shell $(READELF) --syms $(out)/loader.elf | grep "\.edata" | awk '{print "0x" $$2}')
 image_size = $$(( $(edata) - $(kernel_vm_base) ))
 
 

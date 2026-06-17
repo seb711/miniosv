@@ -38,7 +38,11 @@ SECTIONS
         *(.text.startup .text.startup.*)
         *(.text .text.*)
         HIDDEN(text_end = .);
-        PROVIDE_HIDDEN(low_vmlinux_entry64 = vmlinux_entry64 - OSV_KERNEL_VM_SHIFT);
+        /* Unconditional (not PROVIDE_HIDDEN): ld.lld does not treat the ENTRY()
+         * reference below as a use that triggers a PROVIDE, so the entry symbol
+         * would never be defined and the start address would default to 0. A
+         * plain HIDDEN assignment defines it for both ld.bfd and ld.lld. */
+        HIDDEN(low_vmlinux_entry64 = vmlinux_entry64 - OSV_KERNEL_VM_SHIFT);
     } :text
     . = ALIGN(8);
     .fixup : AT(ADDR(.fixup) - OSV_KERNEL_VM_SHIFT) {
