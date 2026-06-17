@@ -17,25 +17,6 @@
 # Deleting partially-build targets on error should be the default, but it
 # isn't, for historical reasons, so we need to turn it on explicitly...
 .DELETE_ON_ERROR:
-###########################################################################
-# Backward-compatibility hack to support the old "make ... image=..." image
-# building syntax, and pass it into scripts/build. We should eventually drop
-# this support and turn the deprecated messages into errors.
-compat_args=$(if $(usrskel), usrskel=$(usrskel),)
-compat_args+=$(if $(fs), fs=$(fs),)
-ifdef image
-#$(error Please use scripts/build to build images)
-$(info "make image=..." deprecated. Please use "scripts/build image=...".)
-default_target:
-	./scripts/build image=$(image) $(compat_args)
-endif
-ifdef modules
-#$(error Please use scripts/build to build images)
-$(info "make modules=..." deprecated. Please use "scripts/build modules=...".)
-default_target:
-	./scripts/build modules=$(modules) $(compat_args)
-endif
-.PHONY: default_target
 
 ###########################################################################
 
@@ -196,11 +177,6 @@ links:
 	$(call very-quiet, ln -nsf $(notdir $(out)) $(outlink))
 	$(call very-quiet, ln -nsf $(notdir $(out)) $(outlink2))
 .PHONY: links
-
-check:
-	$(call quiet, pkill -e -9 qemu-system || true, Kill lingering QEMU process if any)
-	./scripts/build check
-.PHONY: check
 
 # Remember that "make clean" needs the same parameters that set $(out) in
 # the first place, so to clean the output of "make mode=debug" you need to
