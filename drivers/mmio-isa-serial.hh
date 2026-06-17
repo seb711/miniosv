@@ -22,9 +22,7 @@ public:
     static u64 _phys_mmio_address;
 private:
     unsigned int irqid;
-    std::unique_ptr<spi_interrupt> _irq;
-    virtual void dev_start();
-    virtual const char *thread_name() { return "mmio-isa-serial-input"; }
+    virtual void dev_start() override {}
 };
 
 }

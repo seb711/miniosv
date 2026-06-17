@@ -19,13 +19,10 @@ class isa_serial_console_base : public console_driver {
 public:
     virtual void write(const char *str, size_t len) override;
     virtual void flush() override {}
-    virtual bool input_ready() override;
-    virtual char readch() override;
 protected:
     static void common_early_init();
     static u8 read_byte(int);
     static void write_byte(u8, int);
-    void enable_interrupt();
 private:
     void putchar(const char ch);
 };

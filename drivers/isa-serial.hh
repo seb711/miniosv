@@ -17,9 +17,7 @@ public:
     static void early_init();
     static const u16 ioport = 0x3f8;
 private:
-    std::unique_ptr<gsi_edge_interrupt> _irq;
-    virtual void dev_start();
-    virtual const char *thread_name() { return "isa-serial-input"; }
+    virtual void dev_start() override {}
 };
 }
 

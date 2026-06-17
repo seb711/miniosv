@@ -79,28 +79,6 @@ void isa_serial_console_base::write(const char *str, size_t len)
         putchar(*str++);
 }
 
-bool isa_serial_console_base::input_ready()
-{
-    u8 val = read_byte(regs::LSR);
-    // On VMWare hosts without a serial port, this register always
-    // returns 0xff.  Just ignore it instead of spinning incessantly.
-    return (val != 0xff && (val & lsr::RECEIVE_DATA_READY));
-}
-
-char isa_serial_console_base::readch()
-{
-    u8 val;
-    char letter;
-
-    do {
-        val = read_byte(regs::LSR);
-    } while (!(val & (lsr::RECEIVE_DATA_READY | lsr::OVERRUN | lsr::PARITY_ERROR | lsr::FRAME_ERROR)));
-
-    letter = read_byte(0);
-
-    return letter;
-}
-
 void isa_serial_console_base::putchar(const char ch)
 {
     u8 val;
@@ -110,12 +88,6 @@ void isa_serial_console_base::putchar(const char ch)
     } while (!(val & lsr::TRANSMIT_HOLD_EMPTY));
 
     write_byte(ch, 0);
-}
-
-void isa_serial_console_base::enable_interrupt()
-{
-    // enable interrupts
-    write_byte(1, regs::IER);
 }
 
 }
