@@ -23,14 +23,43 @@ not Linux compatibility.
 
 ```bash
 make                               # build x86-64 kernel (app/app.cc)
-./scripts/run.py                   # boot under QEMU/KVM
-
-make arch=aarch64
-QEMU_PATH=/usr/bin/qemu-system-aarch64 ./scripts/run.py --arch aarch64
 ```
 
-The default app (`app/app.cc`) is a conformance gate that prints a `PASS`/`FAIL` line per check.
-Build the larger test suite with `make app=tests`.
+The default app (`app/app.cc`) is the in-kernel **LeanStore** YCSB benchmark. It needs an
+**NVMe device** as its backing store and **4 vCPUs** (the LeanStore runtime currently assumes
+4 cores — do not lower `-c`/`--vcpus` below 4).
+
+### NVMe backing store
+
+LeanStore drives the NVMe device directly through OSv's user-queue NVMe driver; it is not exposed
+as a filesystem. Provide one of the following.
+
+**Emulated drive (QEMU).** Create a raw image and attach it as an NVMe device:
+
+```bash
+truncate -s 4G nvme.img                                # >= target_gib (currently 2 GiB)
+./scripts/run.py --emulated-nvme nvme.img -m 4G -c 4
+```
+
+`--emulated-nvme` expands to this QEMU device pair:
+
+```
+-drive file=nvme.img,if=none,id=nvm1 -device nvme,serial=deadbeef,drive=nvm1
+```
+
+**Real device (VFIO passthrough).** Bind the host NVMe controller to `vfio-pci` and pass it through.
+Find its PCI address with `lspci -nn | grep -i nvme` (here `0000:01:00.0`):
+
+```bash
+sudo driverctl set-override 0000:01:00.0 vfio-pci      # bind to vfio-pci (persists)
+sudo ./scripts/run.py --pass-pci 0000:01:00.0 -m 4G -c 4
+sudo driverctl unset-override 0000:01:00.0             # restore the host driver afterwards
+```
+
+VFIO passthrough requires the IOMMU enabled on the host (`intel_iommu=on` / `amd_iommu=on`) and
+root privileges for both `vfio-pci` and KVM.
+
+Build the test suite instead with `make app=tests`.
 
 ## License
 

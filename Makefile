@@ -156,6 +156,8 @@ conf_interrupt_stack_size=0x1000
 # --- device drivers --------------------------------------------------------
 conf_drivers_acpi=1
 conf_drivers_pci=1
+# NVMe user-queue driver, consumed directly by the in-kernel leanstore app.
+conf_drivers_nvme=1
 
 ifneq ($(MAKECMDGOALS),clean)
 $(info Building into $(out))
@@ -400,6 +402,11 @@ $(out)/%.o: %.cc | generated-headers $(out)/.libcxx-built
 	$(makedir)
 	$(call quiet, $(CXX) $(CXXFLAGS) -c -o $@ $<, CXX $*.cc)
 
+# Same as the .cc rule, for app sources that use the .cpp extension (leanstore).
+$(out)/%.o: %.cpp | generated-headers $(out)/.libcxx-built
+	$(makedir)
+	$(call quiet, $(CXX) $(CXXFLAGS) -c -o $@ $<, CXX $*.cpp)
+
 $(out)/%.o: %.c | generated-headers
 	$(makedir)
 	$(call quiet, $(CC) $(CFLAGS) -c -o $@ $<, CC $*.c)
@@ -503,12 +510,24 @@ drivers += drivers/kvmclock.o
 ifeq ($(conf_drivers_acpi),1)
 drivers += drivers/acpi.o
 endif
+# NVMe user-queue driver (no block-device interface; consumed directly by the
+# in-kernel app via core/nvme.o and <osv/nvme.hh>).
+ifeq ($(conf_drivers_nvme),1)
+drivers += drivers/nvme.o
+drivers += drivers/nvme-queue.o
+drivers += drivers/nvme-user-queue.o
+endif
 endif # x64
 
 ifeq ($(arch),aarch64)
 drivers += drivers/mmio-isa-serial.o
 drivers += drivers/pl011.o
 drivers += drivers/pl031.o
+ifeq ($(conf_drivers_nvme),1)
+drivers += drivers/nvme.o
+drivers += drivers/nvme-queue.o
+drivers += drivers/nvme-user-queue.o
+endif
 endif # aarch64
 
 ifeq ($(conf_tracepoints),1)
@@ -634,6 +653,11 @@ objects += core/async.o
 objects += core/libaio.o
 objects += core/options.o
 objects += core/string_utils.o
+# C interface (<osv/nvme.hh>) bridging the in-kernel app to the NVMe user-queue
+# driver. Built only when the NVMe driver is enabled.
+ifeq ($(conf_drivers_nvme),1)
+objects += core/nvme.o
+endif
 
 #include $(src)/libc/build.mk:
 libc =

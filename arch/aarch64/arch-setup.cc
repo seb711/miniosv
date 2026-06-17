@@ -169,6 +169,9 @@ void arch_init_premain()
 }
 
 #include "drivers/driver.hh"
+#if CONF_drivers_nvme
+#include "drivers/nvme.hh"
+#endif
 
 void arch_init_drivers()
 {

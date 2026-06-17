@@ -148,7 +148,10 @@ private:
         unsigned gsi;
     };
     osv::rcu_ptr<handler> _handlers[256];
-    mutex _lock;
+    // Qualified to ::mutex so this header stays unambiguous when included from
+    // app TUs that pull in `using namespace std` (e.g. leanstore) and so make
+    // std::mutex visible by the same name.
+    ::mutex _lock;
 
     shared_vector register_level_triggered_handler(unsigned gsi,
                                                    std::function<bool ()> pre_eoi,

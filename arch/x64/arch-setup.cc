@@ -230,6 +230,9 @@ void arch_init_premain()
 }
 
 #include "drivers/driver.hh"
+#if CONF_drivers_nvme
+#include "drivers/nvme.hh"
+#endif
 
 extern bool opt_pci_disabled;
 void arch_init_drivers()
@@ -244,6 +247,9 @@ void arch_init_drivers()
 
     // Initialize all drivers
     hw::driver_manager* drvman = hw::driver_manager::instance();
+#if CONF_drivers_nvme
+    drvman->register_driver(nvme::driver::probe);
+#endif
     boot_time.event("drivers probe");
     drvman->load_all();
     drvman->list_drivers();
