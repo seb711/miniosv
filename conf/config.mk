@@ -25,7 +25,6 @@ conf_core_debug_buffer_size=0xc800
 conf_core_dynamic_percpu_size=65536
 
 # --- memory ----------------------------------------------------------------
-conf_memory_optimize=1
 conf_memory_l1_pool_size=512
 conf_memory_page_batch_size=32
 

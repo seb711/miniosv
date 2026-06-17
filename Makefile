@@ -527,11 +527,6 @@ objects += arch/$(arch)/msi.o
 endif
 objects += arch/$(arch)/power.o
 objects += arch/$(arch)/feexcept.o
-ifeq ($(conf_memory_optimize),1)
-wno-unknown-attributes := $(call compiler-flag, -Wno-unknown-attributes, -Wno-unknown-attributes)
-$(out)/arch/x64/string-ssse3.o: CXXFLAGS += -mssse3 $(wno-unknown-attributes)
-$(out)/arch/x64/string.o: CXXFLAGS += $(wno-unknown-attributes)
-endif
 
 ifeq ($(arch),aarch64)
 objects += arch/$(arch)/psci.o
@@ -543,21 +538,12 @@ objects += arch/$(arch)/arch-dtb.o
 # cpuid.cc uses array designators ([HWCAP_BIT_FP] = ...) - a C99 extension in
 # C++ that Clang flags under -Werror; the initializer order is deliberate.
 $(out)/arch/aarch64/cpuid.o: CXXFLAGS += -Wno-c99-designator
-ifeq ($(conf_memory_optimize),1)
-objects += arch/$(arch)/memset.o
-objects += arch/$(arch)/memcpy.o
-objects += arch/$(arch)/memmove.o
-endif
 objects += arch/$(arch)/sched.o
 objects += $(libfdt)
 endif
 
 ifeq ($(arch),x64)
 objects += arch/x64/dmi.o
-ifeq ($(conf_memory_optimize),1)
-objects += arch/x64/string.o
-objects += arch/x64/string-ssse3.o
-endif
 objects += arch/x64/ioapic.o
 objects += arch/x64/apic.o
 objects += arch/x64/apic-clock.o
@@ -654,23 +640,9 @@ libc += arch/$(arch)/ucontext/getcontext.o
 libc += arch/$(arch)/ucontext/setcontext.o
 libc += arch/$(arch)/ucontext/start_context.o
 libc += arch/$(arch)/ucontext/ucontext.o
-ifeq ($(conf_memory_optimize),1)
-libc += string/memmove.o
-endif
 endif
 
 
-# stdio is OSv-owned: the FILE struct (libc/stdio/stdio_impl.h) is ours and the
-# write path goes through OSv's console (__stdout_write), so it cannot come from
-# llvm-libc (whose FILE has no OSv console backend). The musl-derived sources
-# were vendored into libc/stdio/ (Phase 8.11). tmpfile/tmpnam/tempnam were
-# dropped: they create/stat files (dead with no filesystem, and unreferenced).
-$(out)/libc/stdio/__fdopen.o: CFLAGS += --include libc/syscall_to_function.h
-$(out)/libc/stdio/__stdio_close.o: CFLAGS += --include libc/syscall_to_function.h
-$(out)/libc/stdio/__stdio_seek.o: CFLAGS += --include libc/syscall_to_function.h
-$(out)/libc/stdio/__stdio_write.o: CFLAGS += --include libc/syscall_to_function.h
-$(out)/libc/stdio/fopen.o: CFLAGS += --include libc/syscall_to_function.h
-$(out)/libc/stdio/freopen.o: CFLAGS += --include libc/syscall_to_function.h
 $(out)/libc/stdio/vfprintf.o: COMMON += $(wno-maybe-uninitialized)
 $(out)/libc/stdio/vfscanf.o: COMMON += $(wno-maybe-uninitialized)
 
@@ -679,12 +651,6 @@ libc += stdlib/unimplemented.o
 endif
 
 libc += string/explicit_bzero.o
-ifeq ($(conf_memory_optimize),1)
-libc += string/memcpy.o
-else
-endif
-libc += string/memset.o
-libc += string/rawmemchr.o
 libc += string/strerror_r.o
 libc += string/stresep.o
 

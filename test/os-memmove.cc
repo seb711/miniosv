@@ -3,18 +3,10 @@
  *
  * Guards the kernel memmove() contract: copy every length / overlap offset /
  * destination alignment, in both directions, and compare against a known-good
- * reference. memmove(d, s, n) with d < s routes through
- *   memcpy() -> small_memcpy() -> do_small_memcpy<n>
- * which is where a clang miscompile of arch/x64/string.cc once corrupted data
- * (clang reports __GNUC__ == 4 and emitted SSE stores before the corresponding
- * loads for the small-N packed-struct copy). LeanStore's BTreeNode key shifts
- * hit that path hard and crashed; the fix forces __builtin_memmove there.
- *
- * NOTE: this standalone test does NOT, by itself, reproduce that specific
- * scheduling miscompile -- it passes even against the unfixed string.cc, since
- * the bad schedule only surfaces under LeanStore's surrounding codegen. It is
- * kept as a broad correctness regression test for the memmove path; LeanStore
- * itself remains the real signal for the compiler bug.
+ * reference. memmove/memcpy/memset are now provided by llvm-libc (the
+ * hand-written OSv/arch implementations were removed once llvm-libc's were no
+ * longer slower); this stays as a broad correctness regression test for
+ * whatever memmove the kernel links.
  */
 #include <cstdio>
 #include <cstdint>
@@ -38,8 +30,7 @@ static inline uint8_t pattern_byte(size_t i)
 
 // Call through a volatile function pointer so the compiler cannot inline its
 // own (correct) memmove expansion and bypass the kernel's memmove symbol -- we
-// specifically want to exercise the kernel implementation (memcpy ->
-// small_memcpy -> do_small_memcpy<N>), which is where the clang bug lived.
+// specifically want to exercise the actual linked memmove implementation.
 using memmove_fn = void* (*)(void*, const void*, size_t);
 static volatile memmove_fn kernel_memmove = memmove;
 
