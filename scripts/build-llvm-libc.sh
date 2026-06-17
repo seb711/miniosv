@@ -38,10 +38,15 @@ BUILD_DIR="$OSV_ROOT/build/llvm-libc/$osv_arch"
 CONFIG_SRC="$OSV_ROOT/external/llvm-libc-config"
 
 # 1. fetch (pinned, sparse: libc + runtimes + cmake support)
+# Guard the clone on .git (the checkout is shared with build-libcxx.sh /
+# build-compiler-rt.sh) and widen with `add`, not `set`, so we don't drop the
+# paths a sibling toolchain build already checked out.
 if [ ! -d "$LLVM_DIR/libc" ]; then
-    git clone --depth 1 --branch "$LLVM_TAG" --filter=blob:none --sparse \
-        https://github.com/llvm/llvm-project.git "$LLVM_DIR"
-    git -C "$LLVM_DIR" sparse-checkout set libc runtimes cmake llvm/cmake llvm/utils
+    if [ ! -d "$LLVM_DIR/.git" ]; then
+        git clone --depth 1 --branch "$LLVM_TAG" --filter=blob:none --sparse \
+            https://github.com/llvm/llvm-project.git "$LLVM_DIR"
+    fi
+    git -C "$LLVM_DIR" sparse-checkout add libc runtimes cmake llvm/cmake llvm/utils
 fi
 actual_tag=$(git -C "$LLVM_DIR" describe --tags 2>/dev/null || true)
 if [ "$actual_tag" != "$LLVM_TAG" ]; then

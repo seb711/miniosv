@@ -717,6 +717,22 @@ libc += malloc_hooks.o
 objects += $(addprefix libc/, $(libc))
 
 
+# All three runtime builds (compiler-rt, llvm-libc, libc++) share the one
+# external/llvm-project checkout. Do the clone + sparse-checkout ONCE here, with
+# the union of the paths they each need, so a parallel `make -j` cannot race
+# several `git clone`s into the same directory (nor have the per-script
+# sparse-checkout calls clobber each other). The build scripts keep their own
+# clone/sparse logic for standalone use; once this stamp has populated the tree
+# their guards see the directories and skip it. The tag must match
+# scripts/build-{compiler-rt,llvm-libc,libcxx}.sh.
+llvm_project_tag = llvmorg-22.1.7
+llvm_project_stamp = external/llvm-project/.sparse-ready
+$(llvm_project_stamp):
+	@echo "  LLVM-PROJECT external/llvm-project ($(llvm_project_tag))"
+	$(call very-quiet, if [ ! -d external/llvm-project/.git ]; then git clone --depth 1 --branch $(llvm_project_tag) --filter=blob:none --sparse https://github.com/llvm/llvm-project.git external/llvm-project; fi)
+	$(call very-quiet, git -C external/llvm-project sparse-checkout set libc libcxx libcxxabi libunwind compiler-rt third-party runtimes cmake llvm/cmake llvm/utils)
+	$(call very-quiet, touch $@)
+
 # Compiler builtins (soft-int helpers like __umodti3) come from LLVM compiler-rt,
 # not GNU libgcc - no GCC anywhere in the toolchain. The C++ exception unwinder
 # that used to come from libgcc_eh.a is now libunwind (Phase 8.7), and the C++
@@ -734,7 +750,7 @@ endif
 compiler_rt_dep =
 else
 compiler_rt_builtins = build/compiler-rt/$(arch)/lib/libclang_rt.builtins.a
-$(out)/.compiler-rt-built: scripts/build-compiler-rt.sh
+$(out)/.compiler-rt-built: scripts/build-compiler-rt.sh | $(llvm_project_stamp)
 	$(call quiet, scripts/build-compiler-rt.sh $(arch), COMPILER-RT $(arch))
 	$(call very-quiet, touch $@)
 $(compiler_rt_builtins): $(out)/.compiler-rt-built
@@ -779,7 +795,7 @@ linker_archives_options = --no-whole-archive --start-group $(libcxx_archives) --
 # under libc/ - the musl submodule was deleted in Phase 8.13.
 llvm_libc_libdir = build/llvm-libc/$(arch)/libc/lib
 llvm_libc_archives = $(llvm_libc_libdir)/libc.a $(llvm_libc_libdir)/libm.a
-$(out)/.llvm-libc-built: scripts/build-llvm-libc.sh external/llvm-libc-config/entrypoints.txt external/llvm-libc-config/config.json external/llvm-libc-config/headers.txt
+$(out)/.llvm-libc-built: scripts/build-llvm-libc.sh external/llvm-libc-config/entrypoints.txt external/llvm-libc-config/config.json external/llvm-libc-config/headers.txt | $(llvm_project_stamp)
 	$(call quiet, scripts/build-llvm-libc.sh $(arch), LLVM-LIBC $(arch))
 	$(call very-quiet, touch $@)
 $(llvm_libc_archives): $(out)/.llvm-libc-built
@@ -797,7 +813,7 @@ linker_archives_options += $(llvm_libc_archives) $(compiler_rt_builtins)
 # dl_iterate_phdr.
 libcxx_libdir = build/libcxx/$(arch)/lib
 libcxx_archives = $(libcxx_libdir)/libc++.a $(libcxx_libdir)/libc++abi.a $(libcxx_libdir)/libunwind.a
-$(out)/.libcxx-built: scripts/build-libcxx.sh
+$(out)/.libcxx-built: scripts/build-libcxx.sh | $(llvm_project_stamp)
 	$(call quiet, scripts/build-libcxx.sh $(arch), LIBCXX $(arch))
 	$(call very-quiet, touch $@)
 $(libcxx_archives): $(out)/.libcxx-built
