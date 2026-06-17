@@ -22,10 +22,10 @@ not Linux compatibility.
 ## Build & run
 
 ```bash
-./scripts/build                    # build x86-64 kernel (app/app.cc)
+make                               # build x86-64 kernel (app/app.cc)
 ./scripts/run.py                   # boot under QEMU/KVM
 
-./scripts/build arch=aarch64
+make arch=aarch64
 QEMU_PATH=/usr/bin/qemu-system-aarch64 ./scripts/run.py --arch aarch64
 ```
 

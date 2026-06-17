@@ -6,8 +6,8 @@ There is no filesystem, no module system and no data image, so this directory
 is small.
 
 # Building
-* **build** — drives the kernel build (delegates to the top-level Makefile).
-  `./scripts/build --help` for usage; `./scripts/build clean` to clean.
+The kernel is built straight from the top-level Makefile: `make` (x86-64),
+`make arch=aarch64`, `make app=tests`, `make clean`.
 * **build-llvm-libc.sh** — builds the no-syscall baremetal llvm-libc
   (`libc.a`/`libm.a`) from the pinned `external/llvm-project`, using the curated
   config in `external/llvm-libc-config/`. Auto-invoked by the Makefile.
