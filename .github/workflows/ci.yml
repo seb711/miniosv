@@ -1,0 +1,110 @@
+name: CI
+
+# Build the slim OSv kernel and run its in-kernel test suite for both
+# architectures. Everything is driven from the top-level Makefile, which also
+# auto-builds the pinned llvm-libc / libc++ / compiler-rt runtimes; the tests
+# boot under QEMU using TCG (GitHub runners have no /dev/kvm, and aarch64 is
+# cross-emulated anyway).
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            run_arch: x86_64
+            qemu_pkg: qemu-system-x86
+            cross_pkgs: ""
+          - arch: aarch64
+            run_arch: aarch64
+            qemu_pkg: qemu-system-arm
+            # libc++'s atomic.cpp takes its Linux futex backend on an
+            # *-linux-gnu target, which #includes <linux/futex.h> and <asm/*>.
+            # The aarch64 cross build therefore needs the aarch64 system headers
+            # (the local dev env has them via this package); without it the libc++
+            # build fails. gcc-aarch64-linux-gnu pulls libc6-dev-arm64-cross and
+            # the cross binutils clang auto-detects.
+            cross_pkgs: gcc-aarch64-linux-gnu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake ninja-build python3 git ca-certificates wget gnupg lsb-release \
+            binutils linux-libc-dev \
+            ${{ matrix.cross_pkgs }} ${{ matrix.qemu_pkg }}
+          # clang 20: the runtimes are llvm-22 and must be built with a compiler
+          # >= the source version. The runner ships clang 16/17/18 with the
+          # default set to 19, registered at a higher update-alternatives
+          # priority than we could rely on, so install clang 20 from apt.llvm.org
+          # and make `clang`/`clang++` resolve to it by symlinking into
+          # /usr/local/bin (which precedes /usr/bin on PATH). Fail fast if the
+          # build would otherwise pick up the wrong clang.
+          wget -qO /tmp/llvm.sh https://apt.llvm.org/llvm.sh
+          chmod +x /tmp/llvm.sh
+          sudo /tmp/llvm.sh 20
+          sudo ln -sf /usr/bin/clang-20   /usr/local/bin/clang
+          sudo ln -sf /usr/bin/clang++-20 /usr/local/bin/clang++
+          hash -r
+          clang --version
+          clang --version | grep -q "clang version 20" || { echo "::error::clang is not version 20"; exit 1; }
+
+      # The pinned llvm-project sparse checkout and the per-arch libc++ /
+      # llvm-libc / compiler-rt builds are slow but stable; cache them keyed on
+      # the toolchain build scripts.
+      - name: Cache LLVM runtime toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            external/llvm-project
+            build/libcxx
+            build/llvm-libc
+            build/compiler-rt
+          key: llvm-${{ matrix.arch }}-${{ hashFiles('scripts/build-libcxx.sh', 'scripts/build-llvm-libc.sh', 'scripts/build-compiler-rt.sh') }}
+
+      - name: Build test kernel
+        run: make app=tests arch=${{ matrix.arch }} -j"$(nproc)"
+
+      - name: Dump toolchain build logs on failure
+        if: failure()
+        run: |
+          for f in build/libcxx/${{ matrix.arch }}-build.log \
+                   build/llvm-libc/${{ matrix.arch }}-build.log \
+                   build/compiler-rt/${{ matrix.arch }}-build.log; do
+            echo "===================== $f ====================="
+            tail -120 "$f" 2>/dev/null || echo "(not present)"
+          done
+
+      - name: Run test suite under QEMU (TCG)
+        run: |
+          set -eux
+          timeout 900 ./scripts/run.py --arch ${{ matrix.run_arch }} --novnc --nogdb \
+            < /dev/null 2>&1 | tee run.log
+          # The driver app prints this only when every suite passed and powers off.
+          grep -q "OSv test application: SUCCESS" run.log
+          ! grep -qi "FAILURE" run.log
+
+      - name: Upload run log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: run-log-${{ matrix.arch }}
+          path: run.log
+          if-no-files-found: ignore
