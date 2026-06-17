@@ -114,15 +114,6 @@ void arch_setup_free_memory()
                         mmu::mattr::dev);
     }
 
-#if CONF_drivers_cadence
-    if (console::Cadence_Console::active) {
-        // linear_map [TTBR0 - UART]
-        addr = (mmu::phys)console::aarch64_console.cadence.get_base_addr();
-        mmu::linear_map((void *)addr, addr, 0x1000, "cadence", mmu::page_size,
-                        mmu::mattr::dev);
-    }
-#endif
-
     //Locate GICv2 or GICv3 information in DTB and construct corresponding GIC driver
     u64 dist, redist, cpuif, its, v2m;
     size_t dist_len, redist_len, cpuif_len, its_len, v2m_len;
@@ -230,18 +221,6 @@ void arch_init_early_console()
         console::arch_early_console = console::aarch64_console.isa_serial;
         return;
     }
-
-#if CONF_drivers_cadence
-    mmio_serial_address = dtb_get_cadence_uart(&irqid);
-    if (mmio_serial_address) {
-        new (&console::aarch64_console.cadence) console::Cadence_Console();
-        console::arch_early_console = console::aarch64_console.cadence;
-        console::aarch64_console.cadence.set_base_addr(mmio_serial_address);
-        console::aarch64_console.cadence.set_irqid(irqid);
-        console::Cadence_Console::active = true;
-        return;
-    }
-#endif
 
     new (&console::aarch64_console.pl011) console::PL011_Console();
     console::arch_early_console = console::aarch64_console.pl011;

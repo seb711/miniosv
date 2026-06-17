@@ -10,7 +10,6 @@
 
 #include <drivers/console-driver.hh>
 #include <drivers/pl011.hh>
-#include <drivers/cadence-uart.hh>
 #include <drivers/mmio-isa-serial.hh>
 
 
@@ -18,7 +17,6 @@ namespace console {
 
 union AARCH64_Console {
     PL011_Console pl011;
-    Cadence_Console cadence;
     mmio_isa_serial_console isa_serial;
 
     AARCH64_Console() {};  /* placement new is used to initialize object */

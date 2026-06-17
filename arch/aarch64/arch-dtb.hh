@@ -64,14 +64,6 @@ u64 dtb_get_rtc();
  */
 u64 dtb_get_mmio_serial_console(int *irqid);
 
-/* u64 dtb_get_cadence_uart(int *irqid)
- *
- * return the base address of the uart and writes the
- * irqid of the uart interrupt to irqid,
- * or returns zero on failure.
- */
-u64 dtb_get_cadence_uart(int *irqid);
-
 /* int gdb_get_timer_irq()
  *
  * returns the irqid of the virtual timer from the dtb,
