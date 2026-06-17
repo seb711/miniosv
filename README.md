@@ -16,7 +16,7 @@ not Linux compatibility.
 - **Single binary** — the app is compiled into the kernel and entered via `osv_app_main()`; no ELF loader.
 - **Diskless boot** — static `EXEC`, no `.dynamic`. x86-64 boots directly via QEMU `-kernel` (PVH); aarch64 via a small preboot stub.
 - **No syscall ABI** — the app calls libc/kernel functions directly (zero syscall instructions).
-- **Pure-LLVM libc** — llvm-libc + libc++ + libunwind + compiler-rt, plus a small OSv-owned libc core. No GNU toolchain, no libgcc.
+- **Pure-LLVM toolchain** — clang + `ld.lld` + llvm-libc + libc++ + libunwind + compiler-rt, plus a small OSv-owned libc core. No GNU toolchain (no binutils, no libgcc); aarch64 cross-compiles by target triple with no GNU cross sysroot.
 - Builds and boots on both **x86-64** and **aarch64**.
 
 ## Build & run
