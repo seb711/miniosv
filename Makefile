@@ -254,22 +254,25 @@ INCLUDES += $(post-includes-bsd)
 ifneq ($(werror),0)
 	CFLAGS_WERROR = -Werror
 endif
-# $(call compiler-flag, -ffoo, option, file)
-#     returns option if file builds with -ffoo, empty otherwise
-compiler-flag = $(shell $(CXX) $(CFLAGS_WERROR) $1 -o /dev/null -c $3  > /dev/null 2>&1 && echo $2)
+# $(call compiler-flag, -ffoo, option)
+#     returns option if the compiler accepts -ffoo (probed against an empty
+#     translation unit), empty otherwise
+compiler-flag = $(shell $(CXX) $(CFLAGS_WERROR) $1 -x c++ -o /dev/null -c /dev/null > /dev/null 2>&1 && echo $2)
 
-compiler-specific := $(call compiler-flag, -std=$(conf_cxx_level), -DHAVE_ATTR_COLD_LABEL, compiler/attr/cold-label.cc)
-fno-instrument-functions := $(call compiler-flag, -fno-instrument-functions, -fno-instrument-functions, compiler/empty.cc)
+# clang rejects __attribute__((cold)) on a label, so HAVE_ATTR_COLD_LABEL is
+# never defined and ATTR_COLD_LABEL (include/osv/compiler.h) expands to nothing.
+compiler-specific :=
+fno-instrument-functions := $(call compiler-flag, -fno-instrument-functions, -fno-instrument-functions)
 
 # Flags that exist in GCC but not Clang - probed so the build works with either compiler.
-wno-class-memaccess       := $(call compiler-flag, -Wno-class-memaccess,       -Wno-class-memaccess,       compiler/empty.cc)
-wno-stringop-truncation   := $(call compiler-flag, -Wno-stringop-truncation,   -Wno-stringop-truncation,   compiler/empty.cc)
-wno-dangling-pointer      := $(call compiler-flag, -Wno-dangling-pointer,      -Wno-dangling-pointer,      compiler/empty.cc)
-wno-unused-private-field  := $(call compiler-flag, -Wno-unused-private-field,  -Wno-unused-private-field,  compiler/empty.cc)
+wno-class-memaccess       := $(call compiler-flag, -Wno-class-memaccess,       -Wno-class-memaccess)
+wno-stringop-truncation   := $(call compiler-flag, -Wno-stringop-truncation,   -Wno-stringop-truncation)
+wno-dangling-pointer      := $(call compiler-flag, -Wno-dangling-pointer,      -Wno-dangling-pointer)
+wno-unused-private-field  := $(call compiler-flag, -Wno-unused-private-field,  -Wno-unused-private-field)
 # GCC: $(wno-maybe-uninitialized); Clang equivalent: -Wno-uninitialized
-wno-maybe-uninitialized := $(call compiler-flag, -Wno-maybe-uninitialized, -Wno-maybe-uninitialized, compiler/empty.cc)
+wno-maybe-uninitialized := $(call compiler-flag, -Wno-maybe-uninitialized, -Wno-maybe-uninitialized)
 ifeq ($(wno-maybe-uninitialized),)
-wno-maybe-uninitialized := $(call compiler-flag, -Wno-uninitialized, -Wno-uninitialized, compiler/empty.cc)
+wno-maybe-uninitialized := $(call compiler-flag, -Wno-uninitialized, -Wno-uninitialized)
 endif
 
 source-dialects = -D_GNU_SOURCE
@@ -305,14 +308,13 @@ COMMON = $(autodepend) -g -Wall -Wno-pointer-arith $(CFLAGS_WERROR) -Wformat=0 -
 	-D __BSD_VISIBLE=1 -U _FORTIFY_SOURCE -fno-stack-protector $(INCLUDES) \
 	$(kernel-defines) \
 	-fno-omit-frame-pointer $(compiler-specific) \
-	-include compiler/include/intrinsics.hh \
 	$(conf_compiler_cflags) $(conf_compiler_opt) $(tracing-flags) \
 	-D__OSV__ -DARCH_STRING=$(ARCH_STR) $(EXTRA_FLAGS)
 COMMON += $(standard-includes-flag)
 COMMON += $(wno-unused-private-field)
 
 tracing-flags-0 =
-tracing-excl := $(shell $(CXX) $(CFLAGS_WERROR) -finstrument-functions-exclude-file-list=x -o /dev/null -c compiler/empty.cc > /dev/null 2>&1 && \
+tracing-excl := $(shell $(CXX) $(CFLAGS_WERROR) -finstrument-functions-exclude-file-list=x -x c++ -o /dev/null -c /dev/null > /dev/null 2>&1 && \
     echo '-finstrument-functions-exclude-file-list=c++,trace.cc,trace.hh,align.hh,mmintrin.h')
 tracing-flags-1 = -finstrument-functions $(tracing-excl)
 tracing-flags = $(tracing-flags-$(conf_tracing))
@@ -320,7 +322,7 @@ tracing-flags = $(tracing-flags-$(conf_tracing))
 
 
 
-gcc-opt-Og := $(call compiler-flag, -Og, -Og, compiler/empty.cc)
+gcc-opt-Og := $(call compiler-flag, -Og, -Og)
 
 # The kernel (with the app statically linked in) is a single fixed-address
 # executable, so use the local-exec TLS model: thread-local accesses become
@@ -337,7 +339,7 @@ CFLAGS += -I libc/stdio -I libc/internal -I libc/arch/$(arch) \
 $(out)/libc/%.o: CFLAGS += -Wno-string-plus-int
 # musl calls fabs() on a long double in a few spots; suppress Clang's narrowing
 # warning rather than patch the vendored musl source (probed; GCC lacks the flag)
-wno-absolute-value := $(call compiler-flag, -Wno-absolute-value, -Wno-absolute-value, compiler/empty.cc)
+wno-absolute-value := $(call compiler-flag, -Wno-absolute-value, -Wno-absolute-value)
 $(out)/libc/%.o: CFLAGS += $(wno-absolute-value)
 
 ASFLAGS = -g $(autodepend) -D__ASSEMBLY__
@@ -345,7 +347,7 @@ ASFLAGS = -g $(autodepend) -D__ASSEMBLY__
 # lexing to assembly comments (which breaks on apostrophes like "let's").
 # Many COMMON flags (optimization, -isystem, defines) don't apply to assembly;
 # Clang flags them under -Wunused-command-line-argument, so silence that.
-wno-unused-cli-arg := $(call compiler-flag, -Wno-unused-command-line-argument, -Wno-unused-command-line-argument, compiler/empty.cc)
+wno-unused-cli-arg := $(call compiler-flag, -Wno-unused-command-line-argument, -Wno-unused-command-line-argument)
 ASCOMPILE = $(CXX) $(COMMON) $(wno-unused-cli-arg)
 
 $(out)/fs/vfs/main.o: CXXFLAGS += -Wno-sign-compare -Wno-write-strings
@@ -431,9 +433,9 @@ endif # aarch64
 
 # bsd headers are also included from non-bsd code; suppress the attribute/
 # extern-C mismatches those pull in (probed, since GCC lacks the flag names).
-wno-extern-c-compat    := $(call compiler-flag, -Wno-extern-c-compat,   -Wno-extern-c-compat,   compiler/empty.cc)
-wno-ignored-attributes := $(call compiler-flag, -Wno-ignored-attributes, -Wno-ignored-attributes, compiler/empty.cc)
-wno-sometimes-uninitialized := $(call compiler-flag, -Wno-sometimes-uninitialized, -Wno-sometimes-uninitialized, compiler/empty.cc)
+wno-extern-c-compat    := $(call compiler-flag, -Wno-extern-c-compat,   -Wno-extern-c-compat)
+wno-ignored-attributes := $(call compiler-flag, -Wno-ignored-attributes, -Wno-ignored-attributes)
+wno-sometimes-uninitialized := $(call compiler-flag, -Wno-sometimes-uninitialized, -Wno-sometimes-uninitialized)
 COMMON += $(wno-extern-c-compat) $(wno-ignored-attributes) $(wno-sometimes-uninitialized)
 
 
@@ -570,7 +572,7 @@ endif
 objects += arch/$(arch)/power.o
 objects += arch/$(arch)/feexcept.o
 ifeq ($(conf_memory_optimize),1)
-wno-unknown-attributes := $(call compiler-flag, -Wno-unknown-attributes, -Wno-unknown-attributes, compiler/empty.cc)
+wno-unknown-attributes := $(call compiler-flag, -Wno-unknown-attributes, -Wno-unknown-attributes)
 $(out)/arch/x64/string-ssse3.o: CXXFLAGS += -mssse3 $(wno-unknown-attributes)
 $(out)/arch/x64/string.o: CXXFLAGS += $(wno-unknown-attributes)
 endif
