@@ -17,9 +17,6 @@
 #include <osv/mempool.hh>
 #include <osv/commands.hh>
 #include <osv/elf.hh>
-#if CONF_drivers_mmio
-#include "drivers/virtio-mmio.hh"
-#endif
 
 #define DTB_INTERRUPT_CELLS 3
 
@@ -282,50 +279,6 @@ u64 dtb_get_cadence_uart(int *irqid)
     return addr;
 }
 
-#if CONF_drivers_mmio
-#define VIRTIO_MMIO_DEV_COMPAT "virtio,mmio"
-#define DTB_MAX_VIRTIO_MMIO_DEV_COUNT 8
-static virtio::mmio_device_info dtb_dtb_virtio_mmio_devices_infos[DTB_MAX_VIRTIO_MMIO_DEV_COUNT];
-static unsigned int dtb_virtio_mmio_dev_count;
-static void dtb_parse_mmio_virtio_devices()
-{
-    int node;
-    struct dtb_int_spec int_spec[1];
-
-    if (!dtb)
-        return;
-
-    dtb_virtio_mmio_dev_count = 0;
-    node = fdt_node_offset_by_compatible(dtb, -1, VIRTIO_MMIO_DEV_COMPAT);
-    while (node != -FDT_ERR_NOTFOUND && dtb_virtio_mmio_dev_count < DTB_MAX_VIRTIO_MMIO_DEV_COUNT) {
-	int value_size;
-        int required = 2 * sizeof(u64); // We expect two fields - address and length, each u64 size
-        u64 *reg = (u64 *)fdt_getprop(dtb, node, "reg", &value_size);
-        if (!reg || value_size < required) {
-	    break;
-	}
-
-	dtb_dtb_virtio_mmio_devices_infos[dtb_virtio_mmio_dev_count]._address = fdt64_to_cpu(reg[0]);
-	dtb_dtb_virtio_mmio_devices_infos[dtb_virtio_mmio_dev_count]._size = fdt64_to_cpu(reg[1]);
-
-        if( !dtb_get_int_spec(node, int_spec, 1)) {
-            break;
-        };
-
-        dtb_dtb_virtio_mmio_devices_infos[dtb_virtio_mmio_dev_count++]._irq_no = int_spec[0].irq_id;
-
-	// Move to the next node
-	node = fdt_node_offset_by_compatible(dtb, node, VIRTIO_MMIO_DEV_COMPAT);
-    }
-}
-
-void dtb_collect_parsed_mmio_virtio_devices()
-{
-    for( unsigned int idx = 0; idx < dtb_virtio_mmio_dev_count; idx++) {
-	virtio::add_mmio_device_configuration(dtb_dtb_virtio_mmio_devices_infos[idx]);
-    }
-}
-#endif
 
 /* this gets the virtual timer irq, we are not interested
  * about the other timers.
@@ -846,10 +799,6 @@ void  __attribute__((constructor(init_prio::dtb))) dtb_setup()
     if (dtb_pci_irqmap_count > 0 && !dtb_parse_pci_irqmap(dtb_pci_bdfs, dtb_pci_irq_ids, dtb_pci_irqmap_count)) {
         abort("dtb_setup: failed to parse pci_irq_map.\n");
     }
-
-#if CONF_drivers_mmio
-    dtb_parse_mmio_virtio_devices();
-#endif
 
     u64 edata;
     asm volatile ("adrp %0, .edata" : "=r"(edata));

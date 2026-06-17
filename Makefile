@@ -466,21 +466,6 @@ ifeq ($(arch),x64)
 drivers += drivers/isa-serial.o
 drivers += arch/$(arch)/pvclock-abi.o
 
-ifeq ($(conf_drivers_virtio),1)
-drivers += drivers/virtio.o
-ifeq ($(conf_drivers_pci),1)
-drivers += drivers/virtio-pci-device.o
-endif
-drivers += drivers/virtio-vring.o
-ifeq ($(conf_drivers_mmio),1)
-drivers += drivers/virtio-mmio.o
-endif
-# Block-device and filesystem virtio drivers (virtio-blk, virtio-fs, nvme)
-# are gone together with the filesystem; only virtio-rng remains (virtio-net
-# went with the networking stack, virtio-scsi with the SCSI layer).
-drivers += drivers/virtio-rng.o
-endif
-
 drivers += drivers/kvmclock.o
 ifeq ($(conf_drivers_acpi),1)
 drivers += drivers/acpi.o
@@ -497,19 +482,6 @@ drivers += drivers/pl011.o
 drivers += drivers/pl031.o
 ifeq ($(conf_drivers_cadence),1)
 drivers += drivers/cadence-uart.o
-endif
-
-ifeq ($(conf_drivers_virtio),1)
-drivers += drivers/virtio.o
-ifeq ($(conf_drivers_pci),1)
-drivers += drivers/virtio-pci-device.o
-endif
-ifeq ($(conf_drivers_mmio),1)
-drivers += drivers/virtio-mmio.o
-endif
-drivers += drivers/virtio-vring.o
-# Block-device and filesystem drivers are gone with the filesystem.
-drivers += drivers/virtio-rng.o
 endif
 endif # aarch64
 

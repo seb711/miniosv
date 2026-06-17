@@ -26,10 +26,6 @@
 
 osv_multiboot_info_type* osv_multiboot_info;
 
-#if CONF_drivers_mmio
-#include "drivers/virtio-mmio.hh"
-#endif
-
 void setup_temporary_phys_map()
 {
     // duplicate 1:1 mapping into phys_mem
@@ -234,18 +230,6 @@ void arch_init_premain()
 }
 
 #include "drivers/driver.hh"
-#if CONF_drivers_virtio
-#include "drivers/virtio.hh"
-#endif
-#if CONF_drivers_virtio_blk
-#include "drivers/virtio-blk.hh"
-#endif
-#if CONF_drivers_virtio_rng
-#include "drivers/virtio-rng.hh"
-#endif
-#if CONF_drivers_virtio_fs
-#include "drivers/virtio-fs.hh"
-#endif
 
 extern bool opt_pci_disabled;
 void arch_init_drivers()
@@ -258,22 +242,8 @@ void arch_init_drivers()
     }
 #endif
 
-#if CONF_drivers_mmio
-    // Register any parsed virtio-mmio devices
-    virtio::register_mmio_devices(device_manager::instance());
-#endif
-
     // Initialize all drivers
     hw::driver_manager* drvman = hw::driver_manager::instance();
-#if CONF_drivers_virtio_blk
-    drvman->register_driver(virtio::blk::probe);
-#endif
-#if CONF_drivers_virtio_rng
-    drvman->register_driver(virtio::rng::probe);
-#endif
-#if CONF_drivers_virtio_fs
-    drvman->register_driver(virtio::fs::probe);
-#endif
     boot_time.event("drivers probe");
     drvman->load_all();
     drvman->list_drivers();
