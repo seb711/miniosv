@@ -39,16 +39,34 @@ endif
 
 ###########################################################################
 
-include conf/base.mk
+# Build configuration. OSv is a single-app kernel with one frozen
+# configuration, so the options are baked in here (this replaces the former
+# kconfig output and the conf/*.mk value files). Arch/mode-independent defaults:
+conf_preempt=1
+conf_tracing=0
+conf_debug_memory=0
+# debug level logging (enabled automatically in mode=debug)
+conf_logger_debug=0
+conf_debug_elf=0
+conf_linker_extra_options=
+conf_cxx_level=gnu++20
+conf_lazy_stack=0
+conf_lazy_stack_invariant=0
 
 # The build mode defaults to "release" (optimized build), the other option
 # is "debug" (unoptimized build). In the latter the optimizer interferes
 # less with the debugging, but the release build is fully debuggable too.
 mode=release
-ifeq (,$(wildcard conf/$(mode).mk))
-    $(error unsupported mode $(mode))
+ifeq ($(mode),release)
+conf_compiler_opt = -O2 -DNDEBUG
+else ifeq ($(mode),debug)
+# -Wno-uninitialized is clang's spelling (GCC's -Wno-maybe-uninitialized, which
+# the old conf/debug.mk used, is rejected by our clang-only toolchain).
+conf_compiler_opt = -O0 -Wno-uninitialized
+conf_logger_debug=1
+else
+$(error unsupported mode $(mode))
 endif
-include conf/$(mode).mk
 
 
 # By default, detect HOST_CXX's architecture - x64 or aarch64.
@@ -78,10 +96,18 @@ arch := $(ARCH)
 # ARCH_STR is like ARCH, but uses the full name x86_64 instead of x64
 ARCH_STR := $(arch:x64=x86_64)
 
-ifeq (,$(wildcard conf/$(arch).mk))
-    $(error unsupported architecture $(arch))
+# Arch-specific compiler flags.
+ifeq ($(arch),x64)
+conf_compiler_cflags = -msse2
+else ifeq ($(arch),aarch64)
+# -mstrict-align: without it, unaligned access to a stack attr variable with
+# stp faults. -ftls-model=local-exec: emit direct TPREL accesses off TPIDR_EL0
+# and never TLSDESC relocations, avoiding mixed-TLS-model address mismatches
+# (clang, our only compiler, rejects the GCC-only -mtls-dialect= on aarch64).
+conf_compiler_cflags = -mstrict-align -ftls-model=local-exec -DAARCH64_PORT_STUB
+else
+$(error unsupported architecture $(arch))
 endif
-include conf/$(arch).mk
 
 CROSS_PREFIX ?= $(if $(filter-out $(arch),$(host_arch)),$(arch)-linux-gnu-)
 # Pure-LLVM toolchain: one clang/clang++ that cross-compiles by target triple
@@ -107,14 +133,40 @@ out = build/$(mode).$(arch)
 outlink = build/$(mode)
 outlink2 = build/last
 
-# The kernel configuration is frozen: a single configuration is checked in at
-# conf/config.mk (the conf_* options and the device-driver set, formerly the
-# kconfig output and the 'all' driver profile). The arch/mode value files
-# conf/base.mk, conf/$(mode).mk and conf/$(arch).mk were already included above.
-# There is no kconfig, no .config, and no generation step - to change the
-# configuration, edit conf/config.mk. The conf_drivers_* variables it defines
-# decide which driver objects are linked in the rules below.
-include conf/config.mk
+# The kernel configuration is frozen: there is no kconfig, no .config, and no
+# generation step. To change a value, edit it here. To remove a subsystem,
+# delete its line below and the corresponding source/Makefile wiring. The
+# conf_drivers_* variables decide which driver objects are linked below; the
+# matching CONF_drivers_* macros for source code live in
+# include/osv/drivers_config.h.
+
+# --- tracepoints -----------------------------------------------------------
+conf_tracepoints=1
+conf_tracepoints_sampler=1
+conf_tracepoints_strace=1
+
+# --- core ------------------------------------------------------------------
+conf_core_c_wrappers=1
+conf_core_commands_runscript=1
+conf_core_rcu_defer_queue_size=2000
+conf_core_debug_buffer_size=0xc800
+conf_core_dynamic_percpu_size=65536
+
+# --- memory ----------------------------------------------------------------
+conf_memory_l1_pool_size=512
+conf_memory_page_batch_size=32
+
+# --- filesystem ------------------------------------------------------------
+conf_fs_max_file_descriptors=0x4000
+
+# --- threads / stacks ------------------------------------------------------
+conf_threads_default_kernel_stack_size=65536
+conf_threads_default_pthread_stack_size=0x100000
+conf_interrupt_stack_size=0x1000
+
+# --- device drivers --------------------------------------------------------
+conf_drivers_acpi=1
+conf_drivers_pci=1
 
 ifneq ($(MAKECMDGOALS),clean)
 $(info Building into $(out))
