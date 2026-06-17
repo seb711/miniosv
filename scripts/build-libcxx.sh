@@ -46,7 +46,7 @@ if [ ! -d "$LLVM_DIR/libcxx" ]; then
             https://github.com/llvm/llvm-project.git "$LLVM_DIR"
     fi
     git -C "$LLVM_DIR" sparse-checkout add libcxx libcxxabi libunwind runtimes cmake \
-        llvm/cmake llvm/utils
+        llvm/cmake llvm/utils libc
 fi
 
 # OSv has no syscall ABI. libc++abi's __cxa_guard uses the mutex (not futex)
