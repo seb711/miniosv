@@ -112,11 +112,19 @@ make -C "$BUILD_DIR" -j"$(nproc)" builtins > "$BUILD_DIR-build.log" 2>&1 || {
 
 # cmake names the archive per-arch/triple (libclang_rt.builtins-aarch64.a or
 # .../<triple>/libclang_rt.builtins.a). Settle on one stable path the Makefile
-# can reference.
-SRC=$(find "$BUILD_DIR" -name 'libclang_rt.builtins*.a' | head -1)
+# can reference. Exclude that stable path from the search: when build/compiler-rt
+# is restored from CI cache the script re-runs (its .compiler-rt-built stamp is
+# not cached), and otherwise find would match the copy from the previous run and
+# cp it onto itself ("are the same file").
+DEST="$BUILD_DIR/lib/libclang_rt.builtins.a"
+SRC=$(find "$BUILD_DIR" -name 'libclang_rt.builtins*.a' ! -path "$DEST" | head -1)
 if [ -z "$SRC" ]; then
     echo "error: libclang_rt.builtins not produced" >&2; exit 1
 fi
 mkdir -p "$BUILD_DIR/lib"
-cp -f "$SRC" "$BUILD_DIR/lib/libclang_rt.builtins.a"
-echo "OK: $BUILD_DIR/lib/libclang_rt.builtins.a (from $SRC, $(du -h "$SRC" | cut -f1))"
+if [ "$SRC" -ef "$DEST" ]; then
+    echo "OK: $DEST (already in place)"
+else
+    cp -f "$SRC" "$DEST"
+    echo "OK: $DEST (from $SRC, $(du -h "$SRC" | cut -f1))"
+fi
