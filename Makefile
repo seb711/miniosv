@@ -467,7 +467,6 @@ drivers += drivers/kvmclock.o
 ifeq ($(conf_drivers_acpi),1)
 drivers += drivers/acpi.o
 endif
-drivers += drivers/rtc.o
 endif # x64
 
 ifeq ($(arch),aarch64)
