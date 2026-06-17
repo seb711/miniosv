@@ -474,9 +474,6 @@ ifeq ($(arch),aarch64)
 drivers += drivers/mmio-isa-serial.o
 drivers += drivers/pl011.o
 drivers += drivers/pl031.o
-ifeq ($(conf_drivers_cadence),1)
-drivers += drivers/cadence-uart.o
-endif
 endif # aarch64
 
 ifeq ($(conf_tracepoints),1)
