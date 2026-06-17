@@ -148,11 +148,7 @@
 
 #else // defined(BOOST_WINDOWS)
 
-#include <boost/atomic/detail/futex.hpp>
-
-#if defined(BOOST_ATOMIC_DETAIL_HAS_FUTEX)
-#define BOOST_ATOMIC_DETAIL_WAIT_BACKEND futex
-#elif defined(__APPLE__)
+#if defined(__APPLE__)
 #if !defined(BOOST_ATOMIC_NO_DARWIN_ULOCK) && (\
     (defined(__ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ >= 101200) || \
     (defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__ >= 100000) || \
