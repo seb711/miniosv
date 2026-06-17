@@ -5,7 +5,6 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
-#include "drivers/clockevent.hh"
 #include "drivers/clock.hh"
 #include "exceptions.hh"
 #include "apic.hh"

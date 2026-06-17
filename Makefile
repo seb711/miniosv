@@ -448,8 +448,6 @@ drivers += drivers/console-multiplexer.o
 drivers += drivers/console-driver.o
 drivers += drivers/line-discipline.o
 drivers += drivers/clock.o
-drivers += drivers/clock-common.o
-drivers += drivers/clockevent.o
 drivers += drivers/isa-serial-base.o
 drivers += drivers/random.o
 drivers += drivers/device.o
@@ -469,9 +467,6 @@ drivers += arch/$(arch)/pvclock-abi.o
 drivers += drivers/kvmclock.o
 ifeq ($(conf_drivers_acpi),1)
 drivers += drivers/acpi.o
-endif
-ifeq ($(conf_drivers_hpet),1)
-drivers += drivers/hpet.o
 endif
 drivers += drivers/rtc.o
 endif # x64

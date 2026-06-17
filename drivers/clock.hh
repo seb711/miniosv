@@ -9,6 +9,7 @@
 #define CLOCK_HH_
 
 #include <osv/types.h>
+#include <chrono>
 
 /**
  * OSv low-level time-keeping interface
@@ -17,9 +18,9 @@
  * time-keeping functions.
  *
  * clock::get() returns the single concrete instance of this interface,
- * which may be a kvmclock, xenclock, or hpetclock - depending on which
- * of these the hypervisor provides. This clock instance may then be
- * queried for the current time - for example, clock::get()->time().
+ * which is the kvmclock paravirtual clock on x86 KVM (or the ARM generic
+ * timer on aarch64). This clock instance may then be queried for the
+ * current time - for example, clock::get()->time().
  *
  * The methods of this class are not type-safe, in that they return times
  * as unadorned integers (s64) whose type does not specify the time units
@@ -38,10 +39,8 @@ public:
      * For example, clock::get()->time().
      *
      * This function always returns the same clock, which OSv considers the
-     * best and most efficient way to query the time on the this hypervisor.
-     * On KVM and Xen, it can be kvmclock or xenclock respectively, which are
-     * very efficient para-virtual clocks. As a last resort, it defaults to
-     * hpetclock.
+     * best and most efficient way to query the time on this hypervisor. On
+     * x86 KVM this is the kvmclock para-virtual clock.
      * \return A pointer to the concrete instance of the clock class.
      */
     static clock* get() __attribute__((no_instrument_function));
@@ -102,4 +101,37 @@ public:
 private:
     static clock* _c;
 };
+
+/**
+ * Per-CPU one-shot timer interrupt source.
+ *
+ * The scheduler arms clock_event to fire at a given time; when the timer
+ * interrupt fires, the driver invokes the registered clock_event_callback.
+ * Previously declared in the separate clockevent.hh; folded in here since it
+ * is part of the same low-level time-keeping interface.
+ */
+class clock_event_callback {
+public:
+    virtual ~clock_event_callback();
+    // note: must always be called on the same cpu that the timer was set on
+    virtual void fired() = 0;
+};
+
+class clock_event_driver {
+public:
+    virtual ~clock_event_driver();
+    virtual void setup_on_cpu() = 0;
+    // set() is cpu-local: each processor has its own timer
+    virtual void set(std::chrono::nanoseconds time) = 0;
+    template<class Rep, class Period>
+    inline void set(std::chrono::duration<Rep, Period> dur) {
+        set(std::chrono::duration_cast<std::chrono::nanoseconds>(dur));
+    }
+    void set_callback(clock_event_callback* callback);
+    clock_event_callback* callback() const;
+protected:
+    clock_event_callback* _callback;
+};
+extern clock_event_driver* clock_event;
+
 #endif /* CLOCK_HH_ */

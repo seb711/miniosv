@@ -42,4 +42,3 @@ conf_interrupt_stack_size=0x1000
 # CONF_drivers_* macros for source code are frozen in include/osv/drivers_config.h.
 conf_drivers_acpi=1
 conf_drivers_pci=1
-conf_drivers_hpet=1

@@ -13,7 +13,7 @@
 #include "arch-cpu.hh"
 #include <functional>
 #include "arch-tls.hh"
-#include "drivers/clockevent.hh"
+#include "drivers/clock.hh"
 #include <boost/intrusive/set.hpp>
 #include <boost/intrusive/list.hpp>
 #include <osv/mutex.h>
