@@ -146,19 +146,6 @@ bool is_page_fault_rsvd(unsigned int error_code) {
     return error_code & page_fault_rsvd;
 }
 
-/* Glauber Costa: if page faults because we are trying to execute code here,
- * we shouldn't be closing the balloon. We should [...] despair.
- * So by checking only for == page_fault_write, we are guaranteed to close
- * the balloon in the next branch - which although still bizarre, at least
- * will give us tracing information that I can rely on for debugging that.
- * (the reason for that is that there are only fixups for memcpy, and memcpy
- * can only be used to read or write).
- * The other bits like present and user should not matter in this case.
- */
-bool is_page_fault_write_exclusive(unsigned int error_code) {
-    return error_code == page_fault_write;
-}
-
 bool is_page_fault_prot_write(unsigned int error_code) {
     return (error_code & (page_fault_write | page_fault_prot)) == (page_fault_write | page_fault_prot);
 }

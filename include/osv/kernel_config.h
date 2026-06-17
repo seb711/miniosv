@@ -38,9 +38,6 @@
 #ifndef CONF_memory_debug
 #define CONF_memory_debug 0
 #endif
-#ifndef CONF_memory_jvm_balloon
-#define CONF_memory_jvm_balloon 0
-#endif
 #ifndef CONF_memory_l1_pool_size
 #define CONF_memory_l1_pool_size 512
 #endif

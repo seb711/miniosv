@@ -80,9 +80,7 @@ enum {
     mmap_populate    = 1ul << 1,
     mmap_shared      = 1ul << 2,
     mmap_uninitialized = 1ul << 3,
-    mmap_jvm_heap    = 1ul << 4,
     mmap_small       = 1ul << 5,
-    mmap_jvm_balloon = 1ul << 6,
     mmap_file        = 1ul << 7,
     mmap_stack       = 1ul << 8,
 };
@@ -182,7 +180,6 @@ pt_element<4> *get_root_pt(uintptr_t virt);
    whether the error reports a page fault (insn/write) */
 bool is_page_fault_insn(unsigned int err);
 bool is_page_fault_write(unsigned int err);
-bool is_page_fault_write_exclusive(unsigned int err);
 
 bool fast_sigsegv_check(uintptr_t addr, exception_frame* ef);
 
