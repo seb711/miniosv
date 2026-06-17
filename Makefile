@@ -607,7 +607,6 @@ libc += internal/libc.o
 
 
 libc += env/__environ.o
-libc += env/secure_getenv.o
 
 
 
@@ -620,7 +619,6 @@ libc += env/secure_getenv.o
 # unfortunately. The simplest workaround is to just disable optimization
 # for the affected files.
 
-libc += misc/error.o
 libc += misc/getopt.o
 libc += misc/getopt_long.o
 libc += misc/backtrace.o
@@ -645,10 +643,6 @@ endif
 
 $(out)/libc/stdio/vfprintf.o: COMMON += $(wno-maybe-uninitialized)
 $(out)/libc/stdio/vfscanf.o: COMMON += $(wno-maybe-uninitialized)
-
-ifeq ($(arch),x64)
-libc += stdlib/unimplemented.o
-endif
 
 libc += string/explicit_bzero.o
 libc += string/strerror_r.o
@@ -675,7 +669,6 @@ libc += io.o
 # llvm-libc archive; these are the OSv seam (console-backed std streams + FILE
 # stubs) and the printf-extension stubs.
 libc += stdio/llvm_stdio.o
-libc += stdio/printf-hooks.o
 libc += time.o
 libc += signal.o
 libc += mman.o
@@ -687,7 +680,6 @@ libc += resource.o
 libc += cxa_thread_atexit.o
 libc += cpu_set.o
 libc += malloc_hooks.o
-libc += mallopt.o
 
 
 
