@@ -2,9 +2,9 @@ name: CI
 
 # Build the slim OSv kernel and run its in-kernel test suite for both
 # architectures. Everything is driven from the top-level Makefile, which also
-# auto-builds the pinned llvm-libc / libc++ / compiler-rt runtimes; the tests
-# boot under QEMU using TCG (GitHub runners have no /dev/kvm, and aarch64 is
-# cross-emulated anyway).
+# auto-builds the pinned llvm-libc / libc++ / compiler-rt runtimes; the x64
+# tests boot under QEMU/KVM (the runner exposes /dev/kvm once permissions are
+# opened up below) and aarch64 is cross-emulated under TCG.
 
 on:
   push:
@@ -31,13 +31,14 @@ jobs:
           - arch: aarch64
             run_arch: aarch64
             qemu_pkg: qemu-system-arm
-            # libc++'s atomic.cpp takes its Linux futex backend on an
-            # *-linux-gnu target, which #includes <linux/futex.h> and <asm/*>.
-            # The aarch64 cross build therefore needs the aarch64 system headers
-            # (the local dev env has them via this package); without it the libc++
-            # build fails. gcc-aarch64-linux-gnu pulls libc6-dev-arm64-cross and
-            # the cross binutils clang auto-detects.
-            cross_pkgs: gcc-aarch64-linux-gnu
+            # No aarch64 GNU cross package: the toolchain is pure-LLVM. clang
+            # cross-compiles by target triple (-nostdinc, its own libc/libc++/
+            # compiler-rt archives) and ld.lld links the aarch64 ELF, so neither
+            # the cross gcc nor cross binutils is needed. libc++'s atomic.cpp
+            # still pulls the arch-neutral <linux/futex.h>/asm-generic/* for its
+            # futex backend; those come from the host linux-libc-dev (installed
+            # below) plus the asm/* forwarders scripts/build-libcxx.sh generates.
+            cross_pkgs: ""
 
     steps:
       - uses: actions/checkout@v4
@@ -62,9 +63,24 @@ jobs:
           sudo /tmp/llvm.sh 20
           sudo ln -sf /usr/bin/clang-20   /usr/local/bin/clang
           sudo ln -sf /usr/bin/clang++-20 /usr/local/bin/clang++
+          sudo ln -sf /usr/bin/ld.lld-20  /usr/local/bin/ld.lld
           hash -r
           clang --version
           clang --version | grep -q "clang version 20" || { echo "::error::clang is not version 20"; exit 1; }
+
+      # The native x64 job runs under QEMU/KVM. GitHub's ubuntu-24.04 runners
+      # ship a /dev/kvm node but it isn't accessible to the runner user by
+      # default, so QEMU aborts with "Could not access KVM kernel module:
+      # Permission denied". Install a udev rule that makes the node world-RW
+      # and re-trigger it. Not needed for aarch64 (foreign-arch == pure TCG).
+      - name: Enable KVM access
+        if: matrix.arch == 'x64'
+        run: |
+          set -eux
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
 
       # The pinned llvm-project sparse checkout and the per-arch libc++ /
       # llvm-libc / compiler-rt builds are slow but stable; cache them keyed on
@@ -92,14 +108,16 @@ jobs:
             tail -120 "$f" 2>/dev/null || echo "(not present)"
           done
 
-      - name: Run test suite under QEMU (TCG)
+      - name: Run test suite under QEMU
         run: |
           set -eux
           timeout 900 ./scripts/run.py --arch ${{ matrix.run_arch }} --novnc --nogdb \
             < /dev/null 2>&1 | tee run.log
           # The driver app prints this only when every suite passed and powers off.
           grep -q "OSv test application: SUCCESS" run.log
-          ! grep -qi "FAILURE" run.log
+          # Fail on an explicit FAILURE marker (case-sensitive, so it won't match
+          # the "failures: 0" summary lines) or any non-zero failure count.
+          ! grep -qE "FAILURE|failures: [1-9]|[1-9][0-9]* failures" run.log
 
       - name: Upload run log
         if: always()

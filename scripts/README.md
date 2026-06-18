@@ -20,10 +20,11 @@ The kernel is built straight from the top-level Makefile: `make` (x86-64),
 # Running
 * **run.py** — boots the built kernel under QEMU. `./scripts/run.py --help`.
 
-# aarch64 cross build helpers
-* **download_aarch64_toolchain.sh**, **download_aarch64_packages.py**,
-  **download_fedora_aarch64_rpm_package.sh**,
-  **download_ubuntu_aarch64_deb_package.sh** — fetch the aarch64 toolchain/sysroot.
+# aarch64
+The aarch64 build is pure-LLVM and needs no GNU cross toolchain or sysroot: one
+clang cross-compiles by target triple (`make arch=aarch64`) and `ld.lld` links
+the kernel. Only the LLVM tools and a host `linux-libc-dev` (for the arch-neutral
+`<linux/futex.h>` libc++'s atomic backend pulls) are required.
 * **imgedit.py** + **nbd_client.py** — used ONLY to stamp the aarch64 `loader.img`
   (kernel size + command line). The x64 build no longer uses them.
 
