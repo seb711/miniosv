@@ -14,5 +14,3 @@ __tlsdesc_static:
 // compiled with -ftls-model=local-exec, so no R_AARCH64_TLSDESC relocations are
 // emitted and it was never referenced. It also called __tls_dynamic_setup, which
 // lived in the ELF loader deleted in Phase 4.
-
-.section .note.GNU-stack,"",@progbits

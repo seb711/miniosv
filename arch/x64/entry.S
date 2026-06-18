@@ -168,5 +168,3 @@ call_signal_handler_thunk:
         add $8, %rsp # error_core
         iretq
         .cfi_endproc
-
-.section .note.GNU-stack,"",@progbits

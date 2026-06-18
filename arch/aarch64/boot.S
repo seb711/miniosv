@@ -378,5 +378,3 @@ kernel_vm_shift: .quad 0
 .global interrupt_stack_top
 interrupt_stack_top = .
 */
-
-.section .note.GNU-stack,"",@progbits

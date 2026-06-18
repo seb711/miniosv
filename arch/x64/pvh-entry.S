@@ -40,5 +40,3 @@ hvm_xen_start:
     mov $0x7c00, %esp # Allocate some temporary stack
     mov $start32-OSV_KERNEL_VM_SHIFT, %eax
     jmp *%eax
-
-.section .note.GNU-stack,"",@progbits

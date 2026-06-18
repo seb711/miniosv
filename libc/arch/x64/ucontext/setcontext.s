@@ -69,5 +69,3 @@ setcontext:
 	/* Clear rax to indicate success. */
 	xorq %rax, %rax
 	ret
-
-.section .note.GNU-stack,"",@progbits
