@@ -19,7 +19,6 @@
 #include <safe-ptr.hh>
 #include <osv/error.h>
 #include <osv/trace.hh>
-#include <stack>
 #include "dump.hh"
 #include <osv/rcu.hh>
 #include <osv/rwlock.h>

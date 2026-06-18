@@ -5,7 +5,6 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
-#include <osv/debug.hh>
 #include <osv/sched.hh>
 #include <osv/trace.hh>
 #include <osv/percpu.hh>

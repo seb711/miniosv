@@ -9,7 +9,6 @@
 #include <osv/types.h>
 #include <osv/export.h>
 #include <cmath>
-#include <complex>
 
 extern "C" OSV_LIBC_API
 int __isnan(double v)

@@ -12,19 +12,13 @@
 #include "arch.hh"
 #include <atomic>
 #include <unordered_map>
+#include <unordered_set>
 #include <algorithm>
-#include <sys/types.h>
-#include <sys/stat.h>
-#include <fcntl.h>
 #include <osv/debug.hh>
 #include <osv/prio.hh>
 #include <osv/execinfo.hh>
 #include <osv/percpu.hh>
 #include <osv/ilog2.hh>
-#include <osv/semaphore.hh>
-#include <osv/elf.hh>
-#include <osv/string_utils.hh>
-#include <cxxabi.h>
 #include "drivers/console.hh"
 #include <osv/kernel_config.h>
 

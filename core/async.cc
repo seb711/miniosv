@@ -14,8 +14,6 @@
 #include <osv/preempt-lock.hh>
 #include <osv/migration-lock.hh>
 #include <lockfree/unordered-queue-mpsc.hh>
-#include <boost/intrusive/set.hpp>
-#include <boost/intrusive/parent_from_member.hpp>
 #include <osv/timer-set.hh>
 #include <osv/aligned_new.hh>
 #include <osv/kernel_config.h>

@@ -8,6 +8,9 @@
 #include <osv/strace.hh>
 #include <osv/sched.hh>
 #include "drivers/console.hh"
+#include <atomic>
+#include <chrono>
+#include <string>
 
 trace_log* _trace_log = nullptr;
 
