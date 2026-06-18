@@ -12,7 +12,7 @@
 #include "arch.hh"
 #include <atomic>
 #include <unordered_map>
-#include <boost/range/algorithm/remove.hpp>
+#include <algorithm>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -372,7 +372,7 @@ void tracepoint_base::del_probe(probe* p)
     WITH_LOCK(probes_mutex) {
         auto old = probes_ptr.read_by_owner();
         auto _new = new std::vector<probe*>(*old);
-        auto i = boost::remove(*_new, p);
+        auto i = std::remove(_new->begin(), _new->end(), p);
         _new->erase(i, _new->end());
         probes_ptr.assign(_new);
         osv::rcu_dispose(old);
