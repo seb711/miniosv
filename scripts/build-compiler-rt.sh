@@ -16,6 +16,19 @@
 
 set -euo pipefail
 
+# Run a command, tee to a log file, and display each output line by overwriting
+# the current terminal line.  On failure, print the tail of the log.
+_progress_run() {
+    local log="$1"; shift
+    "$@" 2>&1 | tee "$log" | while IFS= read -r line; do
+        printf '\r\033[K  %.*s' "$(( ${COLUMNS:-120} - 4 ))" "$line" >&2
+    done
+    local rc=${PIPESTATUS[0]}
+    printf '\r\033[K' >&2
+    [ "$rc" -eq 0 ] || tail -30 "$log" >&2
+    return "$rc"
+}
+
 osv_arch="${1:-x64}"
 case "$osv_arch" in
     x64|x86_64|x86)    osv_arch=x64;     llvm_arch=x86_64 ;;
@@ -85,30 +98,34 @@ if [ "$llvm_arch" != "$(uname -m)" ]; then
 fi
 
 mkdir -p "$BUILD_DIR"
-cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
-    $CROSS_CMAKE \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_CXX_COMPILER=clang++ \
-    -DLLVM_ENABLE_RUNTIMES="compiler-rt" \
-    -DCOMPILER_RT_BUILD_BUILTINS=ON \
-    -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
-    -DCOMPILER_RT_BUILD_XRAY=OFF \
-    -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
-    -DCOMPILER_RT_BUILD_PROFILE=OFF \
-    -DCOMPILER_RT_BUILD_MEMPROF=OFF \
-    -DCOMPILER_RT_BUILD_ORC=OFF \
-    -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF \
-    -DCOMPILER_RT_BUILD_GWP_ASAN=OFF \
-    -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
-    -DCOMPILER_RT_BAREMETAL_BUILD=ON \
-    -DCMAKE_C_FLAGS="$KERNEL_FLAGS" \
-    -DCMAKE_CXX_FLAGS="$KERNEL_FLAGS" \
-    > "$BUILD_DIR-configure.log" 2>&1 || {
-        echo "configure failed, see $BUILD_DIR-configure.log"; exit 1; }
+echo "  COMPILER-RT configure..."
+_progress_run "$BUILD_DIR-configure.log" \
+    cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
+        $CROSS_CMAKE \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+        -DLLVM_ENABLE_RUNTIMES="compiler-rt" \
+        -DCOMPILER_RT_BUILD_BUILTINS=ON \
+        -DCOMPILER_RT_BUILD_SANITIZERS=OFF \
+        -DCOMPILER_RT_BUILD_XRAY=OFF \
+        -DCOMPILER_RT_BUILD_LIBFUZZER=OFF \
+        -DCOMPILER_RT_BUILD_PROFILE=OFF \
+        -DCOMPILER_RT_BUILD_MEMPROF=OFF \
+        -DCOMPILER_RT_BUILD_ORC=OFF \
+        -DCOMPILER_RT_BUILD_CTX_PROFILE=OFF \
+        -DCOMPILER_RT_BUILD_GWP_ASAN=OFF \
+        -DCOMPILER_RT_DEFAULT_TARGET_ONLY=ON \
+        -DCOMPILER_RT_BAREMETAL_BUILD=ON \
+        -DCMAKE_C_FLAGS="$KERNEL_FLAGS" \
+        -DCMAKE_CXX_FLAGS="$KERNEL_FLAGS" \
+    || { echo "configure failed — see $BUILD_DIR-configure.log"; exit 1; }
 
-make -C "$BUILD_DIR" -j"$(nproc)" builtins > "$BUILD_DIR-build.log" 2>&1 || {
-        echo "build failed, see $BUILD_DIR-build.log"; exit 1; }
+echo "  COMPILER-RT build..."
+_progress_run "$BUILD_DIR-build.log" \
+    make -C "$BUILD_DIR" -j"$(nproc)" builtins \
+    || { echo "build failed — see $BUILD_DIR-build.log"; exit 1; }
 
 # cmake names the archive per-arch/triple (libclang_rt.builtins-aarch64.a or
 # .../<triple>/libclang_rt.builtins.a). Settle on one stable path the Makefile
