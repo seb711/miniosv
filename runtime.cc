@@ -43,7 +43,6 @@
 #include "libc/libc.hh"
 #include <api/sys/times.h>
 #include <map>
-#include <boost/range/adaptor/reversed.hpp>
 #include <osv/align.hh>
 #include <osv/stubbing.hh>
 #include <api/sys/resource.h>
@@ -188,8 +187,8 @@ extern "C" void __cxa_finalize(void *dso)
         my_destructors = std::move(destructors[dso]);
         destructors.erase(dso);
     }
-    for (auto d : boost::adaptors::reverse(my_destructors)) {
-        d.first(d.second);
+    for (auto it = my_destructors.rbegin(); it != my_destructors.rend(); ++it) {
+        it->first(it->second);
     }
     return;
 }

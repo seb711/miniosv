@@ -11,7 +11,6 @@
 #include <cassert>
 #include <cstdint>
 #include <new>
-#include <boost/utility.hpp>
 #include <string.h>
 #include <lockfree/unordered-queue-mpsc.hh>
 #include "libc/libc.hh"
