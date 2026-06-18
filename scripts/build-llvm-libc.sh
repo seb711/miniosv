@@ -21,6 +21,19 @@
 
 set -euo pipefail
 
+# Run a command, tee to a log file, and display each output line by overwriting
+# the current terminal line.  On failure, print the tail of the log.
+_progress_run() {
+    local log="$1"; shift
+    "$@" 2>&1 | tee "$log" | while IFS= read -r line; do
+        printf '\r\033[K  %.*s' "$(( ${COLUMNS:-120} - 4 ))" "$line" >&2
+    done
+    local rc=${PIPESTATUS[0]}
+    printf '\r\033[K' >&2
+    [ "$rc" -eq 0 ] || tail -30 "$log" >&2
+    return "$rc"
+}
+
 # --- arch handling: only x86 and arm ----------------------------------------
 osv_arch="${1:-x64}"
 case "$osv_arch" in
@@ -66,22 +79,25 @@ cp "$CONFIG_SRC/config.json"     "$ARCH_CONF/config.json"
 KERNEL_FLAGS="-fno-pie -fno-stack-protector -ftls-model=local-exec -fno-omit-frame-pointer"
 
 mkdir -p "$BUILD_DIR"
-cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_CXX_COMPILER=clang++ \
-    -DLLVM_ENABLE_RUNTIMES=libc \
-    -DLLVM_LIBC_FULL_BUILD=ON \
-    -DLIBC_TARGET_TRIPLE="$llvm_arch-none-elf" \
-    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
-    -DCMAKE_C_FLAGS="$KERNEL_FLAGS" \
-    -DCMAKE_CXX_FLAGS="$KERNEL_FLAGS" \
-    > "$BUILD_DIR-configure.log" 2>&1 || {
-        echo "configure failed, see $BUILD_DIR-configure.log"; exit 1; }
+echo "  LLVM-LIBC configure..."
+_progress_run "$BUILD_DIR-configure.log" \
+    cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DLLVM_ENABLE_RUNTIMES=libc \
+        -DLLVM_LIBC_FULL_BUILD=ON \
+        -DLIBC_TARGET_TRIPLE="$llvm_arch-none-elf" \
+        -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+        -DCMAKE_C_FLAGS="$KERNEL_FLAGS" \
+        -DCMAKE_CXX_FLAGS="$KERNEL_FLAGS" \
+    || { echo "configure failed — see $BUILD_DIR-configure.log"; exit 1; }
 
 # fullbuild packages the math entrypoints into a separate libm.a
-make -C "$BUILD_DIR" -j"$(nproc)" libc libm > "$BUILD_DIR-build.log" 2>&1 || {
-        echo "build failed, see $BUILD_DIR-build.log"; exit 1; }
+echo "  LLVM-LIBC build..."
+_progress_run "$BUILD_DIR-build.log" \
+    make -C "$BUILD_DIR" -j"$(nproc)" libc libm \
+    || { echo "build failed — see $BUILD_DIR-build.log"; exit 1; }
 
 # x86 uses the `syscall` instruction; arm uses `svc`. Gate against both so the
 # archive is guaranteed free of any direct kernel-entry instruction. Use
