@@ -42,15 +42,17 @@
           exec ${llvmPkgs.clang-unwrapped}/bin/clang++ -resource-dir ${clangResourceDir} "$@"
         '';
 
-        buildDeps = [
+        buildDeps = with pkgs; [
           clang
           clangPP
           llvmPkgs.llvm
-          pkgs.binutils
-          pkgs.cmake
-          pkgs.ninja
-          (pkgs.python3.withPackages (ps: [ ps.pyyaml ]))
-          pkgs.git
+          llvmPkgs.lld
+          binutils
+          cmake
+          ninja
+          (python3.withPackages (ps: [ ps.pyyaml ]))
+          git
+          ctags
         ];
 
       in {
