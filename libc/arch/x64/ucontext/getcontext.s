@@ -79,3 +79,5 @@ getcontext:
 	/* All done, return 0 for success. */
 	xorq %rax, %rax
 	ret
+
+.section .note.GNU-stack,"",@progbits

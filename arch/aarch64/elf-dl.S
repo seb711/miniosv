@@ -43,3 +43,5 @@ __elf_resolve_pltgot:
 
         ldp     x17, x30, [sp], #16
         br      x16
+
+.section .note.GNU-stack,"",@progbits

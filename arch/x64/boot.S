@@ -263,3 +263,5 @@ smpboot64:
     jnz 1b
     lea 4096(%rax), %rsp
     call smp_main
+
+.section .note.GNU-stack,"",@progbits
