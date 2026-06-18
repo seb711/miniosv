@@ -2,7 +2,6 @@
 #include <osv/debug.hh>
 #include <osv/sched.hh>
 #include "drivers/clock.hh"
-#include <osv/barrier.hh>
 #include <osv/boot.hh>
 
 double boot_time_chart::to_msec(u64 time)

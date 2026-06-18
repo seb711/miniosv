@@ -6,7 +6,6 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
-#include <mutex>
 #include <osv/sched.hh>
 #include <osv/rwlock.h>
 #include <osv/export.h>

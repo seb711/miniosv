@@ -6,7 +6,6 @@
  */
 
 #include <osv/condvar.h>
-#include <sched.h>
 #include <errno.h>
 #include <osv/trace.hh>
 #include <osv/wait_record.hh>

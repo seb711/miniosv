@@ -7,7 +7,6 @@
 
 #include <string.h>
 #include <stdio.h>
-#include <algorithm>
 #include <cxxabi.h>
 
 #include <osv/demangle.hh>
