@@ -25,6 +25,19 @@
 
 set -euo pipefail
 
+# Run a command, tee to a log file, and display each output line by overwriting
+# the current terminal line.  On failure, print the tail of the log.
+_progress_run() {
+    local log="$1"; shift
+    "$@" 2>&1 | tee "$log" | while IFS= read -r line; do
+        printf '\r\033[K  %.*s' "$(( ${COLUMNS:-120} - 4 ))" "$line" >&2
+    done
+    local rc=${PIPESTATUS[0]}
+    printf '\r\033[K' >&2
+    [ "$rc" -eq 0 ] || tail -30 "$log" >&2
+    return "$rc"
+}
+
 osv_arch="${1:-x64}"
 case "$osv_arch" in
     x64|x86_64|x86)    osv_arch=x64;     llvm_arch=x86_64 ;;
@@ -85,6 +98,22 @@ fi
 GEN_INC="$BUILD_DIR/gen/include"
 mkdir -p "$GEN_INC/bits"
 sh "$OSV_ROOT/include/api/$osv_arch/bits/alltypes.h.sh" > "$GEN_INC/bits/alltypes.h"
+# atomic.cpp needs <linux/futex.h> for std::atomic's wait backend.
+# On systems without Linux kernel headers (e.g. Nix devShell) this isn't on
+# the default include path.  GEN_INC is already -isystem'd, so a stub there
+# is found without affecting the kernel's own header search order.
+mkdir -p "$GEN_INC/linux"
+cat > "$GEN_INC/linux/futex.h" << 'EOF'
+#ifndef _LINUX_FUTEX_H
+#define _LINUX_FUTEX_H
+#define FUTEX_WAIT           0
+#define FUTEX_WAKE           1
+#define FUTEX_PRIVATE_FLAG   128
+#define FUTEX_WAIT_PRIVATE   (FUTEX_WAIT | FUTEX_PRIVATE_FLAG)
+#define FUTEX_WAKE_PRIVATE   (FUTEX_WAKE | FUTEX_PRIVATE_FLAG)
+#define FUTEX_CLOCK_REALTIME 256
+#endif
+EOF
 OSV_HEADERS="-isystem $OSV_ROOT/include/api -isystem $OSV_ROOT/include/api/$osv_arch -isystem $GEN_INC"
 # _LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE: use libc++'s own platform-independent
 # ctype rune table (alpha/digit/space... mask bits) rather than a platform
@@ -126,38 +155,42 @@ if [ "$llvm_arch" != "$(uname -m)" ]; then
 fi
 
 mkdir -p "$BUILD_DIR"
-cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
-    $CROSS_CMAKE \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER=clang \
-    -DCMAKE_CXX_COMPILER=clang++ \
-    -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
-    -DLIBCXX_ENABLE_SHARED=OFF \
-    -DLIBCXXABI_ENABLE_SHARED=OFF \
-    -DLIBUNWIND_ENABLE_SHARED=OFF \
-    -DLIBCXX_ENABLE_STATIC=ON \
-    -DLIBCXXABI_ENABLE_STATIC=ON \
-    -DLIBUNWIND_ENABLE_STATIC=ON \
-    -DLIBCXX_ENABLE_LOCALIZATION=ON \
-    -DLIBCXX_ENABLE_UNICODE=OFF \
-    -DLIBCXX_ENABLE_FILESYSTEM=OFF \
-    -DLIBCXX_ENABLE_RANDOM_DEVICE=OFF \
-    -DLIBCXX_ENABLE_WIDE_CHARACTERS=OFF \
-    -DLIBCXX_INCLUDE_BENCHMARKS=OFF \
-    -DLIBCXX_INCLUDE_TESTS=OFF \
-    -DLIBCXX_CXX_ABI=libcxxabi \
-    -DLIBCXXABI_USE_LLVM_UNWINDER=ON \
-    -DLIBCXXABI_ENABLE_STATIC_UNWINDER=ON \
-    -DLIBCXXABI_INCLUDE_TESTS=OFF \
-    -DLIBUNWIND_INCLUDE_TESTS=OFF \
-    -DLIBUNWIND_INCLUDE_DOCS=OFF \
-    -DCMAKE_C_FLAGS="$KERNEL_FLAGS" \
-    -DCMAKE_CXX_FLAGS="$KERNEL_FLAGS" \
-    > "$BUILD_DIR-configure.log" 2>&1 || {
-        echo "configure failed, see $BUILD_DIR-configure.log"; exit 1; }
+echo "  LIBCXX configure..."
+_progress_run "$BUILD_DIR-configure.log" \
+    cmake -S "$LLVM_DIR/runtimes" -B "$BUILD_DIR" \
+        $CROSS_CMAKE \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_C_COMPILER=clang \
+        -DCMAKE_CXX_COMPILER=clang++ \
+        -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+        -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi;libunwind" \
+        -DLIBCXX_ENABLE_SHARED=OFF \
+        -DLIBCXXABI_ENABLE_SHARED=OFF \
+        -DLIBUNWIND_ENABLE_SHARED=OFF \
+        -DLIBCXX_ENABLE_STATIC=ON \
+        -DLIBCXXABI_ENABLE_STATIC=ON \
+        -DLIBUNWIND_ENABLE_STATIC=ON \
+        -DLIBCXX_ENABLE_LOCALIZATION=ON \
+        -DLIBCXX_ENABLE_UNICODE=OFF \
+        -DLIBCXX_ENABLE_FILESYSTEM=OFF \
+        -DLIBCXX_ENABLE_RANDOM_DEVICE=OFF \
+        -DLIBCXX_ENABLE_WIDE_CHARACTERS=OFF \
+        -DLIBCXX_INCLUDE_BENCHMARKS=OFF \
+        -DLIBCXX_INCLUDE_TESTS=OFF \
+        -DLIBCXX_CXX_ABI=libcxxabi \
+        -DLIBCXXABI_USE_LLVM_UNWINDER=ON \
+        -DLIBCXXABI_ENABLE_STATIC_UNWINDER=ON \
+        -DLIBCXXABI_INCLUDE_TESTS=OFF \
+        -DLIBUNWIND_INCLUDE_TESTS=OFF \
+        -DLIBUNWIND_INCLUDE_DOCS=OFF \
+        -DCMAKE_C_FLAGS="$KERNEL_FLAGS" \
+        -DCMAKE_CXX_FLAGS="$KERNEL_FLAGS" \
+    || { echo "configure failed — see $BUILD_DIR-configure.log"; exit 1; }
 
-make -C "$BUILD_DIR" -j"$(nproc)" cxx cxxabi unwind > "$BUILD_DIR-build.log" 2>&1 || {
-        echo "build failed, see $BUILD_DIR-build.log"; exit 1; }
+echo "  LIBCXX build..."
+_progress_run "$BUILD_DIR-build.log" \
+    make -C "$BUILD_DIR" -j"$(nproc)" cxx cxxabi unwind \
+    || { echo "build failed — see $BUILD_DIR-build.log"; exit 1; }
 
 for name in libc++.a libc++abi.a libunwind.a; do
     ARCHIVE=$(find "$BUILD_DIR" -name "$name" | head -1)
