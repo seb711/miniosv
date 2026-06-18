@@ -17,3 +17,5 @@ __sigsetjmp:
 	ldp x0,x30,[sp],#16
 
 	b setjmp
+
+.section .note.GNU-stack,"",@progbits

@@ -90,3 +90,5 @@ reschedule_from_interrupt:
 2:
         ldp     x29, x30, [sp], #192
         ret
+
+.section .note.GNU-stack,"",@progbits
