@@ -9,7 +9,7 @@
 #include <osv/mutex.h>
 #include <osv/semaphore.hh>
 #include <vector>
-#include <boost/algorithm/cxx11/all_of.hpp>
+#include <algorithm>
 #include <osv/debug.hh>
 #include <osv/percpu.hh>
 #include <osv/preempt-lock.hh>
@@ -100,12 +100,8 @@ void cpu_quiescent_state_thread::set_generation(uint64_t generation)
 bool all_at_generation(decltype(cpu_quiescent_state_threads)& cqsts,
                        uint64_t generation)
 {
-    for (auto cqst : cqsts) {
-        if (!cqst->check(generation)) {
-            return false;
-        }
-    }
-    return true;
+    return std::all_of(cqsts.begin(), cqsts.end(),
+                       [generation](auto cqst) { return cqst->check(generation); });
 }
 
 void cpu_quiescent_state_thread::work()
