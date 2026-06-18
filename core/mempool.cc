@@ -38,9 +38,6 @@
 
 #include <osv/kernel_config.h>
 
-// recent Boost gets confused by the "hidden" macro we add in some Musl
-// header files, so need to undefine it
-#undef hidden
 #include <boost/dynamic_bitset.hpp>
 #include <boost/lockfree/stack.hpp>
 #include <boost/lockfree/policies.hpp>
