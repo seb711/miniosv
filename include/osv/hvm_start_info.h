@@ -23,6 +23,8 @@
 #ifndef __XEN_PUBLIC_ARCH_X86_HVM_START_INFO_H__
 #define __XEN_PUBLIC_ARCH_X86_HVM_START_INFO_H__
 
+#include <stdint.h>
+
 /*
  * Start of day structure passed to PVH guests and to HVM guests in %ebx.
  *

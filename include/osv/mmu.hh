@@ -11,11 +11,8 @@
 #include <stdint.h>
 #include <boost/intrusive/set.hpp>
 #include <osv/types.h>
-#include <functional>
 #include <osv/error.h>
 #include <osv/addr_range.hh>
-#include <unordered_map>
-#include <memory>
 #include <osv/mmu-defs.hh>
 #include <osv/align.hh>
 #include <osv/trace.hh>

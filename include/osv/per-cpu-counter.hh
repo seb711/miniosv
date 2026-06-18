@@ -11,9 +11,6 @@
 #include <osv/types.h>
 #include <osv/sched.hh>
 #include <osv/percpu.hh>
-#include <osv/sched.hh>
-#include <vector>
-#include <memory>
 
 class per_cpu_counter {
 public:

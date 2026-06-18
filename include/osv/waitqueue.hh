@@ -14,7 +14,6 @@
 #if defined(__cplusplus) && !defined(USE_C_INTERFACE)
 
 
-#include <sys/cdefs.h>
 #include <osv/sched.hh>
 #include <osv/wait_record.hh>
 

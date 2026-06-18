@@ -8,6 +8,8 @@
 #ifndef VIRT_TO_PHYS_HH
 #define VIRT_TO_PHYS_HH
 
+#include <stdint.h>
+
 namespace mmu {
 
 typedef uint64_t phys;

@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <functional>
 
 //
 // The methods in 'options' namespace provide basic functionality intended to help

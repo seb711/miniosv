@@ -11,7 +11,6 @@
 #include <sys/cdefs.h>
 #include <stdbool.h>
 #include <string.h>
-#include <stdint.h>
 
 // To use the spin-lock-based mutex instead of lockfree::mutex everywhere,
 // change #define LOCKFREE_MUTEX here to #undef.

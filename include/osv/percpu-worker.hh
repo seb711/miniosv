@@ -8,7 +8,6 @@
 #ifndef __PERCPU_WORKER_HH__
 #define __PERCPU_WORKER_HH__
 
-#include <list>
 #include <functional>
 #include <osv/percpu.hh>
 #include <osv/condvar.h>
