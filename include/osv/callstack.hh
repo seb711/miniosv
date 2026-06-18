@@ -11,6 +11,7 @@
 #include <osv/trace.hh>
 #include <osv/percpu.hh>
 #include <memory>
+#include <vector>
 #include <atomic>
 #include <stdlib.h>
 #include <set>

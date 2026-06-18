@@ -9,6 +9,7 @@
 #define PRINTF_HH_
 
 #include <string>
+#include <cstdarg>
 
 namespace osv {
 

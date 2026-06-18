@@ -3,6 +3,10 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
+#include <functional>
+#include <stdexcept>
+#include <utility>
 
 class tracepoint_base;
 

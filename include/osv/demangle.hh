@@ -9,8 +9,6 @@
 #define DEMANGLE_HH_
 
 #include <stddef.h>
-
-#include <stddef.h>
 #include <memory>
 
 /**

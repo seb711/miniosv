@@ -8,9 +8,7 @@
 #ifndef MEMPOOL_HH
 #define MEMPOOL_HH
 
-#include <cstdint>
 #include <functional>
-#include <list>
 #include <boost/intrusive/set.hpp>
 #include <boost/intrusive/list.hpp>
 #include <osv/mutex.h>
@@ -21,8 +19,6 @@
 #include <osv/semaphore.hh>
 #include <osv/mmu.hh>
 #include <osv/contiguous_alloc.hh>
-#include <boost/lockfree/stack.hpp>
-#include <boost/lockfree/policies.hpp>
 #include <osv/kernel_config.h>
 
 extern "C" void thread_mark_emergency();

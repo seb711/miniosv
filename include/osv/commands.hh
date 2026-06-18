@@ -11,7 +11,6 @@
 
 #include <string>
 #include <vector>
-#include <system_error>
 
 extern int __loader_argc;
 extern char** __loader_argv;
