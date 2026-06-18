@@ -5,5 +5,3 @@
 __tlsdesc_static:
 	mov 8(%rax),%rax
 	ret
-
-.section .note.GNU-stack,"",@progbits

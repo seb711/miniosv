@@ -58,5 +58,3 @@ prestart:
 
         // jump to elf entry point address in physical memory
         br      x0
-
-.section .note.GNU-stack,"",@progbits

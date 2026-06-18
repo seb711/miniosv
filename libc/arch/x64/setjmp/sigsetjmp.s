@@ -15,5 +15,3 @@ sigsetjmp:
 	call sigprocmask
 	popq %rdi
 1:	jmp setjmp
-
-.section .note.GNU-stack,"",@progbits

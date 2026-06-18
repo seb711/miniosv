@@ -32,5 +32,3 @@ start_context:
 	/* The 'exit' call should never return. In case it does cause
 	the process to terminate. */
 	call abort
-
-.section .note.GNU-stack,"",@progbits

@@ -364,5 +364,3 @@ fpu_state_load:
         ldr     w1, [x0, #516]
         msr     fpcr, x1
         ret
-
-.section .note.GNU-stack,"",@progbits
