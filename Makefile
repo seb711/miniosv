@@ -589,7 +589,6 @@ objects += arch/x64/pvh-boot.o
 objects += arch/x64/pvh-entry.o
 endif # x64
 
-objects += core/math.o
 objects += core/spinlock.o
 objects += core/lfmutex.o
 objects += core/rwlock.o
