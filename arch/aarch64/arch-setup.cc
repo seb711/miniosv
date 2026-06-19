@@ -52,23 +52,25 @@ void __attribute__((constructor(init_prio::dtb))) uefi_memory_setup()
     auto mm = reinterpret_cast<osv::boot_memmap_entry*>(bi->memmap_addr);
     u64 kbase = bi->kernel_phys_base;
 
-    // Find the usable RAM region that contains the kernel.
+    // mem_addr is the 2MB-aligned base the boot page tables map the kernel
+    // window onto. The UEFI stub loaded the kernel here with AllocatePages,
+    // which splits the surrounding RAM into several map entries, so we take the
+    // top of usable RAM at or above mem_addr as the end of memory (QEMU virt
+    // and cloud ARM present RAM as one contiguous block from there up).
+    mmu::mem_addr = kbase & ~((u64)0x200000 - 1);
+
     u64 region_end = 0;
     for (u32 i = 0; i < bi->memmap_count; i++) {
         if (mm[i].type != osv::boot_mem_type::usable)
             continue;
-        if (kbase >= mm[i].addr && kbase < mm[i].addr + mm[i].size) {
-            region_end = mm[i].addr + mm[i].size;
-            break;
+        u64 end = mm[i].addr + mm[i].size;
+        if (end > mmu::mem_addr && end > region_end) {
+            region_end = end;
         }
     }
-    if (!region_end) {
-        abort("uefi_memory_setup: kernel not within any usable memory region.\n");
+    if (region_end <= mmu::mem_addr) {
+        abort("uefi_memory_setup: no usable memory above the kernel.\n");
     }
-
-    // mem_addr is the 2MB-aligned base the boot page tables map the kernel
-    // window onto; phys_mem_size spans from there to the end of the region.
-    mmu::mem_addr = kbase & ~((u64)0x200000 - 1);
     memory::phys_mem_size = region_end - mmu::mem_addr;
 
     // Command line provided by the UEFI stub (LoadOptions).

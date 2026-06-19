@@ -180,7 +180,12 @@ uint64_t load_kernel(uint64_t *kernel_phys_base)
         UINTN pages = (seg_pa + ph->p_memsz - pa + EFI_PAGE_SIZE - 1)
                           / EFI_PAGE_SIZE;
         EFI_PHYSICAL_ADDRESS got = pa;
-        if (EFI_ERROR(BS->AllocatePages(AllocateAddress, EfiLoaderData,
+        // Allocate as EfiLoaderCode so the firmware maps the kernel image
+        // executable. The kernel entry runs a few instructions under the
+        // firmware's identity map before installing its own page tables, and
+        // strict firmware (e.g. AArch64 AAVMF) faults on instruction fetch
+        // from non-executable EfiLoaderData pages.
+        if (EFI_ERROR(BS->AllocatePages(AllocateAddress, EfiLoaderCode,
                                         pages, &got)))
             die("cannot reserve kernel physical memory (load address busy)");
 
