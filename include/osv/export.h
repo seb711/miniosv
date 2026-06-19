@@ -22,7 +22,6 @@
 // docs.
 // More specifically, as an example, if given symbol is annotated with OSV_LIBC_API, it means
 // that it physically part of the libc.so.6 file on Linux, etc.
-#define OSV_LIBAIO_API __attribute__((__visibility__("default")))
 #define OSV_LIBC_API __attribute__((__visibility__("default")))
 #define OSV_LIBM_API __attribute__((__visibility__("default")))
 #define OSV_LIBPTHREAD_API __attribute__((__visibility__("default")))
