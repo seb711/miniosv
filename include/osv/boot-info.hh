@@ -56,6 +56,7 @@ struct boot_info {
     uint32_t cmdline_len;           // length of cmdline, excluding NUL  (28)
     uint64_t cmdline_addr;          // phys addr of NUL-terminated cmdline (32)
     uint64_t kernel_phys_base;      // phys address the kernel loaded at  (40)
+    uint64_t boot_unixtime_ns;      // wall-clock at boot (UEFI GetTime), 0 if none (48)
 } __attribute__((packed));
 
 }

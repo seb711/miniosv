@@ -52,10 +52,11 @@ arm_clock::arm_clock() {
 #if CONF_logger_debug
     debug_early_u64("arm_clock(): frequency read as ", freq_hz);
 #endif
-    // The PL031 RTC has no flat ACPI table (it is described only in AML, which
-    // we do not interpret), so under UEFI the wall-clock base starts at 0 and
-    // time() advances from the always-available generic counter (uptime()).
-    _boot_time_in_ns = 0;
+    // Wall-clock base from the UEFI firmware (GetTime), captured by the UEFI
+    // stub - the PL031 RTC has no flat ACPI table (AML only). time() then
+    // advances this base by the monotonic generic counter (uptime()).
+    extern u64 osv_boot_unixtime_ns;
+    _boot_time_in_ns = osv_boot_unixtime_ns;
 }
 
 static __attribute__((constructor(init_prio::clock))) void setup_arm_clock()

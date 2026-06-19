@@ -130,6 +130,36 @@ uint64_t find_rsdp()
     return found;
 }
 
+// Wall-clock at boot from UEFI GetTime(), in nanoseconds since the Unix epoch
+// (0 if the firmware has no time source). This gives the kernel a real-time
+// base without an RTC driver - important on aarch64, whose generic timer is a
+// monotonic counter only.
+uint64_t read_boot_time()
+{
+    if (!ST->RuntimeServices) {
+        return 0;
+    }
+    EFI_TIME t;
+    if (EFI_ERROR(ST->RuntimeServices->GetTime(&t, nullptr))) {
+        return 0;
+    }
+    // Days since 1970-01-01 (Howard Hinnant's days_from_civil).
+    int64_t y = t.Year;
+    unsigned m = t.Month, d = t.Day;
+    y -= (m <= 2);
+    int64_t era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = static_cast<unsigned>(y - era * 400);
+    unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    int64_t days = era * 146097 + static_cast<int64_t>(doe) - 719468;
+    int64_t secs = days * 86400 + t.Hour * 3600 + t.Minute * 60 + t.Second;
+    // EFI_TIME is local time; convert to UTC when the zone is specified.
+    if (t.TimeZone != 0x07ff) {
+        secs -= static_cast<int64_t>(t.TimeZone) * 60;
+    }
+    return static_cast<uint64_t>(secs) * 1000000000ull + t.Nanosecond;
+}
+
 // Copy the loaded-image LoadOptions (UTF-16) into an ASCII command line.
 // Returns length (excluding NUL); cmdline buffer is caller-provided.
 uint32_t read_cmdline(EFI_HANDLE image, char *out, uint32_t cap)
@@ -267,6 +297,7 @@ extern "C" EFIAPI EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     bi->cmdline_addr = reinterpret_cast<uint64_t>(cmdline);
     bi->cmdline_len = cmdline_len;
     bi->kernel_phys_base = kernel_phys_base;
+    bi->boot_unixtime_ns = read_boot_time();
 
     // Fetch the UEFI memory map, normalize it, and ExitBootServices. The map
     // key can go stale between GetMemoryMap and ExitBootServices, so retry.
