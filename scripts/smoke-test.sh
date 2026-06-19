@@ -4,17 +4,20 @@
 # that it reaches its early serial banner. This is a smoke test of the whole
 # UEFI/ACPI boot path - firmware -> stub -> kernel premain - not a full test.
 #
-# Usage: smoke-test.sh <x64|aarch64> <loader.efi> [timeout_seconds]
+# Usage: smoke-test.sh <x64|aarch64> <loader.efi> [timeout_seconds] [marker]
 #
-# Firmware is auto-detected but can be overridden:
+# Passes when [marker] appears on the serial console (default: the kernel's
+# early "OSv " banner - i.e. it reached the kernel). CI passes the test-suite
+# success string instead. Firmware is auto-detected but can be overridden:
 #   x64:     OVMF_CODE,  OVMF_VARS
 #   aarch64: AAVMF_CODE, AAVMF_VARS
 #
 set -euo pipefail
 
-arch="${1:?usage: smoke-test.sh <x64|aarch64> <loader.efi> [timeout]}"
+arch="${1:?usage: smoke-test.sh <x64|aarch64> <loader.efi> [timeout] [marker]}"
 efi="${2:?missing path to loader.efi}"
 timeout_s="${3:-30}"
+marker="${4:-OSv }"
 
 # First firmware candidate that exists, else empty. Always succeeds (returns 0)
 # so it is safe under `set -e` inside a command substitution.
@@ -111,16 +114,16 @@ if [ -s "$work/qemu.out" ]; then
     echo "----------------------------"
 fi
 
-# The kernel prints "OSv <version>" from premain() over the early console as
-# soon as it is running (loader.cc). Seeing it means firmware, the UEFI stub,
-# the arch entry and premain all worked.
-if grep -q "OSv " "$log" 2>/dev/null; then
-    echo "smoke-test: PASS ($arch reached the kernel banner)"
+# Pass when the expected marker appears. The default ("OSv ") is the kernel's
+# early premain banner - seeing it means firmware, the UEFI stub, the arch
+# entry and premain all worked. CI overrides it with the test-suite result.
+if grep -qF "$marker" "$log" 2>/dev/null; then
+    echo "smoke-test: PASS ($arch saw \"$marker\")"
     exit 0
 fi
 if grep -q "miniosv UEFI stub starting" "$log" 2>/dev/null; then
-    echo "smoke-test: PARTIAL - stub ran but kernel banner not seen ($arch)" >&2
+    echo "smoke-test: FAIL - stub ran but \"$marker\" not seen ($arch)" >&2
 else
-    echo "smoke-test: FAIL - kernel did not reach its banner ($arch)" >&2
+    echo "smoke-test: FAIL - kernel did not start ($arch)" >&2
 fi
 exit 1
