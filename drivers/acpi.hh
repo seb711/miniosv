@@ -71,6 +71,59 @@ struct madt_local_x2apic {
     uint32_t uid;
 };
 
+// aarch64 MADT subtables describing the Generic Interrupt Controller. They are
+// parsed exactly like the x86 entries above (acpi::find_table(ACPI_SIG_MADT)
+// then walk the subtables), so there is a single ACPI model across both arches.
+enum madt_gic_subtable_type {
+    MADT_GICC     = 0x0b,   // GIC CPU interface (one per cpu)
+    MADT_GICD     = 0x0c,   // GIC distributor
+    MADT_GIC_MSI  = 0x0d,   // GIC MSI frame
+    MADT_GICR     = 0x0e,   // GIC redistributor
+    MADT_GIC_ITS  = 0x0f,   // GIC interrupt translation service
+};
+
+struct madt_gicc {
+    madt_subtable header;
+    uint16_t reserved;
+    uint32_t cpu_interface_number;
+    uint32_t acpi_processor_uid;
+    uint32_t flags;
+    uint32_t parking_protocol_version;
+    uint32_t performance_interrupt_gsiv;
+    uint64_t parked_address;
+    uint64_t physical_base_address;   // GICv2 CPU interface base
+    uint64_t gicv;
+    uint64_t gich;
+    uint32_t vgic_maintenance_interrupt;
+    uint64_t gicr_base_address;       // per-cpu GICv3 redistributor
+    uint64_t mpidr;
+};
+
+struct madt_gicd {
+    madt_subtable header;
+    uint16_t reserved;
+    uint32_t gic_id;
+    uint64_t physical_base_address;   // distributor base
+    uint32_t system_vector_base;
+    uint8_t  gic_version;             // 2 or 3
+    uint8_t  reserved2[3];
+};
+
+struct madt_gicr {
+    madt_subtable header;
+    uint16_t reserved;
+    uint64_t discovery_range_base_address;
+    uint32_t discovery_range_length;
+};
+
+struct madt_gic_its {
+    madt_subtable header;
+    uint16_t reserved;
+    uint32_t its_id;
+    uint64_t physical_base_address;
+    uint32_t reserved2;
+};
+
 #pragma pack(pop)
 
 // 4-character table signatures.
