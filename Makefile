@@ -628,7 +628,6 @@ objects += core/version.o
 objects += core/waitqueue.o
 objects += core/chart.o
 objects += core/demangle.o
-objects += core/libaio.o
 objects += core/string_utils.o
 
 #include $(src)/libc/build.mk:
