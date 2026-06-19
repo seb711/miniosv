@@ -23,7 +23,6 @@
 #include <atomic>
 #include <osv/mmu.hh>
 #include <osv/trace.hh>
-#include <lockfree/ring.hh>
 #include <osv/percpu-worker.hh>
 #include <osv/preempt-lock.hh>
 #include <osv/sched.hh>
