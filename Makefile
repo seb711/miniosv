@@ -614,13 +614,8 @@ ifeq ($(conf_tracepoints_strace),1)
 objects += core/strace.o
 endif
 endif
-# poll/select/epoll operate on the (removed) file-descriptor table.
-ifeq ($(conf_core_newpoll),1)
-objects += core/newpoll.o
-endif
 objects += core/power.o
 objects += core/percpu.o
-objects += core/per-cpu-counter.o
 objects += core/percpu-worker.o
 objects += core/shutdown.o
 objects += core/version.o
