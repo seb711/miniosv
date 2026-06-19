@@ -14,8 +14,7 @@
 #include <osv/kernel_config.h>
 #include "processor.hh"
 #include "psci.hh"
-#include "arch-dtb.hh"
-#include <alloca.h>
+#include "drivers/acpi.hh"
 
 extern "C" { /* see boot.S */
     extern init_stack *smp_stack_free;
@@ -43,24 +42,36 @@ void secondary_bringup(sched::cpu* c)
 
 void smp_init()
 {
-    int nr_cpus = dtb_get_cpus_count();
-    if (nr_cpus < 1) {
-        abort("smp_init: could not get cpus from device tree.\n");
-    }
-    debugf("%d CPUs detected\n", nr_cpus);
-    u64 *mpids = (u64 *)alloca(sizeof(u64) * nr_cpus);
-    if (!dtb_get_cpus_mpid(mpids, nr_cpus)) {
-        abort("smp_init: failed to get cpus mpids from device tree.\n");
+    // Enumerate CPUs from the ACPI MADT GIC CPU Interface (GICC) entries, the
+    // same way arch/x64/smp.cc walks the MADT for local APICs.
+    auto madt = reinterpret_cast<const acpi::madt*>(acpi::find_table(ACPI_SIG_MADT));
+    if (!madt) {
+        abort("smp_init: no MADT table - cannot enumerate CPUs.\n");
     }
 
-    for (int i = 0; i < nr_cpus; i++) {
-        auto c = new sched::cpu(i);
-        c->arch.mpid = mpids[i];
-        c->arch.smp_idx = i;
-        c->arch.initstack.next = smp_stack_free;  /* setup thread stack */
-        smp_stack_free = &c->arch.initstack;
-        sched::cpus.push_back(c);
+    auto subtable = reinterpret_cast<const char*>(madt + 1);
+    auto madt_end = reinterpret_cast<const char*>(madt) + madt->header.length;
+    int nr_cpus = 0;
+    while (subtable < madt_end) {
+        auto s = reinterpret_cast<const acpi::madt_subtable*>(subtable);
+        if (s->type == acpi::MADT_GICC) {
+            auto gicc = reinterpret_cast<const acpi::madt_gicc*>(s);
+            if (gicc->flags & acpi::MADT_ENABLED) {
+                auto c = new sched::cpu(nr_cpus);
+                c->arch.mpid = gicc->mpidr;
+                c->arch.smp_idx = nr_cpus;
+                c->arch.initstack.next = smp_stack_free;  /* setup thread stack */
+                smp_stack_free = &c->arch.initstack;
+                sched::cpus.push_back(c);
+                nr_cpus++;
+            }
+        }
+        subtable += s->length;
     }
+    if (nr_cpus < 1) {
+        abort("smp_init: no enabled CPUs in MADT.\n");
+    }
+    debugf("%d CPUs detected\n", nr_cpus);
     sched::current_cpu = sched::cpus[0];
 
     for (auto c : sched::cpus) {

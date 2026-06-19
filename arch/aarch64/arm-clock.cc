@@ -16,7 +16,7 @@
 #include <osv/sched.hh>
 #include <osv/kernel_config.h>
 
-#include "arch-dtb.hh"
+#include "drivers/acpi.hh"
 
 using namespace processor;
 
@@ -53,13 +53,10 @@ arm_clock::arm_clock() {
 #if CONF_logger_debug
     debug_early_u64("arm_clock(): frequency read as ", freq_hz);
 #endif
-    u64 rtc_address = dtb_get_rtc();
-    if (rtc_address) {
-        pl031 rtc(rtc_address);
-	_boot_time_in_ns = rtc.wallclock_ns();
-    } else {
-	_boot_time_in_ns = 0;
-    }
+    // The PL031 RTC has no flat ACPI table (it is described only in AML, which
+    // we do not interpret), so under UEFI the wall-clock base starts at 0 and
+    // time() advances from the always-available generic counter (uptime()).
+    _boot_time_in_ns = 0;
 }
 
 static __attribute__((constructor(init_prio::clock))) void setup_arm_clock()
@@ -119,7 +116,9 @@ public:
 
 int get_timer_irq_id()
 {
-    auto _irq_id = dtb_get_timer_irq();
+    // The EL1 virtual timer interrupt (GSIV) comes from the ACPI GTDT.
+    auto gtdt = reinterpret_cast<const acpi::gtdt*>(acpi::find_table(ACPI_SIG_GTDT));
+    int _irq_id = gtdt ? gtdt->virtual_el1_timer_gsiv : 0;
     if (!_irq_id) {
         _irq_id = DEFAULT_TIMER_IRQ_ID;
     }

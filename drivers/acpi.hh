@@ -141,15 +141,42 @@ struct mcfg_alloc {
     uint32_t reserved;
 };
 
+// Generic Timer Description Table ("GTDT"). Provides the per-cpu ARM generic
+// timer interrupt numbers (GSIVs); aarch64 uses the EL1 virtual timer.
+struct gtdt {
+    table_header header;
+    uint64_t counter_block_address;
+    uint32_t reserved;
+    uint32_t secure_el1_timer_gsiv;
+    uint32_t secure_el1_timer_flags;
+    uint32_t non_secure_el1_timer_gsiv;
+    uint32_t non_secure_el1_timer_flags;
+    uint32_t virtual_el1_timer_gsiv;
+    uint32_t virtual_el1_timer_flags;
+    uint32_t el2_timer_gsiv;
+    uint32_t el2_timer_flags;
+};
+
+// FADT ("FACP") ARM Boot Architecture Flags (offset 0x70), describing the PSCI
+// conduit.
+static constexpr uint16_t FADT_ARM_PSCI_COMPLIANT = 1 << 0;
+static constexpr uint16_t FADT_ARM_PSCI_USE_HVC   = 1 << 1;
+
 #pragma pack(pop)
 
 // 4-character table signatures.
 #define ACPI_SIG_MADT "APIC"
 #define ACPI_SIG_MCFG "MCFG"
+#define ACPI_SIG_GTDT "GTDT"
+#define ACPI_SIG_FADT "FACP"
 
 // Return a pointer to the (already mapped) ACPI table with the given 4-byte
 // signature, or nullptr if no such table is present.
 const table_header *find_table(const char *signature);
+
+// FADT ARM Boot Architecture Flags (aarch64), or 0 if there is no FADT. Used to
+// pick the PSCI conduit (HVC vs SMC).
+uint16_t arm_boot_flags();
 
 // Attempt to power the machine off via the ACPI S5 ("soft off") state. Returns
 // false if the firmware did not give us enough information to do so (in which
