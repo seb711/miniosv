@@ -36,7 +36,6 @@
 
 #include <processor.hh>
 #include <dlfcn.h>
-#include <osv/string_utils.hh>
 
 using namespace osv;
 using namespace osv::clock::literals;
