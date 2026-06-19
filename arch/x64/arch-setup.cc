@@ -39,14 +39,33 @@ void setup_temporary_phys_map()
     }
 }
 
-// Iterate the usable physical RAM ranges reported by the UEFI stub in
-// osv::boot_info.
-void for_each_usable_range(void (*f)(mem_range e))
+// A copy of the UEFI memory map taken before we switch page tables. The map
+// itself lives in low RAM the UEFI stub allocated; arch_setup_free_memory walks
+// it several times, including after switch_to_runtime_page_tables() which no
+// longer maps that low memory. Snapshotting it into the (always-mapped) kernel
+// image keeps the later passes valid. (matches the old e820 alloca-copy.)
+static osv::boot_memmap_entry memmap_snapshot[512];
+static u32 memmap_snapshot_count;
+
+static void snapshot_memmap()
 {
     auto mm = reinterpret_cast<osv::boot_memmap_entry*>(osv_boot_info->memmap_addr);
-    for (u32 i = 0; i < osv_boot_info->memmap_count; i++) {
-        if (mm[i].type == osv::boot_mem_type::usable) {
-            f(mem_range{mm[i].addr, mm[i].size});
+    u32 n = osv_boot_info->memmap_count;
+    if (n > 512) {
+        n = 512;
+    }
+    for (u32 i = 0; i < n; i++) {
+        memmap_snapshot[i] = mm[i];
+    }
+    memmap_snapshot_count = n;
+}
+
+// Iterate the usable physical RAM ranges (from the snapshot taken above).
+void for_each_usable_range(void (*f)(mem_range e))
+{
+    for (u32 i = 0; i < memmap_snapshot_count; i++) {
+        if (memmap_snapshot[i].type == osv::boot_mem_type::usable) {
+            f(mem_range{memmap_snapshot[i].addr, memmap_snapshot[i].size});
         }
     }
 }
@@ -81,6 +100,9 @@ void arch_setup_free_memory()
     static ulong edata, edata_phys;
     asm ("movl $.edata, %0" : "=rm"(edata));
     edata_phys = edata - OSV_KERNEL_VM_SHIFT;
+
+    // Copy the UEFI memory map out of low RAM before we touch the page tables.
+    snapshot_memmap();
 
     for_each_usable_range([] (mem_range ent) {
         memory::phys_mem_size += ent.size;

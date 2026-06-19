@@ -60,6 +60,15 @@ if ! command -v "$qemu" >/dev/null 2>&1; then
     echo "smoke-test: $qemu not installed - skipping $arch smoke test." >&2
     exit 3
 fi
+
+# Acceleration: x86 OSv's only clock source is kvmclock, which needs KVM, so
+# prefer KVM for an x64 guest on a KVM-capable host; otherwise fall back to TCG
+# (fine for aarch64, whose clock is the always-available ARM generic timer).
+# Override with ACCEL=tcg|kvm.
+accel="${ACCEL:-tcg}"
+if [ -z "${ACCEL:-}" ] && [ "$arch" = x64 ] && [ -w /dev/kvm ]; then
+    accel=kvm
+fi
 if [ -z "${code:-}" ] || [ -z "${vars:-}" ]; then
     echo "smoke-test: no UEFI firmware found for $arch." >&2
     echo "  install it (x64: 'ovmf', aarch64: 'qemu-efi-aarch64') or set" >&2
@@ -76,7 +85,7 @@ cp "$vars" "$varscopy"
 # create it if the environment is missing it (some minimal images are).
 mkdir -p /var/tmp 2>/dev/null || true
 
-echo "smoke-test: $arch via $qemu"
+echo "smoke-test: $arch via $qemu (accel=$accel)"
 echo "  firmware: $code"
 echo "  booting:  $boot_name (timeout ${timeout_s}s)"
 
@@ -86,7 +95,7 @@ echo "  booting:  $boot_name (timeout ${timeout_s}s)"
 # QEMU's own diagnostics go to qemu.out so failures (e.g. firmware/vvfat) show.
 set +e
 timeout --foreground "$timeout_s" "$qemu" \
-    "${machine[@]}" -m 512 -accel tcg -no-reboot -display none \
+    "${machine[@]}" -m 512 -accel "$accel" -no-reboot -display none \
     -drive "if=pflash,format=raw,readonly=on,file=$code" \
     -drive "if=pflash,format=raw,file=$varscopy" \
     -drive "format=raw,file=fat:rw:$work/esp" \
