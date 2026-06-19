@@ -583,10 +583,6 @@ objects += arch/x64/dmi.o
 objects += arch/x64/ioapic.o
 objects += arch/x64/apic.o
 objects += arch/x64/apic-clock.o
-objects += arch/x64/vmlinux.o
-objects += arch/x64/vmlinux-boot64.o
-objects += arch/x64/pvh-boot.o
-objects += arch/x64/pvh-entry.o
 endif # x64
 
 objects += core/spinlock.o

@@ -42,7 +42,7 @@ SECTIONS
          * reference below as a use that triggers a PROVIDE, so the entry symbol
          * would never be defined and the start address would default to 0. A
          * plain HIDDEN assignment defines it for both ld.bfd and ld.lld. */
-        HIDDEN(low_vmlinux_entry64 = vmlinux_entry64 - OSV_KERNEL_VM_SHIFT);
+        HIDDEN(low_start32 = start32 - OSV_KERNEL_VM_SHIFT);
     } :text
     . = ALIGN(8);
     .fixup : AT(ADDR(.fixup) - OSV_KERNEL_VM_SHIFT) {
@@ -151,4 +151,4 @@ PHDRS {
 	eh_frame PT_GNU_EH_FRAME;
 	note PT_NOTE;
 }
-ENTRY(low_vmlinux_entry64);
+ENTRY(low_start32);

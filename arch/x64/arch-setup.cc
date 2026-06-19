@@ -74,10 +74,9 @@ extern size_t elf_size;
 extern void* elf_start;
 extern boot_time_chart boot_time;
 
-// Because vmlinux_entry64 replaces start32 as a new entry of loader.elf we need a way
-// to place address of start32 so that the boot stub knows where to jump to. We achieve
-// it by placing address of start32 at the known offset at memory
-// as defined by section .start32_address in loader.ld
+// The physical address of start32 is published at a fixed low offset in memory
+// (section .start32_address in loader.ld) so a boot stub can find the 32-bit
+// entry point.
 extern "C" void start32();
 void * __attribute__((section (".start32_address"))) start32_address =
   reinterpret_cast<void*>((long)&start32 - OSV_KERNEL_VM_SHIFT);
@@ -221,10 +220,6 @@ void arch_init_premain()
     auto omb = *osv_multiboot_info;
     if (omb.disk_err)
 	debug_early_u64("Error reading disk (real mode): ", static_cast<u64>(omb.disk_err));
-
-#if CONF_drivers_acpi
-    acpi::pvh_rsdp_paddr = omb.pvh_rsdp;
-#endif
 
     disable_pic();
 }
