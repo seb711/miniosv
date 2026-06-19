@@ -19,9 +19,7 @@
 	.section .kernel, "a"
 	.balign 8
 	.global kernel_elf_start
-	.hidden kernel_elf_start
 kernel_elf_start:
 	.incbin KERNEL_ELF_FILE
 	.global kernel_elf_end
-	.hidden kernel_elf_end
 kernel_elf_end:

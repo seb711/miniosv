@@ -170,11 +170,11 @@ endif
 quiet = $(if $V, $1, @echo " $2"; $1)
 very-quiet = $(if $V, $1, @$1)
 
-# x64 boots loader[-stripped].elf directly via QEMU -kernel (multiboot/PVH);
-# there is no boot sector or compressed image, so loader.img is not built.
-# aarch64 keeps loader.img (preboot stub + uncompressed loader).
+# Both architectures boot via UEFI: the kernel ELF is wrapped into an EFI
+# application (loader.efi). 'make $(out)/loader.img' additionally builds a
+# bootable GPT/ESP disk image around it (needs mtools).
 ifeq ($(arch),x64)
-all: $(out)/loader-stripped.elf links
+all: $(out)/loader.efi links
 endif
 ifeq ($(arch),aarch64)
 all: $(out)/loader.img links
@@ -420,19 +420,49 @@ tools :=
 $(out)/loader-stripped.elf: $(out)/loader.elf
 	$(call quiet, $(STRIP) $(out)/loader.elf -o $(out)/loader-stripped.elf, STRIP loader.elf -> loader-stripped.elf )
 
+# ---- UEFI boot image -------------------------------------------------------
+# Wrap the kernel ELF into a freestanding PE/COFF EFI application (boot/uefi/)
+# that the firmware loads from the EFI System Partition. This is the single
+# boot path on every architecture and the only one the public clouds support.
+# efi_target / efi_boot_name are set in the per-arch blocks below.
+EFI_CXXFLAGS = --target=$(efi_target) -std=$(conf_cxx_level) -ffreestanding \
+	-fno-stack-protector -fno-builtin -fshort-wchar -nostdinc++ \
+	-fno-exceptions -fno-rtti -Wall -Werror -Iboot/uefi -Iinclude $(efi_arch_cxxflags)
+
+$(out)/boot/uefi/stub.o: boot/uefi/stub.cc boot/uefi/efi.hh include/osv/boot-info.hh
+	$(makedir)
+	$(call quiet, clang++ $(EFI_CXXFLAGS) -c -o $@ $<, CXX-EFI stub.cc)
+
+$(out)/boot/uefi/kernel-blob.o: boot/uefi/kernel-blob.S $(out)/loader-stripped.elf
+	$(makedir)
+	$(call quiet, clang --target=$(efi_target) -c \
+		-DKERNEL_ELF_FILE='"$(out)/loader-stripped.elf"' -o $@ $<, AS-EFI kernel-blob.S)
+
+$(out)/loader.efi: $(out)/boot/uefi/stub.o $(out)/boot/uefi/kernel-blob.o
+	$(call quiet, clang --target=$(efi_target) -fuse-ld=lld -nostdlib \
+		-Xlinker -entry:efi_main -Xlinker -subsystem:efi_application \
+		-o $@ $^, LINK loader.efi)
+
+ifeq ($(arch),x64)
+$(out)/loader.img: $(out)/loader.efi scripts/mkuefi.sh
+	$(call quiet, scripts/mkuefi.sh $@ $(out)/loader.efi $(efi_boot_name), MKUEFI $@)
+endif
+
 ifeq ($(arch),x64)
 
-# kernel_base is where the kernel is loaded by the multiboot/PVH boot loader
-# (QEMU -kernel). There is no longer a compressed/relocated copy: the loader
-# ELF is placed directly by the boot loader, so OSV_KERNEL_BASE is the only
-# load address.
+# kernel_base is the fixed physical address the UEFI stub loads the kernel ELF
+# at (it matches the hard-coded boot page tables); kernel_vm_base is its link
+# address in virtual memory.
 kernel_base := 0x200000
 kernel_vm_base := 0x40200000
 
-# The x64 boot path is 'qemu -kernel loader[-stripped].elf' (multiboot/PVH),
-# which boots the ELF directly - no bzImage/vmlinuz wrapper is needed.
-
 kernel_vm_shift := $(shell printf "0x%X" $(shell expr $$(( $(kernel_vm_base) - $(kernel_base) )) ))
+
+# UEFI image parameters: PE target triple and the firmware removable-media
+# default filename for this architecture.
+efi_target := x86_64-unknown-windows
+efi_boot_name := BOOTX64.EFI
+efi_arch_cxxflags := -mno-red-zone
 
 endif # x64
 
