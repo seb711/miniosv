@@ -32,8 +32,61 @@
 #endif
 #include "drivers/mmio-isa-serial.hh"
 
+#include <osv/boot-info.hh>
+#include <osv/prio.hh>
 #include <alloca.h>
 
+// Physical pointer to the hand-off structure filled by the UEFI stub; stored
+// by uefi_entry in boot.S.
+osv::boot_info* osv_boot_info;
+
+// Derive the physical memory layout and ELF extents from the UEFI memory map,
+// replacing what dtb_setup() used to compute from the device tree. Runs at the
+// same init priority as the (now inert) dtb_setup constructor; elf_header,
+// kernel_vm_shift and osv_boot_info were already set by uefi_entry.
+void __attribute__((constructor(init_prio::dtb))) uefi_memory_setup()
+{
+    auto bi = osv_boot_info;
+    auto mm = reinterpret_cast<osv::boot_memmap_entry*>(bi->memmap_addr);
+    u64 kbase = bi->kernel_phys_base;
+
+    // Find the usable RAM region that contains the kernel.
+    u64 region_end = 0;
+    for (u32 i = 0; i < bi->memmap_count; i++) {
+        if (mm[i].type != osv::boot_mem_type::usable)
+            continue;
+        if (kbase >= mm[i].addr && kbase < mm[i].addr + mm[i].size) {
+            region_end = mm[i].addr + mm[i].size;
+            break;
+        }
+    }
+    if (!region_end) {
+        abort("uefi_memory_setup: kernel not within any usable memory region.\n");
+    }
+
+    // mem_addr is the 2MB-aligned base the boot page tables map the kernel
+    // window onto; phys_mem_size spans from there to the end of the region.
+    mmu::mem_addr = kbase & ~((u64)0x200000 - 1);
+    memory::phys_mem_size = region_end - mmu::mem_addr;
+
+    // Command line provided by the UEFI stub (LoadOptions).
+    cmdline = reinterpret_cast<char*>(bi->cmdline_addr);
+
+    // Compute the ELF extents exactly as dtb_setup() did.
+    u64 edata;
+    asm volatile ("adrp %0, .edata" : "=r"(edata));
+    extern elf::Elf64_Ehdr *elf_header;
+    extern size_t elf_size;
+    extern void *elf_start;
+    extern u64 kernel_vm_shift;
+    mmu::elf_phys_start = reinterpret_cast<void *>(elf_header);
+    elf_start = static_cast<char *>(mmu::elf_phys_start) + kernel_vm_shift;
+    elf_size = (u64)edata - (u64)elf_start;
+
+    // Account for the memory the kernel image itself occupies.
+    mmu::phys addr = (mmu::phys)mmu::elf_phys_start + elf_size;
+    memory::phys_mem_size -= addr - mmu::mem_addr;
+}
 
 void setup_temporary_phys_map()
 {

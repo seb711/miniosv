@@ -177,7 +177,7 @@ ifeq ($(arch),x64)
 all: $(out)/loader.efi links
 endif
 ifeq ($(arch),aarch64)
-all: $(out)/loader.img links
+all: $(out)/loader.efi links
 endif
 .PHONY: all
 
@@ -427,7 +427,8 @@ $(out)/loader-stripped.elf: $(out)/loader.elf
 # efi_target / efi_boot_name are set in the per-arch blocks below.
 EFI_CXXFLAGS = --target=$(efi_target) -std=$(conf_cxx_level) -ffreestanding \
 	-fno-stack-protector -fno-builtin -fshort-wchar -nostdinc++ \
-	-fno-exceptions -fno-rtti -Wall -Werror -Iboot/uefi -Iinclude $(efi_arch_cxxflags)
+	-fno-exceptions -fno-rtti -Wall -Werror -Iboot/uefi -Iinclude \
+	-DOSV_KERNEL_VM_SHIFT=$(kernel_vm_shift) $(efi_arch_cxxflags)
 
 $(out)/boot/uefi/stub.o: boot/uefi/stub.cc boot/uefi/efi.hh include/osv/boot-info.hh
 	$(makedir)
@@ -443,10 +444,8 @@ $(out)/loader.efi: $(out)/boot/uefi/stub.o $(out)/boot/uefi/kernel-blob.o
 		-Xlinker -entry:efi_main -Xlinker -subsystem:efi_application \
 		-o $@ $^, LINK loader.efi)
 
-ifeq ($(arch),x64)
 $(out)/loader.img: $(out)/loader.efi scripts/mkuefi.sh
 	$(call quiet, scripts/mkuefi.sh $@ $(out)/loader.efi $(efi_boot_name), MKUEFI $@)
-endif
 
 ifeq ($(arch),x64)
 
@@ -470,29 +469,23 @@ ifeq ($(arch),aarch64)
 
 kernel_vm_base := 0xfc0080000 #63GB
 
+# Fixed physical load base and shift for the UEFI stub. The boot page tables
+# anchor the kernel window at the 63rd GiB (0xfc0000000), so the shift that
+# relates a virtual address to the physical address the stub loads it at is
+# (0xfc0000000 - kernel_base), with kernel_base 2 MiB-aligned in low RAM.
+kernel_base := 0x40200000
+kernel_vm_shift := $(shell printf "0x%X" $(shell expr $$(( 0xfc0000000 - $(kernel_base) )) ))
+
+efi_target := aarch64-unknown-windows
+efi_boot_name := BOOTAA64.EFI
+efi_arch_cxxflags :=
+
 include $(libfdt_base)/Makefile.libfdt
 libfdt-source := $(patsubst %.c, $(libfdt_base)/%.c, $(LIBFDT_SRCS))
 libfdt = $(patsubst %.c, %.o, $(libfdt-source))
 # libfdt is third-party; its pointer-overflow checks (p + len < p) trip Clang's
 # -Wtautological-compare, which -Werror would otherwise make fatal.
 $(addprefix $(out)/, $(libfdt)): CFLAGS += -Wno-tautological-compare
-
-$(out)/preboot.elf: arch/$(arch)/preboot.ld $(out)/arch/$(arch)/preboot.o
-	$(call quiet, $(LD) -o $@ -T $^, LD $@)
-
-$(out)/preboot.bin: $(out)/preboot.elf
-	$(call quiet, $(OBJCOPY) -O binary $^ $@, OBJCOPY $@)
-
-edata = $(shell $(READELF) --syms $(out)/loader.elf | grep "\.edata" | awk '{print "0x" $$2}')
-image_size = $$(( $(edata) - $(kernel_vm_base) ))
-
-
-$(out)/loader.img: $(out)/preboot.bin $(out)/loader-stripped.elf
-	$(call quiet, dd if=$(out)/preboot.bin of=$@ > /dev/null 2>&1, DD $@ preboot.bin)
-	$(call quiet, dd if=$(out)/loader-stripped.elf of=$@ conv=notrunc obs=4096 seek=16 > /dev/null 2>&1, DD $@ loader-stripped.elf)
-	$(call quiet, scripts/imgedit.py setsize_aarch64 "-f raw $@" $(image_size), IMGEDIT $@)
-	$(call quiet, scripts/imgedit.py setargs "-f raw $@" $(cmdline), IMGEDIT $@)
-
 
 endif # aarch64
 

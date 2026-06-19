@@ -696,6 +696,14 @@ void  __attribute__((constructor(init_prio::dtb))) dtb_setup()
     char *cmdline_override;
     int len;
 
+    // Under UEFI boot there is no device tree: the UEFI stub does not pass one,
+    // so dtb is null and the memory layout comes from uefi_memory_setup()
+    // (arch-setup.cc) instead. The remaining DTB-based device discovery is being
+    // migrated to ACPI; until then it is simply inert when there is no dtb.
+    if (!dtb) {
+        return;
+    }
+
     if (fdt_check_header(dtb) != 0) {
         abort("dtb_setup: device tree blob invalid.\n");
     }

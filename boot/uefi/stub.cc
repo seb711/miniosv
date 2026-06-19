@@ -29,6 +29,14 @@
 #include "efi.hh"
 #include <osv/boot-info.hh>
 
+// The kernel is linked at a fixed virtual base and loaded at a fixed physical
+// base; the constant difference (OSV_KERNEL_VM_SHIFT, supplied by the build)
+// lets the stub place each segment without relying on ELF p_paddr, which the
+// aarch64 (position-independent) link does not set usefully.
+#ifndef OSV_KERNEL_VM_SHIFT
+#error "OSV_KERNEL_VM_SHIFT must be defined for the UEFI stub"
+#endif
+
 // ---- embedded kernel ELF (kernel-blob.S) ---------------------------------
 extern "C" const unsigned char kernel_elf_start[];
 extern "C" const unsigned char kernel_elf_end[];
@@ -162,29 +170,32 @@ uint64_t load_kernel(uint64_t *kernel_phys_base)
         if (ph->p_type != PT_LOAD || ph->p_memsz == 0)
             continue;
 
-        // Reserve the segment's physical range at its fixed link address. The
+        // Physical load address = virtual link address minus the fixed shift.
+        uint64_t seg_pa = ph->p_vaddr - OSV_KERNEL_VM_SHIFT;
+
+        // Reserve the segment's physical range at its fixed load address. The
         // kernel's boot page tables hard-map these physical addresses, so the
         // kernel must land exactly where it was linked.
-        EFI_PHYSICAL_ADDRESS pa = ph->p_paddr & ~(EFI_PAGE_SIZE - 1);
-        UINTN pages = (ph->p_paddr + ph->p_memsz - pa + EFI_PAGE_SIZE - 1)
+        EFI_PHYSICAL_ADDRESS pa = seg_pa & ~(EFI_PAGE_SIZE - 1);
+        UINTN pages = (seg_pa + ph->p_memsz - pa + EFI_PAGE_SIZE - 1)
                           / EFI_PAGE_SIZE;
         EFI_PHYSICAL_ADDRESS got = pa;
         if (EFI_ERROR(BS->AllocatePages(AllocateAddress, EfiLoaderData,
                                         pages, &got)))
             die("cannot reserve kernel physical memory (load address busy)");
 
-        memcpy(reinterpret_cast<void *>(ph->p_paddr),
+        memcpy(reinterpret_cast<void *>(seg_pa),
                 blob + ph->p_offset, ph->p_filesz);
         if (ph->p_memsz > ph->p_filesz)
-            memset(reinterpret_cast<void *>(ph->p_paddr + ph->p_filesz), 0,
+            memset(reinterpret_cast<void *>(seg_pa + ph->p_filesz), 0,
                     ph->p_memsz - ph->p_filesz);
 
-        if (ph->p_paddr < lowest_phys)
-            lowest_phys = ph->p_paddr;
+        if (seg_pa < lowest_phys)
+            lowest_phys = seg_pa;
         // Translate the virtual entry point to physical via its segment.
         if (ehdr->e_entry >= ph->p_vaddr &&
             ehdr->e_entry < ph->p_vaddr + ph->p_memsz)
-            entry_phys = ph->p_paddr + (ehdr->e_entry - ph->p_vaddr);
+            entry_phys = seg_pa + (ehdr->e_entry - ph->p_vaddr);
     }
     if (!entry_phys)
         die("could not resolve kernel entry point");

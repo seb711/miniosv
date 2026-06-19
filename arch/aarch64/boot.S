@@ -8,6 +8,51 @@
 #include <osv/drivers_config.h>
 .text
 .align 16
+.globl uefi_entry
+.hidden uefi_entry
+.type uefi_entry , "function"
+uefi_entry:
+        /* Kernel entry from the UEFI stub (boot/uefi/stub.cc).
+         * x0 = physical address of osv::boot_info. We arrive at EL1 with the
+         * MMU enabled under the firmware's identity map (UEFI hands off that
+         * way), so first disable the MMU to match the rest of the boot code,
+         * which builds and enables OSv's own translation tables. Because the
+         * firmware map is identity, the PC stays valid across the switch. */
+        mov     x19, x0                    // preserve boot_info pointer
+        ldr     x20, [x0, #40]             // boot_info->kernel_phys_base (offset per boot-info.hh)
+
+        mrs     x0, sctlr_el1
+        bic     x0, x0, #1                 // clear M (MMU enable)
+        msr     sctlr_el1, x0
+        isb
+
+        bl      calculate_virt_offset
+        adrp    x0, exception_vectors
+        add     x0, x0, x6                 // apply virt-phys offset
+        msr     vbar_el1, x0
+        isb
+
+        bl      validate_el
+        bl      init_stack
+        bl      zero_bss
+        bl      init_cpu
+        bl      fixup_boot_pt
+        bl      init_boot_pt
+        bl      init_mmu                   // returns operating in virtual memory
+
+        adrp    x0, kernel_vm_shift
+        str     x6, [x0]
+        adrp    x1, elf_header             // kernel ELF physical base
+        str     x20, [x1, #:lo12:elf_header]
+        adrp    x1, osv_boot_info          // boot_info pointer (arch-setup.cc)
+        str     x19, [x1, #:lo12:osv_boot_info]
+
+        mov     x29, xzr
+        bl      premain
+        bl      main
+        bl      halt
+
+.align 16
 .globl start_elf
 .hidden start_elf
 .type start_elf , "function"
