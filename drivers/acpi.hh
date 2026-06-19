@@ -124,10 +124,28 @@ struct madt_gic_its {
     uint32_t reserved2;
 };
 
+// PCI Express memory-mapped configuration ("MCFG"). Like Nanos, we read only
+// this flat table for the ECAM config base; the firmware-programmed BARs are
+// used as-is (no AML/_CRS), and device interrupts use MSI-X via the GIC ITS.
+struct mcfg {
+    table_header header;
+    uint64_t     reserved;
+    // followed by one or more mcfg_alloc entries
+};
+
+struct mcfg_alloc {
+    uint64_t base_address;    // ECAM base for this segment
+    uint16_t pci_segment;
+    uint8_t  start_bus;
+    uint8_t  end_bus;
+    uint32_t reserved;
+};
+
 #pragma pack(pop)
 
 // 4-character table signatures.
 #define ACPI_SIG_MADT "APIC"
+#define ACPI_SIG_MCFG "MCFG"
 
 // Return a pointer to the (already mapped) ACPI table with the given 4-byte
 // signature, or nullptr if no such table is present.
