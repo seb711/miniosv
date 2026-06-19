@@ -611,11 +611,9 @@ objects += core/mmio.o
 objects += core/kprintf.o
 ifeq ($(conf_tracepoints),1)
 objects += core/trace.o
-objects += core/trace-count.o
 ifeq ($(conf_tracepoints_strace),1)
 objects += core/strace.o
 endif
-objects += core/callstack.o
 endif
 # poll/select/epoll operate on the (removed) file-descriptor table.
 ifeq ($(conf_core_newpoll),1)
@@ -630,9 +628,7 @@ objects += core/version.o
 objects += core/waitqueue.o
 objects += core/chart.o
 objects += core/demangle.o
-objects += core/async.o
 objects += core/libaio.o
-objects += core/options.o
 objects += core/string_utils.o
 
 #include $(src)/libc/build.mk:

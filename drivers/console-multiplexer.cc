@@ -4,7 +4,7 @@
  * BSD license as described in the LICENSE file in the top-level directory.
  */
 
-#include <osv/device.h>
+#include <osv/uio.h>
 #include <osv/debug.hh>
 #include <signal.h>
 #include "console-multiplexer.hh"

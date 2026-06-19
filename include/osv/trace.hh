@@ -26,7 +26,6 @@
 #include <atomic>
 
 void enable_trace();
-void enable_tracepoint(std::string wildcard);
 void enable_backtraces(bool = true);
 void list_all_tracepoints();
 
@@ -319,7 +318,6 @@ protected:
     void do_log_backtrace(trace_record* tr, u8*& buffer);
     trace_record* allocate_trace_record(size_t size);
 private:
-    void try_enable();
     void activate();
     void deactivate();
     void activate(const tracepoint_id &, void * site, void * slow_path);

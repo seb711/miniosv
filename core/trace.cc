@@ -6,7 +6,6 @@
  */
 
 #include "osv/trace.hh"
-#include "osv/tracecontrol.hh"
 #include <osv/sched.hh>
 #include <osv/mutex.h>
 #include "arch.hh"
@@ -127,50 +126,6 @@ static bool global_backtrace_enabled;
 
 typeof(tracepoint_base::tp_list) tracepoint_base::tp_list __attribute__((init_priority((int)init_prio::tracepoint_base)));
 
-// Tracepoint patterns are wildcards: '*' matches any sequence, '?' any
-// one character, applied anywhere in the name - the same substring
-// semantics the regcomp/regexec implementation had. Hand-rolled so the
-// kernel needs no regex engine (and thus no wide-ctype family).
-//
-// The matcher itself is the classic two-pointer full-string glob with
-// star backtracking; the substring behavior comes from matching a
-// pattern pre-wrapped as "*<pattern>*" (wrap_wildcard).
-static bool wildcard_match(const std::string& wrapped, const char* name)
-{
-    const char* p = wrapped.c_str();
-    const char* s = name;
-    const char* star_p = nullptr;
-    const char* star_s = nullptr;
-
-    while (*s) {
-        if (*p == '?' || *p == *s) {
-            p++;
-            s++;
-        } else if (*p == '*') {
-            star_p = ++p;
-            star_s = s;
-        } else if (star_p) {
-            p = star_p;
-            s = ++star_s;
-        } else {
-            return false;
-        }
-    }
-    while (*p == '*') {
-        p++;
-    }
-    return *p == '\0';
-}
-
-static std::string wrap_wildcard(const std::string& pattern)
-{
-    return "*" + pattern + "*";
-}
-
-// Note: the definition of this list is: "expressions from command line",
-// and its only use is to deal with late initialization of tp:s
-std::vector<std::string> enabled_tracepoint_wildcards;
-
 void enable_trace()
 {
     trace_enabled = true;
@@ -202,12 +157,6 @@ void ensure_log_initialized()
 
         buffers_initialized.store(true, std::memory_order_release);
     }
-}
-
-void enable_tracepoint(std::string wildcard)
-{
-    trace::set_event_state_matching(wildcard, true);
-    enabled_tracepoint_wildcards.push_back(wrap_wildcard(wildcard));
 }
 
 void enable_backtraces(bool backtrace) {
@@ -249,7 +198,6 @@ tracepoint_base::tracepoint_base(unsigned _id, const std::type_info& tp_type,
     }
     probes_ptr.assign(new std::vector<probe*>);
     tp_list.push_back(*this);
-    try_enable();
 }
 
 tracepoint_base::~tracepoint_base()
@@ -333,18 +281,6 @@ void tracepoint_base::run_probes() {
         auto &probes = *probes_ptr.read();
         for (auto probe : probes) {
             probe->hit();
-        }
-    }
-}
-
-void tracepoint_base::try_enable()
-{
-    for (auto& wrapped : enabled_tracepoint_wildcards) {
-        if (wildcard_match(wrapped, name)) {
-            // keep the same semantics for command line enabled
-            // tp:s as before individually controlled points.
-            backtrace(global_backtrace_enabled);
-            enable();
         }
     }
 }
@@ -454,123 +390,3 @@ extern "C" void __cyg_profile_func_exit(void *this_fn, void *call_site)
     --func_trace_nesting;
     irq.restore();
 }
-
-trace::event_info::event_info(const tracepoint_base & tp)
-    : id(tp.name)
-    , name(tp.name) // TODO: human friendly? desc?
-    , enabled(tp.enabled())
-    , backtrace(tp.backtrace())
-{}
-
-std::vector<trace::event_info>
-trace::get_event_info()
-{
-    std::vector<event_info> res;
-
-    WITH_LOCK(trace_control_lock) {
-        std::copy(tracepoint_base::tp_list.begin()
-                , tracepoint_base::tp_list.end()
-                , std::back_inserter(res)
-        );
-    }
-
-    return res;
-}
-
-std::vector<trace::event_info>
-trace::get_event_info_matching(const std::string & wildcard)
-{
-    std::vector<event_info> res;
-    const auto wrapped = wrap_wildcard(wildcard);
-
-    WITH_LOCK(trace_control_lock) {
-        for (auto & tp : tracepoint_base::tp_list) {
-            if (wildcard_match(wrapped, tp.name)) {
-                res.emplace_back(tp);
-            }
-        }
-    }
-
-    return res;
-}
-
-std::vector<trace::event_info>
-trace::set_event_state_matching(const std::string & wildcard, bool enable, bool backtrace) {
-    std::vector<event_info> res;
-    const auto wrapped = wrap_wildcard(wildcard);
-
-    // Note: expressions sent here are only treated as instantaneous requests.
-    // unlike command line, which is "persisted" and queried on a late tp init.
-    WITH_LOCK(trace_control_lock) {
-        for (auto & tp : tracepoint_base::tp_list) {
-            if (wildcard_match(wrapped, tp.name)) {
-                res.emplace_back(tp);
-                tp.enable(enable);
-                tp.backtrace(backtrace);
-            }
-        }
-    }
-
-    return res;
-}
-
-trace::event_info
-trace::get_event_info(const ext_id & id)
-{
-    // Note: assuming all tracepoints are created at load time
-    // -> no locks for the tp_list. If this changes (hello dynamic tp:s)
-    // the lock should be embracing this as well.
-    for (auto & tp : tracepoint_base::tp_list) {
-        if (id == tp.name) {
-            WITH_LOCK(trace_control_lock) {
-                return event_info(tp);
-            }
-        }
-    }
-    throw std::invalid_argument(id);
-}
-
-trace::event_info
-trace::set_event_state(const ext_id & id, bool enable, bool backtrace)
-{
-    for (auto & tp : tracepoint_base::tp_list) {
-        if (id == tp.name) {
-            return set_event_state(tp, enable, backtrace);
-        }
-    }
-    throw std::invalid_argument(id);
-}
-
-trace::event_info
-trace::set_event_state(tracepoint_base & tp, bool enable, bool backtrace)
-{
-    WITH_LOCK(trace_control_lock) {
-        event_info old(tp);
-        tp.enable(enable);
-        tp.backtrace(backtrace);
-        return old;
-    }
-}
-
-static std::unordered_map<trace::generator_id, trace::generate_symbol_table_func> symbol_functions;
-static std::mutex symbol_func_mutex;
-static trace::generator_id symbol_ids;
-
-trace::generator_id
-trace::add_symbol_callback(const generate_symbol_table_func & f) {
-    WITH_LOCK(symbol_func_mutex) {
-        auto id = ++symbol_ids;
-        symbol_functions[id] = f;
-        return id;
-    }
-}
-
-void
-trace::remove_symbol_callback(generator_id id) {
-    WITH_LOCK(symbol_func_mutex) {
-        if (symbol_functions.count(id) > 0) {
-            symbol_functions.erase(id);
-        }
-    }
-}
-

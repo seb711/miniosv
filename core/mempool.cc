@@ -30,7 +30,6 @@
 #include <algorithm>
 #include <osv/prio.hh>
 #include <stdlib.h>
-#include <osv/shrinker.h>
 #include <osv/defer.hh>
 #include <osv/dbg-alloc.hh>
 #include <osv/migration-lock.hh>
@@ -956,13 +955,6 @@ shrinker::shrinker(std::string name)
         reclaimer_thread._shrinkers.push_back(this);
         reclaimer_thread._active_shrinkers += 1;
     }
-}
-
-extern "C"
-void *osv_register_shrinker(const char *name,
-                            size_t (*func)(size_t target, bool hard))
-{
-    return reinterpret_cast<void *>(new c_shrinker(name, func));
 }
 
 bool reclaimer_waiters::wake_waiters()
