@@ -52,54 +52,6 @@ uefi_entry:
         bl      main
         bl      halt
 
-.align 16
-.globl start_elf
-.hidden start_elf
-.type start_elf , "function"
-start_elf:
-        /* elf program start address */
-        /* input: x3=elf header x4=cmdline x5=dtb */
-        bl      calculate_virt_offset
-        /* x6 contains virt-phys offset */
-        adrp    x0, exception_vectors
-        add     x0, x0, x6    // apply virt-phys offset to make it virtual address
-        msr     vbar_el1, x0
-        isb
-
-        bl      validate_el   // check that we are at EL1 or die
-        bl      init_stack
-        bl      zero_bss      // initialize bss contents to 0
-        bl      init_cpu
-        bl      fixup_boot_pt // apply virt-phys offset to the boot mapping tables
-        bl      init_boot_pt  // set mapping table registers
-        /* at this point the virtual memory is not yet enabled but we are ready to enable it */
-        bl      init_mmu
-
-        /* after we returned from init_mmu we are operating in the virtual memory space */
-        adrp    x0, kernel_vm_shift
-        str     x6, [x0]      // save the kernel VM shift under kernel_vm_shift
-
-        adrp    x1, elf_header              // store elf header address
-        str     x3, [x1, #:lo12:elf_header]
-        adrp    x1, cmdline                 // store cmdline (arch-setup.cc)
-        str     x4, [x1, #:lo12:cmdline]
-        adrp    x1, dtb                     // store dtb (arch-setup.cc)
-        str     x5, [x1, #:lo12:dtb]
-
-#if CONF_drivers_xen
-        mov     x29, xzr
-        bl      init_xen
-#endif
-        mov     x29, xzr
-        bl      premain
-
-        // The slim kernel's main() takes no arguments - the application is
-        // statically linked in (osv_app_main) and there is no kernel cmdline
-        // to turn into argc/argv (see x64 boot.S, which also just calls main).
-        bl      main
-
-        bl      halt
-
 calculate_virt_offset:
         adr     x0, text_start // fetch physical address of text_start
         ldr     x6, =(OSV_KERNEL_VM_BASE + 0x20000) // calculate virtual address of text_start per loader.ld
@@ -307,7 +259,7 @@ start_secondary_cpu:
         isb
 
         bl      init_cpu
-        bl      init_boot_pt  // use the boot mapping tables fixed by start_elf on primary CPU
+        bl      init_boot_pt  // use the boot mapping tables fixed by uefi_entry on primary CPU
         bl      init_mmu
         /* after we returned from init_mmu we are operating in the virtual memory space */
         /* but on secondary CPU we can subsequently switch to the runtime mapping tables */

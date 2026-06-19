@@ -20,7 +20,6 @@
 #include <osv/commands.hh>
 
 #include "arch-mmu.hh"
-#include "arch-dtb.hh"
 #include "gic-v2.hh"
 #include "gic-v3.hh"
 #include "drivers/acpi.hh"
@@ -41,10 +40,12 @@
 // by uefi_entry in boot.S.
 osv::boot_info* osv_boot_info;
 
-// Derive the physical memory layout and ELF extents from the UEFI memory map,
-// replacing what dtb_setup() used to compute from the device tree. Runs at the
-// same init priority as the (now inert) dtb_setup constructor; elf_header,
-// kernel_vm_shift and osv_boot_info were already set by uefi_entry.
+// Kernel command line (set from the UEFI LoadOptions in uefi_memory_setup).
+char *cmdline;
+
+// Derive the physical memory layout and ELF extents from the UEFI memory map.
+// Runs as an early constructor (init_prio::dtb); elf_header, kernel_vm_shift
+// and osv_boot_info were already set by uefi_entry.
 void __attribute__((constructor(init_prio::dtb))) uefi_memory_setup()
 {
     auto bi = osv_boot_info;
@@ -73,7 +74,7 @@ void __attribute__((constructor(init_prio::dtb))) uefi_memory_setup()
     // Command line provided by the UEFI stub (LoadOptions).
     cmdline = reinterpret_cast<char*>(bi->cmdline_addr);
 
-    // Compute the ELF extents exactly as dtb_setup() did.
+    // Compute the ELF extents (physical/virtual start and size).
     u64 edata;
     asm volatile ("adrp %0, .edata" : "=r"(edata));
     extern elf::Elf64_Ehdr *elf_header;
