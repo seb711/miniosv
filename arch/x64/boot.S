@@ -62,26 +62,12 @@ gdt_desc:
      # subtract OSV_KERNEL_VM_SHIFT because when gdt_desc is referenced, the memory is mapped 1:1
     .long gdt - OSV_KERNEL_VM_SHIFT
 
-# Set up the 64-bit compatible version of GDT description structure
-# that points to the same GDT (Global segments Descriptors Table) and
-# is used in vmlinux_entry64 to switch back to the protected (32-bit) mode
-# from long mode (64-bit).
-# Please note the address of the GDT is a 8-bytes-long field instead of
-# 4-bytes only in regular 32 version (gdt_desc)
-.align 8
-gdt64_desc:
-    .short gdt_end - gdt - 1
-     # subtract OSV_KERNEL_VM_SHIFT because when gdt64_desc is referenced, the memory is mapped 1:1
-    .quad gdt - OSV_KERNEL_VM_SHIFT
-
 .align 8
 gdt = . - 8
     .quad 0x00af9b000000ffff # 64-bit code segment
     .quad 0x00cf93000000ffff # 64-bit data segment
     .quad 0x00cf9b000000ffff # 32-bit code segment
 gdt_end = .
-.globl gdt64_desc
-.hidden gdt64_desc
 
 .align 8
 . = . + 4  # make sure tss_ist is aligned on a quad boundary
@@ -98,8 +84,6 @@ init_stack_top = .
 .hidden start32
 .globl start32_from_vmlinuz
 .hidden start32_from_vmlinuz
-.globl start32_from_64
-.hidden start32_from_64
 start32:
     mov $0x0, %edi
 
@@ -108,9 +92,6 @@ start32_from_vmlinuz:
     # subtract OSV_KERNEL_VM_SHIFT from virtual addresses in all relevant places
     lgdt gdt_desc-OSV_KERNEL_VM_SHIFT
 
-# Add an address the vmlinux_entry64 will jump to when
-# switching from 64-bit to 32-bit mode
-start32_from_64:
     mov $0x10, %eax
     mov %eax, %ds
     mov %eax, %es
@@ -151,22 +132,6 @@ start64:
     .cfi_startproc simple
     .cfi_def_cfa %rsp, 0
     .cfi_undefined %rip
-    # Check for non-zero value in RDI register to detect if
-    # it contains the address of the boot_params structure
-    # that would be set if we came here from vmlinux_entry64
-    cmp $0x0, %rdi
-    jz detect_pvh_boot
-    call extract_linux_boot_params
-    mov $0x1000, %rbx
-
-detect_pvh_boot:
-    mov hvm_xen_start_info, %rdi
-    cmp $0x0, %rdi
-    jz start64_continue
-    call hvm_xen_extract_boot_params
-    mov $0x1000, %rbx
-
-start64_continue:
     lea .bss, %rdi
     lea .edata, %rcx
     sub %rdi, %rcx
