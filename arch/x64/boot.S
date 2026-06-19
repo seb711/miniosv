@@ -57,10 +57,13 @@ ident_pt_l2:
     index = index + 1
     .endr
 
-gdt_desc:
+# 64-bit GDT descriptor loaded by uefi_entry. The base is the physical address
+# of the GDT, because it is loaded while still running under the firmware's
+# identity map, before OSv's page tables are installed.
+.align 8
+gdt64_desc:
     .short gdt_end - gdt - 1
-     # subtract OSV_KERNEL_VM_SHIFT because when gdt_desc is referenced, the memory is mapped 1:1
-    .long gdt - OSV_KERNEL_VM_SHIFT
+    .quad gdt - OSV_KERNEL_VM_SHIFT
 
 .align 8
 gdt = . - 8
@@ -80,17 +83,21 @@ init_stack_top = .
 
 .text
 
-.globl start32
-.hidden start32
-.globl start32_from_vmlinuz
-.hidden start32_from_vmlinuz
-start32:
-    mov $0x0, %edi
+.code64
+.globl uefi_entry
+.hidden uefi_entry
+# Kernel entry point reached from the UEFI stub (boot/uefi/stub.cc). We arrive
+# in 64-bit long mode with paging enabled under the firmware's identity map;
+# %rdi holds the physical address of the osv::boot_info structure. Switch to
+# OSv's GDT and boot page tables, then jump to the virtual start64.
+uefi_entry:
+    mov %rdi, %r12                              # preserve boot_info pointer
 
-start32_from_vmlinuz:
-    # Because the memory is mapped 1:1 at this point, we have to manualy
-    # subtract OSV_KERNEL_VM_SHIFT from virtual addresses in all relevant places
-    lgdt gdt_desc-OSV_KERNEL_VM_SHIFT
+    # Load OSv's GDT. Address the descriptor through a register (absolute
+    # physical address) rather than a RIP-relative symbol reference, because we
+    # still execute unrelocated, before our page tables are active.
+    mov $gdt64_desc - OSV_KERNEL_VM_SHIFT, %eax
+    lgdt (%rax)
 
     mov $0x10, %eax
     mov %eax, %ds
@@ -98,34 +105,34 @@ start32_from_vmlinuz:
     mov %eax, %fs
     mov %eax, %gs
     mov %eax, %ss
-    ljmp $0x18, $1f-OSV_KERNEL_VM_SHIFT
-1:
-    and $~7, %esp
-    # Enable PAE (Physical Address Extension) - ability to address 64GB
-    # TODO: Add more comments to processor-flags.h what each flag does
+
+    # Set the control registers to exactly the values OSv expects (4-level
+    # paging). This clears any firmware-only bits, matching the SMP trampoline
+    # below; it assumes the firmware did not enable 5-level paging (LA57).
     mov $BOOT_CR4, %eax
-    mov %eax, %cr4
+    mov %rax, %cr4
 
-    # Set root of a page table in cr3
-    lea ident_pt_l4, %eax
-    # The address of the root paging table has to be physical
-    # so substract OSV_KERNEL_VM_SHIFT from ident_pt_l4
-    sub $OSV_KERNEL_VM_SHIFT, %eax
-    mov %eax, %cr3
+    # Point CR3 at OSv's identity + kernel boot page tables (physical address).
+    mov $ident_pt_l4 - OSV_KERNEL_VM_SHIFT, %eax
+    mov %rax, %cr3
 
-    # Set long mode
-    mov $0xc0000080, %ecx // EFER MSR number
-    mov $0x00000900, %eax // Set LME = 1
-    xor %edx, %edx
-    wrmsr // Write contents of EDX:EAX (0:to Model Specific Register specified by ECX register
+    # Long mode (EFER.LME) is already on; make sure EFER.NXE is set too. Read /
+    # modify / write so LME and LMA are preserved.
+    mov $0xc0000080, %ecx
+    rdmsr
+    or $0x800, %eax
+    wrmsr
 
-    # Activate paging and ...?
-    # TODO: Add more comments to processor-flags.h what each flag does
     mov $BOOT_CR0, %eax
-    mov %eax, %cr0
+    mov %rax, %cr0
 
-    ljmpl $8, $start64
-.code64
+    # Reload CS and jump to the virtual entry now that our mapping is active
+    # (virtual 0x40200000 -> physical 0x200000).
+    pushq $0x8
+    movabs $start64, %rax
+    pushq %rax
+    lretq
+
 .hidden start64
 .global start64
 start64:
@@ -139,8 +146,7 @@ start64:
     rep stosb
     mov $OSV_KERNEL_BASE, %rbp
     mov %rbp, elf_header
-    # %ebx is the multiboot info pointer set by the boot loader (QEMU/GRUB)
-    mov %rbx, osv_multiboot_info
+    mov %r12, osv_boot_info                     # boot_info pointer from the UEFI stub
     lea init_stack_top, %rsp
     call premain
     call main
