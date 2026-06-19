@@ -6,7 +6,6 @@
  */
 
 #include "drivers/clock.hh"
-#include "drivers/pl031.hh"
 #include "arm-clock.hh"
 #include <osv/interrupt.hh>
 #include "exceptions.hh"

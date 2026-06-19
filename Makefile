@@ -268,10 +268,6 @@ CXX_INCLUDES = -isystem external/llvm-project/libunwind/include
 libcxx-includes = -nostdinc++ -isystem build/libcxx/$(arch)/include/c++/v1 \
                   -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE
 
-ifeq ($(arch),aarch64)
-libfdt_base = external/$(arch)/libfdt
-INCLUDES += -isystem $(libfdt_base)
-endif
 
 INCLUDES += $(boost-includes)
 # Starting in Gcc 6, the standard C++ header files (which we do not change)
@@ -480,13 +476,6 @@ efi_target := aarch64-unknown-windows
 efi_boot_name := BOOTAA64.EFI
 efi_arch_cxxflags :=
 
-include $(libfdt_base)/Makefile.libfdt
-libfdt-source := $(patsubst %.c, $(libfdt_base)/%.c, $(LIBFDT_SRCS))
-libfdt = $(patsubst %.c, %.o, $(libfdt-source))
-# libfdt is third-party; its pointer-overflow checks (p + len < p) trip Clang's
-# -Wtautological-compare, which -Werror would otherwise make fatal.
-$(addprefix $(out)/, $(libfdt)): CFLAGS += -Wno-tautological-compare
-
 endif # aarch64
 
 
@@ -533,7 +522,6 @@ endif # x64
 ifeq ($(arch),aarch64)
 drivers += drivers/mmio-isa-serial.o
 drivers += drivers/pl011.o
-drivers += drivers/pl031.o
 endif # aarch64
 
 ifeq ($(conf_tracepoints),1)
@@ -595,12 +583,10 @@ objects += arch/$(arch)/arm-clock.o
 objects += arch/$(arch)/gic-common.o
 objects += arch/$(arch)/gic-v2.o
 objects += arch/$(arch)/gic-v3.o
-objects += arch/$(arch)/arch-dtb.o
 # cpuid.cc uses array designators ([HWCAP_BIT_FP] = ...) - a C99 extension in
 # C++ that Clang flags under -Werror; the initializer order is deliberate.
 $(out)/arch/aarch64/cpuid.o: CXXFLAGS += -Wno-c99-designator
 objects += arch/$(arch)/sched.o
-objects += $(libfdt)
 endif
 
 ifeq ($(arch),x64)
