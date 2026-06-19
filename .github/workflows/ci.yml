@@ -2,9 +2,11 @@ name: CI
 
 # Build the slim OSv kernel and run its in-kernel test suite for both
 # architectures. Everything is driven from the top-level Makefile, which also
-# auto-builds the pinned llvm-libc / libc++ / compiler-rt runtimes; the x64
-# tests boot under QEMU/KVM (the runner exposes /dev/kvm once permissions are
-# opened up below) and aarch64 is cross-emulated under TCG.
+# auto-builds the pinned llvm-libc / libc++ / compiler-rt runtimes. The kernel
+# boots via UEFI: the build wraps it into an EFI application (loader.efi) which
+# QEMU launches under UEFI firmware (OVMF on x64, AAVMF on aarch64). x64 runs
+# under KVM (the runner exposes /dev/kvm once permissions are opened up below);
+# aarch64 is cross-emulated under TCG.
 
 on:
   push:
@@ -27,10 +29,12 @@ jobs:
           - arch: x64
             run_arch: x86_64
             qemu_pkg: qemu-system-x86
+            fw_pkg: ovmf
             cross_pkgs: ""
           - arch: aarch64
             run_arch: aarch64
             qemu_pkg: qemu-system-arm
+            fw_pkg: qemu-efi-aarch64
             # No aarch64 GNU cross package: the toolchain is pure-LLVM. clang
             # cross-compiles by target triple (-nostdinc, its own libc/libc++/
             # compiler-rt archives) and ld.lld links the aarch64 ELF, so neither
@@ -50,7 +54,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build python3 git ca-certificates wget gnupg lsb-release \
             binutils linux-libc-dev qemu-utils \
-            ${{ matrix.cross_pkgs }} ${{ matrix.qemu_pkg }}
+            ${{ matrix.cross_pkgs }} ${{ matrix.qemu_pkg }} ${{ matrix.fw_pkg }}
           # clang 20: the runtimes are llvm-22 and must be built with a compiler
           # >= the source version. The runner ships clang 16/17/18 with the
           # default set to 19, registered at a higher update-alternatives
@@ -108,13 +112,15 @@ jobs:
             tail -120 "$f" 2>/dev/null || echo "(not present)"
           done
 
-      - name: Run test suite under QEMU
+      - name: Run test suite under QEMU + UEFI
         run: |
           set -eux
-          timeout 900 ./scripts/run.py --arch ${{ matrix.run_arch }} --novnc --nogdb \
-            < /dev/null 2>&1 | tee run.log
-          # The driver app prints this only when every suite passed and powers off.
-          grep -q "OSv test application: SUCCESS" run.log
+          # Boot the UEFI image (loader.efi) under QEMU + UEFI firmware (OVMF on
+          # x64, AAVMF on aarch64) and wait for the test driver's success line.
+          # smoke-test.sh exits non-zero if that marker never appears.
+          scripts/smoke-test.sh ${{ matrix.arch }} \
+            build/release.${{ matrix.arch }}/loader.efi \
+            900 "OSv test application: SUCCESS" 2>&1 | tee run.log
           # Fail on an explicit FAILURE marker (case-sensitive, so it won't match
           # the "failures: 0" summary lines) or any non-zero failure count.
           ! grep -qE "FAILURE|failures: [1-9]|[1-9][0-9]* failures" run.log
