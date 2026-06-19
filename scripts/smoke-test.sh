@@ -98,7 +98,8 @@ echo "  booting:  $boot_name (timeout ${timeout_s}s)"
 # QEMU's own diagnostics go to qemu.out so failures (e.g. firmware/vvfat) show.
 set +e
 timeout --foreground "$timeout_s" "$qemu" \
-    "${machine[@]}" -m 512 -accel "$accel" -no-reboot -display none \
+    "${machine[@]}" -m 512 -accel "$accel" -no-reboot \
+    -display none -vga none -nic none \
     -drive "if=pflash,format=raw,readonly=on,file=$code" \
     -drive "if=pflash,format=raw,file=$varscopy" \
     -drive "format=raw,file=fat:rw:$work/esp" \
