@@ -74,14 +74,18 @@ struct fadt {
 static const table_header *tables[64];
 static unsigned ntables;
 
+#ifdef __x86_64__
 // ACPI S5 ("soft off") parameters, extracted from the FADT and DSDT. The
-// SLP_TYP values are already shifted into their PM1_CNT bit position.
+// SLP_TYP values are already shifted into their PM1_CNT bit position. This
+// soft-off path is x86-only (it pokes PM1 control I/O ports); aarch64 powers
+// off through PSCI.
 static constexpr uint16_t SLP_EN = 1 << 13;
 static uint16_t pm1a_cnt_port;
 static uint16_t pm1b_cnt_port;
 static uint16_t slp_typ_a;
 static uint16_t slp_typ_b;
 static bool s5_ready;
+#endif
 
 // Linear-map a physical range (huge-page aligned) and return a virtual pointer
 // to it. Each huge page is mapped at most once - ACPI tables are tiny and
@@ -111,6 +115,7 @@ static void *map_phys(uint64_t pa, size_t len)
     return mmu::phys_to_virt(pa);
 }
 
+#ifdef __x86_64__
 static bool checksum_ok(const void *p, size_t len)
 {
     uint8_t sum = 0;
@@ -131,6 +136,7 @@ static const rsdp *scan_rsdp(uint64_t start, uint64_t end)
     }
     return nullptr;
 }
+#endif
 
 static const rsdp *find_rsdp()
 {
@@ -139,8 +145,10 @@ static const rsdp *find_rsdp()
         return static_cast<const rsdp *>(map_phys(pvh_rsdp_paddr, sizeof(rsdp)));
     }
 
+#ifdef __x86_64__
     // Otherwise scan the two BIOS regions the spec allows the RSDP to live in:
     // the first KB of the Extended BIOS Data Area, and the BIOS read-only area.
+    // (Legacy BIOS-only fallback; under UEFI the RSDP always arrives above.)
     uint16_t ebda_seg = *static_cast<const uint16_t *>(map_phys(0x40e, sizeof(uint16_t)));
     uint64_t ebda = static_cast<uint64_t>(ebda_seg) << 4;
     if (ebda) {
@@ -149,6 +157,9 @@ static const rsdp *find_rsdp()
         }
     }
     return scan_rsdp(0xe0000, 0x100000);
+#else
+    return nullptr;
+#endif
 }
 
 // Map a table given its physical address and remember its header. The first
@@ -179,6 +190,7 @@ const table_header *find_table(const char *signature)
 // values. This is enough to issue an ACPI soft-off without a full AML
 // interpreter. The scan recognizes the handful of byte sequences that compilers
 // emit for "Name (_S5, Package () { ... })".
+#ifdef __x86_64__
 static void parse_s5()
 {
     auto fadt = reinterpret_cast<const struct fadt *>(find_table("FACP"));
@@ -220,9 +232,11 @@ static void parse_s5()
         return;
     }
 }
+#endif
 
 bool power_off()
 {
+#ifdef __x86_64__
     if (!s5_ready) {
         return false;
     }
@@ -231,6 +245,10 @@ bool power_off()
         processor::outw(slp_typ_b | SLP_EN, pm1b_cnt_port);
     }
     return true;
+#else
+    // aarch64 powers off through PSCI, not ACPI S5 I/O ports.
+    return false;
+#endif
 }
 
 void early_init()
@@ -262,7 +280,9 @@ void early_init()
 
     enabled = ntables > 0;
 
+#ifdef __x86_64__
     parse_s5();
+#endif
 }
 
 }

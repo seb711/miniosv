@@ -518,14 +518,16 @@ drivers += drivers/msi.o
 endif
 drivers += drivers/driver.o
 
+# ACPI is the device-discovery model on both architectures under UEFI boot.
+ifeq ($(conf_drivers_acpi),1)
+drivers += drivers/acpi.o
+endif
+
 ifeq ($(arch),x64)
 drivers += drivers/isa-serial.o
 drivers += arch/$(arch)/pvclock-abi.o
 
 drivers += drivers/kvmclock.o
-ifeq ($(conf_drivers_acpi),1)
-drivers += drivers/acpi.o
-endif
 endif # x64
 
 ifeq ($(arch),aarch64)

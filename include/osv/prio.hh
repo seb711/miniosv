@@ -26,6 +26,7 @@ enum {
     notifiers,
     psci,
     acpi,
+    gic,
     vma_list,
     reclaimer,
     sched,

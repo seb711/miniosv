@@ -23,6 +23,7 @@
 #include "arch-dtb.hh"
 #include "gic-v2.hh"
 #include "gic-v3.hh"
+#include "drivers/acpi.hh"
 
 #include "drivers/console.hh"
 #include "drivers/pl011.hh"
@@ -167,16 +168,9 @@ void arch_setup_free_memory()
                         mmu::mattr::dev);
     }
 
-    //Locate GICv2 or GICv3 information in DTB and construct corresponding GIC driver
-    u64 dist, redist, cpuif, its, v2m;
-    size_t dist_len, redist_len, cpuif_len, its_len, v2m_len;
-    if (dtb_get_gic_v3(&dist, &dist_len, &redist, &redist_len, &its, &its_len)) {
-        gic::gic = new gic::gic_v3_driver(dist, dist_len, redist, redist_len, its, its_len);
-    } else if (dtb_get_gic_v2(&dist, &dist_len, &cpuif, &cpuif_len, &v2m, &v2m_len)) {
-        gic::gic = new gic::gic_v2_driver(dist, dist_len, cpuif, cpuif_len, v2m, v2m_len);
-    } else {
-        abort("arch-setup: failed to get GICv3 nor GiCv2 information from dtb.\n");
-    }
+    // The GIC is discovered from the ACPI MADT and constructed in a constructor
+    // at init_prio::gic (see init_gic_acpi below), which runs after the ACPI
+    // tables are parsed (init_prio::acpi) and before the timer needs it.
 
 #if CONF_drivers_pci
     if (!opt_pci_disabled) {
@@ -219,7 +213,85 @@ void arch_setup_tls(void *tls, const elf::tls_data& info)
 
 void arch_init_premain()
 {
+#if CONF_drivers_acpi
+    // Hand the RSDP the UEFI stub found to the ACPI layer before its early_init
+    // constructor runs - exactly as x86 does in its arch_init_premain.
+    acpi::pvh_rsdp_paddr = osv_boot_info->acpi_rsdp;
+#endif
 }
+
+#if CONF_drivers_acpi
+// Discover the GIC from the ACPI MADT and construct the matching driver. This
+// walks the MADT subtables the same way arch/x64/smp.cc does, so both arches
+// share one ACPI parsing model. It runs after acpi::early_init (init_prio::acpi)
+// and before the generic timer, which needs the GIC (init_prio::gic).
+static void __attribute__((constructor(init_prio::gic))) init_gic_acpi()
+{
+    auto madt = reinterpret_cast<const acpi::madt*>(acpi::find_table(ACPI_SIG_MADT));
+    if (!madt) {
+        abort("arch-setup: no MADT table - cannot locate the GIC.\n");
+    }
+
+    u64 gicd = 0, gicr = 0, gits = 0, gicc_cpuif = 0;
+    size_t gicr_len = 0;
+    u8 version = 0;
+
+    auto subtable = reinterpret_cast<const char*>(madt + 1);
+    auto madt_end = reinterpret_cast<const char*>(madt) + madt->header.length;
+    while (subtable < madt_end) {
+        auto s = reinterpret_cast<const acpi::madt_subtable*>(subtable);
+        switch (s->type) {
+        case acpi::MADT_GICD: {
+            auto d = reinterpret_cast<const acpi::madt_gicd*>(s);
+            gicd = d->physical_base_address;
+            version = d->gic_version;
+            break;
+        }
+        case acpi::MADT_GICR: {
+            auto r = reinterpret_cast<const acpi::madt_gicr*>(s);
+            gicr = r->discovery_range_base_address;
+            gicr_len = r->discovery_range_length;
+            break;
+        }
+        case acpi::MADT_GIC_ITS: {
+            auto i = reinterpret_cast<const acpi::madt_gic_its*>(s);
+            gits = i->physical_base_address;
+            break;
+        }
+        case acpi::MADT_GICC: {
+            auto c = reinterpret_cast<const acpi::madt_gicc*>(s);
+            // GICv2 takes the CPU interface base from here; GICv3 may publish
+            // the per-cpu redistributor here instead of in a GICR subtable.
+            if (!gicc_cpuif) {
+                gicc_cpuif = c->physical_base_address;
+            }
+            if (!gicr && c->gicr_base_address) {
+                gicr = c->gicr_base_address;
+                gicr_len = 0x20000;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        subtable += s->length;
+    }
+
+    // The MADT carries base addresses but not region sizes; use the
+    // architectural defaults (the GICR length does come from the MADT).
+    constexpr size_t GICD_LEN = 0x10000;
+    constexpr size_t GITS_LEN = 0x20000;
+
+    if (version == 3 || gicr) {
+        gic::gic = new gic::gic_v3_driver(gicd, GICD_LEN, gicr, gicr_len,
+                                          gits, gits ? GITS_LEN : 0);
+    } else if (gicd && gicc_cpuif) {
+        gic::gic = new gic::gic_v2_driver(gicd, GICD_LEN, gicc_cpuif, 0x2000, 0, 0);
+    } else {
+        abort("arch-setup: MADT has no usable GIC description.\n");
+    }
+}
+#endif
 
 #include "drivers/driver.hh"
 
