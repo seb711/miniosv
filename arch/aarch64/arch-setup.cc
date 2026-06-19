@@ -334,30 +334,16 @@ void arch_init_drivers()
 
 void arch_init_early_console()
 {
+    // Like the x86 early console (a fixed COM port), the aarch64 early console
+    // uses a compiled-in default UART. UEFI hands off no device tree, and ACPI
+    // is not parsed this early, so we rely on the PL011 driver's default base
+    // address and IRQ (the ARM PL011 at the standard platform address, as used
+    // by QEMU's virt machine and typical ARM firmware).
     console::mmio_isa_serial_console::_phys_mmio_address = 0;
-
-    int irqid;
-    u64 mmio_serial_address = dtb_get_mmio_serial_console(&irqid);
-    if (mmio_serial_address) {
-        console::mmio_isa_serial_console::early_init(mmio_serial_address);
-
-        new (&console::aarch64_console.isa_serial) console::mmio_isa_serial_console();
-        console::aarch64_console.isa_serial.set_irqid(irqid);
-        console::arch_early_console = console::aarch64_console.isa_serial;
-        return;
-    }
 
     new (&console::aarch64_console.pl011) console::PL011_Console();
     console::arch_early_console = console::aarch64_console.pl011;
     console::PL011_Console::active = true;
-    u64 addr = dtb_get_uart(&irqid);
-    if (!addr) {
-        /* keep using default addresses */
-        return;
-    }
-
-    console::aarch64_console.pl011.set_base_addr(addr);
-    console::aarch64_console.pl011.set_irqid(irqid);
 }
 
 bool arch_setup_console(std::string opt_console)
