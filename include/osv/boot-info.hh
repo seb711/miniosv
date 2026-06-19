@@ -46,14 +46,16 @@ struct boot_memmap_entry {
 // and a kernel built from different trees.
 static constexpr uint64_t boot_info_magic = 0x4f53565542494631ull; // "OSVUBIF1"
 
+// NB: arch/aarch64/boot.S reads kernel_phys_base by its byte offset (40); keep
+// the layout in sync if you reorder these fields.
 struct boot_info {
-    uint64_t magic;                 // boot_info_magic
-    uint64_t acpi_rsdp;             // phys addr of ACPI RSDP, 0 if none found
-    uint64_t memmap_addr;           // phys addr of boot_memmap_entry[]
-    uint32_t memmap_count;          // number of entries in the array above
-    uint32_t cmdline_len;           // length of cmdline, excluding NUL
-    uint64_t cmdline_addr;          // phys addr of NUL-terminated command line
-    uint64_t kernel_phys_base;      // phys address the kernel image was loaded at
+    uint64_t magic;                 // boot_info_magic               (offset 0)
+    uint64_t acpi_rsdp;             // phys addr of ACPI RSDP, 0 if none (8)
+    uint64_t memmap_addr;           // phys addr of boot_memmap_entry[]  (16)
+    uint32_t memmap_count;          // number of entries in the array    (24)
+    uint32_t cmdline_len;           // length of cmdline, excluding NUL  (28)
+    uint64_t cmdline_addr;          // phys addr of NUL-terminated cmdline (32)
+    uint64_t kernel_phys_base;      // phys address the kernel loaded at  (40)
 } __attribute__((packed));
 
 }

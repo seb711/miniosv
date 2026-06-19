@@ -161,4 +161,6 @@ PHDRS {
 	eh_frame PT_GNU_EH_FRAME;
 	note PT_NOTE;
 }
-ENTRY(start_elf);
+/* The ELF entry point is the kernel's UEFI entry. The UEFI stub reads this
+ * (virtual) address and translates it to the physical entry it jumps to. */
+ENTRY(uefi_entry);
