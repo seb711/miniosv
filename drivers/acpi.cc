@@ -185,6 +185,17 @@ const table_header *find_table(const char *signature)
     return nullptr;
 }
 
+uint16_t arm_boot_flags()
+{
+    auto fadt = find_table("FACP");
+    if (!fadt) {
+        return 0;
+    }
+    // ARM Boot Architecture Flags live at offset 0x70 in the FADT.
+    return *reinterpret_cast<const uint16_t *>(
+        reinterpret_cast<const char *>(fadt) + 0x70);
+}
+
 // Locate the FADT, grab its PM1 control ports and the DSDT, then scan the DSDT
 // bytecode for the predefined "\_S5_" object to extract the S5 sleep-type
 // values. This is enough to issue an ACPI soft-off without a full AML

@@ -10,7 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <osv/debug.hh>
-#include "arch-dtb.hh"
+#include "drivers/acpi.hh"
 
 namespace psci {
 
@@ -48,14 +48,13 @@ static __attribute__ ((noinline)) int invoke_smc(u64 fid, u64 arg0, u64 arg1, u6
 /* __attribute__((constructor(init_prio::psci))) */
 void psci::init()
 {
-    const char * method = dtb_get_psci_method();
-    if (strcmp("hvc", method) == 0) {
-        psci::invoke_method = invoke_hvc;
-    } else if (strcmp("smc", method) == 0) {
-        psci::invoke_method = invoke_smc;
-    } else {
+    // The PSCI conduit (HVC vs SMC) comes from the FADT ARM boot flags.
+    uint16_t flags = acpi::arm_boot_flags();
+    if (!(flags & acpi::FADT_ARM_PSCI_COMPLIANT)) {
         abort("No PSCI method found");
     }
+    psci::invoke_method = (flags & acpi::FADT_ARM_PSCI_USE_HVC) ? invoke_hvc
+                                                               : invoke_smc;
 
     int ret = _psci.psci_version();
     if (ret < 0) {
