@@ -186,6 +186,14 @@ links:
 	$(call very-quiet, ln -nsf $(notdir $(out)) $(outlink2))
 .PHONY: links
 
+# Boot the UEFI image under QEMU + UEFI firmware (OVMF for x64, AAVMF for
+# aarch64) and check it reaches the kernel's early banner. Override firmware
+# with OVMF_CODE/OVMF_VARS or AAVMF_CODE/AAVMF_VARS; SMOKE_TIMEOUT sets the
+# wait (default 30s). Exits non-zero if firmware/QEMU is missing or it fails.
+smoke-test: $(out)/loader.efi
+	scripts/smoke-test.sh $(arch) $(out)/loader.efi $(SMOKE_TIMEOUT)
+.PHONY: smoke-test
+
 # Remember that "make clean" needs the same parameters that set $(out) in
 # the first place, so to clean the output of "make mode=debug" you need to
 # do "make mode=debug clean".

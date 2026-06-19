@@ -191,9 +191,10 @@ uint16_t arm_boot_flags()
     if (!fadt) {
         return 0;
     }
-    // ARM Boot Architecture Flags live at offset 0x70 in the FADT.
+    // ARM Boot Architecture Flags are a UINT16 at offset 0x81 in the FADT
+    // (after Flags/RESET_REG/RESET_VALUE; offset 0x70 is the x86 Flags field).
     return *reinterpret_cast<const uint16_t *>(
-        reinterpret_cast<const char *>(fadt) + 0x70);
+        reinterpret_cast<const char *>(fadt) + 0x81);
 }
 
 // Locate the FADT, grab its PM1 control ports and the DSDT, then scan the DSDT
