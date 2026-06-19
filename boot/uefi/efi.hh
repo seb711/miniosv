@@ -207,6 +207,28 @@ struct EFI_BOOT_SERVICES {
     void *CreateEventEx;
 };
 
+// --- runtime services (for the wall-clock time) ----------------------------
+
+struct EFI_TIME {
+    uint16_t Year;        // 1900..9999
+    uint8_t  Month;       // 1..12
+    uint8_t  Day;         // 1..31
+    uint8_t  Hour;        // 0..23
+    uint8_t  Minute;      // 0..59
+    uint8_t  Second;      // 0..59
+    uint8_t  Pad1;
+    uint32_t Nanosecond;  // 0..999999999
+    int16_t  TimeZone;    // -1440..1440, or 0x07FF if unspecified
+    uint8_t  Daylight;
+    uint8_t  Pad2;
+};
+
+struct EFI_RUNTIME_SERVICES {
+    EFI_TABLE_HEADER Hdr;
+    EFI_STATUS (EFIAPI *GetTime)(EFI_TIME *time, void *capabilities);
+    // remaining members unused
+};
+
 // --- configuration table & system table -----------------------------------
 
 struct EFI_CONFIGURATION_TABLE {
@@ -224,7 +246,7 @@ struct EFI_SYSTEM_TABLE {
     EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *ConOut;
     EFI_HANDLE       StandardErrorHandle;
     EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *StdErr;
-    void            *RuntimeServices;
+    EFI_RUNTIME_SERVICES *RuntimeServices;
     EFI_BOOT_SERVICES *BootServices;
     UINTN            NumberOfTableEntries;
     EFI_CONFIGURATION_TABLE *ConfigurationTable;

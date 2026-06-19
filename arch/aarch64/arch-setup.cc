@@ -43,6 +43,11 @@ osv::boot_info* osv_boot_info;
 // Kernel command line (set from the UEFI LoadOptions in uefi_memory_setup).
 char *cmdline;
 
+// Wall-clock at boot (UEFI GetTime), nanoseconds since the Unix epoch. Captured
+// early because boot_info lives in low RAM that is unmapped once the runtime
+// page tables are installed, before the clock constructor runs.
+u64 osv_boot_unixtime_ns;
+
 // Derive the physical memory layout and ELF extents from the UEFI memory map.
 // Runs as an early constructor (init_prio::dtb); elf_header, kernel_vm_shift
 // and osv_boot_info were already set by uefi_entry.
@@ -73,8 +78,9 @@ void __attribute__((constructor(init_prio::dtb))) uefi_memory_setup()
     }
     memory::phys_mem_size = region_end - mmu::mem_addr;
 
-    // Command line provided by the UEFI stub (LoadOptions).
+    // Command line and wall-clock base provided by the UEFI stub.
     cmdline = reinterpret_cast<char*>(bi->cmdline_addr);
+    osv_boot_unixtime_ns = bi->boot_unixtime_ns;
 
     // Compute the ELF extents (physical/virtual start and size).
     u64 edata;
