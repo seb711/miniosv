@@ -101,35 +101,29 @@ void setup_temporary_phys_map()
 }
 
 #if CONF_drivers_pci
+// Locate the PCIe ECAM config space from the ACPI MCFG table and map it. Like
+// Nanos, this is the only PCI information we take from firmware: the BARs are
+// left exactly as UEFI programmed them (arch_add_bar reads them as-is, so the
+// io/mem allocation windows are never needed), and device interrupts are
+// delivered as MSI-X through the GIC ITS, so there is no INTx routing table to
+// parse. Called from arch_init_drivers, after the ACPI tables are parsed.
 void arch_setup_pci()
 {
-    pci::set_pci_ecam(dtb_get_pci_is_ecam());
-
-    /* linear_map [TTBR0 - PCI config space] */
-    u64 pci_cfg;
-    size_t pci_cfg_len;
-    if (!dtb_get_pci_cfg(&pci_cfg, &pci_cfg_len)) {
-        return;
+    auto mcfg = reinterpret_cast<const acpi::mcfg*>(acpi::find_table(ACPI_SIG_MCFG));
+    if (!mcfg) {
+        return;   // no PCIe host bridge described - leave PCI disabled
     }
 
-    pci::set_pci_cfg(pci_cfg, pci_cfg_len);
-    pci_cfg = pci::get_pci_cfg(&pci_cfg_len);
-    mmu::linear_map((void *)pci_cfg, (mmu::phys)pci_cfg, pci_cfg_len,
-		    "pci_cfg", mmu::page_size, mmu::mattr::dev);
+    // Use the first configuration-space allocation (segment 0).
+    auto alloc = reinterpret_cast<const acpi::mcfg_alloc*>(
+        reinterpret_cast<const char*>(mcfg) + sizeof(acpi::mcfg));
+    u64 ecam_base = alloc->base_address;
+    size_t ecam_len = (static_cast<size_t>(alloc->end_bus - alloc->start_bus + 1)) << 20;
 
-    /* linear_map [TTBR0 - PCI I/O and memory ranges] */
-    u64 ranges[2]; size_t ranges_len[2];
-    if (!dtb_get_pci_ranges(ranges, ranges_len, 2)) {
-        abort("arch-setup: failed to get PCI ranges.\n");
-    }
-    pci::set_pci_io(ranges[0], ranges_len[0]);
-    pci::set_pci_mem(ranges[1], ranges_len[1]);
-    ranges[0] = pci::get_pci_io(&ranges_len[0]);
-    ranges[1] = pci::get_pci_mem(&ranges_len[1]);
-    mmu::linear_map((void *)ranges[0], (mmu::phys)ranges[0], ranges_len[0],
-                    "pci_io", mmu::page_size, mmu::mattr::dev);
-    mmu::linear_map((void *)ranges[1], (mmu::phys)ranges[1], ranges_len[1],
-                    "pci_mem", mmu::page_size, mmu::mattr::dev);
+    pci::set_pci_ecam(true);
+    pci::set_pci_cfg(ecam_base, ecam_len);
+    mmu::linear_map((void *)ecam_base, (mmu::phys)ecam_base, ecam_len,
+                    "pci_cfg", mmu::page_size, mmu::mattr::dev);
 }
 #endif
 
@@ -170,13 +164,8 @@ void arch_setup_free_memory()
 
     // The GIC is discovered from the ACPI MADT and constructed in a constructor
     // at init_prio::gic (see init_gic_acpi below), which runs after the ACPI
-    // tables are parsed (init_prio::acpi) and before the timer needs it.
-
-#if CONF_drivers_pci
-    if (!opt_pci_disabled) {
-        arch_setup_pci();
-    }
-#endif
+    // tables are parsed (init_prio::acpi) and before the timer needs it. PCI is
+    // set up later in arch_init_drivers, once ACPI (MCFG) is available.
 
     // Strip console= options from the command line before memory is unmapped.
     // The slim kernel does not turn the cmdline into commands (the app is
@@ -301,22 +290,11 @@ void arch_init_drivers()
 
 #if CONF_drivers_pci
     if (!opt_pci_disabled) {
-        int irqmap_count = dtb_get_pci_irqmap_count();
-        if (irqmap_count > 0) {
-            u32 mask = dtb_get_pci_irqmask();
-            u32 *bdfs = (u32 *)alloca(sizeof(u32) * irqmap_count);
-            int *irqs  = (int *)alloca(sizeof(int) * irqmap_count);
-            if (!dtb_get_pci_irqmap(bdfs, irqs, irqmap_count)) {
-                abort("arch-setup: failed to get PCI irqmap.\n");
-            }
-            pci::set_pci_irqmap(bdfs, irqs, irqmap_count, mask);
-        }
+        // Discover the ECAM config space from the ACPI MCFG (available now that
+        // the ACPI tables are parsed), then enumerate. Device interrupts are
+        // MSI-X via the GIC ITS, so there is no INTx irqmap to set up.
+        arch_setup_pci();
 
-#if CONF_logger_debug
-        pci::dump_pci_irqmap();
-#endif
-
-        // Enumerate PCI devices
         size_t pci_cfg_len;
         if (pci::get_pci_cfg(&pci_cfg_len)) {
             pci::pci_device_enumeration();
