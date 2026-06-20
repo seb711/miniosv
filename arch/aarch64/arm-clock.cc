@@ -43,12 +43,10 @@ arm_clock::arm_clock() {
     u64 freq;
     asm volatile ("mrs %0, cntfrq_el0; isb; " : "=r"(freq) :: "memory");
     freq_hz = freq;
-    /* spec documents a typical range of 1-50 MHZ,
-     * the ampere-1a however, runs on 1Ghz, so allow up to that frequency */
-    if (freq_hz < 1 * MHZ || freq_hz > 1000 * MHZ) {
-        debug_early_u64("arm_clock(): read invalid frequency ", freq_hz);
-        abort();
-    }
+    // The generic-timer frequency is whatever firmware programmed into
+    // CNTFRQ_EL0; it varies widely across platforms (QEMU virt 62.5 MHz, Ampere
+    // 1 GHz, AWS Graviton higher still), so we trust it rather than range-check
+    // it - a sanity bound here only risks rejecting valid hardware.
 #if CONF_logger_debug
     debug_early_u64("arm_clock(): frequency read as ", freq_hz);
 #endif

@@ -105,6 +105,49 @@ void print(const char *s)
     }
 }
 
+// Unaligned little-endian reads (ACPI table fields are not naturally aligned).
+uint32_t rd32(const void *p)
+{
+    uint32_t v;
+    memcpy(&v, p, 4);
+    return v;
+}
+uint64_t rd64(const void *p)
+{
+    uint64_t v;
+    memcpy(&v, p, 8);
+    return v;
+}
+
+// Locate the ACPI SPCR (Serial Port Console Redirection) table and return the
+// console UART's physical base address (0 if none). The kernel's early console
+// targets this instead of a compiled-in default, so serial output works on
+// platforms whose UART is not at the QEMU virt address (e.g. AWS Graviton).
+uint64_t find_spcr_uart(uint64_t rsdp)
+{
+    if (!rsdp)
+        return 0;
+    auto r = reinterpret_cast<const unsigned char *>(rsdp);
+    // RSDP: XsdtAddress at offset 24 (ACPI 2.0+), RsdtAddress at offset 16.
+    uint64_t xsdt = rd64(r + 24);
+    uint64_t rsdt = rd32(r + 16);
+    uint64_t hdr = xsdt ? xsdt : rsdt;
+    int entsize = xsdt ? 8 : 4;
+    if (!hdr)
+        return 0;
+    auto h = reinterpret_cast<const unsigned char *>(hdr);
+    uint32_t len = rd32(h + 4);
+    uint32_t n = (len > 36) ? (len - 36) / entsize : 0;
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t tbl = (entsize == 8) ? rd64(h + 36 + i * 8)
+                                      : (uint64_t)rd32(h + 36 + i * 4);
+        auto t = reinterpret_cast<const unsigned char *>(tbl);
+        if (t[0] == 'S' && t[1] == 'P' && t[2] == 'C' && t[3] == 'R')
+            return rd64(t + 44);      // Base Address (GAS Address field)
+    }
+    return 0;
+}
+
 [[noreturn]] void die(const char *msg)
 {
     print("UEFI stub: ");
@@ -267,6 +310,7 @@ extern "C" EFIAPI EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     print("miniosv UEFI stub starting\n");
 
     uint64_t rsdp = find_rsdp();
+    uint64_t uart_base = find_spcr_uart(rsdp);
 
     // Allocate the hand-off structures as EfiLoaderData so they survive
     // ExitBootServices. Size the memmap generously - the UEFI map is bounded
@@ -274,17 +318,35 @@ extern "C" EFIAPI EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     constexpr uint32_t MAX_MEMMAP = 512;
     constexpr uint32_t CMDLINE_CAP = 4096;
 
-    osv::boot_info *bi = nullptr;
-    osv::boot_memmap_entry *mm = nullptr;
-    char *cmdline = nullptr;
-    if (EFI_ERROR(BS->AllocatePool(EfiLoaderData, sizeof(*bi),
-                                   reinterpret_cast<void **>(&bi))) ||
-        EFI_ERROR(BS->AllocatePool(EfiLoaderData,
-                                   sizeof(*mm) * MAX_MEMMAP,
-                                   reinterpret_cast<void **>(&mm))) ||
-        EFI_ERROR(BS->AllocatePool(EfiLoaderData, CMDLINE_CAP,
-                                   reinterpret_cast<void **>(&cmdline))))
-        die("out of memory allocating boot info");
+    // The kernel reads these hand-off structures (boot_info, the memory map
+    // and the cmdline) very early, before it has mapped all of RAM - while it
+    // still runs on the boot page tables, which only cover low physical memory
+    // (the first 1 GiB on x64; the boot identity map on aarch64). AllocatePool
+    // lets the firmware place them anywhere, and on multi-GiB guests it puts
+    // them near the top of RAM - which the early kernel then misreads through
+    // its low map, getting a zeroed memory map and dying. So reserve them with
+    // an explicit upper bound the kernel's boot tables are guaranteed to map.
+#ifdef __aarch64__
+    constexpr uint64_t HANDOFF_MAX_ADDR = 0xfc0000000ull; // boot identity = 63 GiB
+#else
+    constexpr uint64_t HANDOFF_MAX_ADDR = 0x40000000ull;  // boot.S maps first 1 GiB
+#endif
+    constexpr UINTN page = EFI_PAGE_SIZE;
+    constexpr UINTN bi_bytes = (sizeof(osv::boot_info) + page - 1) & ~(page - 1);
+    constexpr UINTN mm_bytes =
+        (sizeof(osv::boot_memmap_entry) * MAX_MEMMAP + page - 1) & ~(page - 1);
+    constexpr UINTN cmd_bytes = (CMDLINE_CAP + page - 1) & ~(page - 1);
+    constexpr UINTN handoff_bytes = bi_bytes + mm_bytes + cmd_bytes;
+
+    EFI_PHYSICAL_ADDRESS handoff_base = HANDOFF_MAX_ADDR;
+    if (EFI_ERROR(BS->AllocatePages(AllocateMaxAddress, EfiLoaderData,
+                                    handoff_bytes / page, &handoff_base)))
+        die("cannot reserve low memory for boot info");
+    osv::boot_info *bi = reinterpret_cast<osv::boot_info *>(handoff_base);
+    osv::boot_memmap_entry *mm =
+        reinterpret_cast<osv::boot_memmap_entry *>(handoff_base + bi_bytes);
+    char *cmdline =
+        reinterpret_cast<char *>(handoff_base + bi_bytes + mm_bytes);
 
     uint32_t cmdline_len = read_cmdline(image, cmdline, CMDLINE_CAP);
 
@@ -298,6 +360,7 @@ extern "C" EFIAPI EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     bi->cmdline_len = cmdline_len;
     bi->kernel_phys_base = kernel_phys_base;
     bi->boot_unixtime_ns = read_boot_time();
+    bi->uart_base = uart_base;
 
     // Fetch the UEFI memory map, normalize it, and ExitBootServices. The map
     // key can go stale between GetMemoryMap and ExitBootServices, so retry.

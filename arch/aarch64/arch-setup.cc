@@ -64,13 +64,26 @@ void __attribute__((constructor(init_prio::dtb))) uefi_memory_setup()
     // and cloud ARM present RAM as one contiguous block from there up).
     mmu::mem_addr = kbase & ~((u64)0x200000 - 1);
 
-    u64 region_end = 0;
-    for (u32 i = 0; i < bi->memmap_count; i++) {
-        if (mm[i].type != osv::boot_mem_type::usable)
-            continue;
-        u64 end = mm[i].addr + mm[i].size;
-        if (end > mmu::mem_addr && end > region_end) {
-            region_end = end;
+    // Grow a single contiguous run of usable memory upward from the kernel
+    // base. OSv models RAM as one [mem_addr, region_end) block, but firmware
+    // memory maps are not always contiguous: AWS Nitro presents a low RAM
+    // island separated by a reserved hole from a larger high island. Taking
+    // the highest usable end (the old behaviour) would span that hole and
+    // later free non-existent physical pages into the allocator, faulting on
+    // first touch. So extend only across adjacent/overlapping usable entries
+    // and stop at the first gap; RAM above the gap is discarded for now (this
+    // matches the old aarch64 stub, which deliberately exposed one range).
+    u64 region_end = mmu::mem_addr;
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (u32 i = 0; i < bi->memmap_count; i++) {
+            if (mm[i].type != osv::boot_mem_type::usable)
+                continue;
+            u64 start = mm[i].addr, end = start + mm[i].size;
+            if (start <= region_end && end > region_end) {
+                region_end = end;
+                grew = true;
+            }
         }
     }
     if (region_end <= mmu::mem_addr) {
@@ -329,6 +342,13 @@ void arch_init_early_console()
     console::mmio_isa_serial_console::_phys_mmio_address = 0;
 
     new (&console::aarch64_console.pl011) console::PL011_Console();
+    // Prefer the console UART the firmware advertised via the ACPI SPCR table
+    // (the UEFI stub passes its base in boot_info). AWS Graviton's UART is not
+    // at the QEMU virt address, so the compiled-in default produces no output
+    // there. Fall back to that default when SPCR gave us nothing.
+    if (osv_boot_info && osv_boot_info->uart_base) {
+        console::aarch64_console.pl011.set_base_addr(osv_boot_info->uart_base);
+    }
     console::arch_early_console = console::aarch64_console.pl011;
     console::PL011_Console::active = true;
 }

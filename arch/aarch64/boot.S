@@ -294,18 +294,31 @@ ident_pt_l3_ttbr0:
         .quad ident_pt_l2_1_ttbr0 + 0x3 // Map 1GB-2GB one-to-one
         .quad ident_pt_l2_2_ttbr0 + 0x3 // Map 2GB-3GB one-to-one
         .quad ident_pt_l2_3_ttbr0 + 0x3 // Map 3GB-4GB one-to-one
+        // Map 4GB-63GB one-to-one with 1GB block descriptors (valid at this
+        // level). The 0-4GB range above keeps 2MB granularity for early device
+        // access; the rest only needs to make physical RAM reachable during
+        // early boot, before arch_setup_free_memory builds the linear map -
+        // guests with more than 4GB RAM place stacks/allocations up here and
+        // would otherwise fault on first touch.
+        index = 4
         .rept 59
-        .quad 0
+        .quad (index << 30) + 0x411
+        index = index + 1
         .endr
         .quad kernel_pt_l2_63_ttbr0 + 0x3 // Map 63GB-64GB -> 1GB-2GB
         .rept 448
         .quad 0
         .endr
 ident_pt_l2_0_ttbr0:
+        // The low 1GB is platform MMIO (GIC, UART, PCIe ECAM, ...) - RAM starts
+        // at 1GB on QEMU virt and AWS Graviton alike. Map it as Device memory
+        // (attr index 0 -> 0x401) rather than Normal cacheable (0x411): the
+        // early console writes the UART through this mapping, and cacheable
+        // MMIO drops/reorders those writes on real hardware (garbled output).
         index = 0
         offset = 0x00000000
         .rept 512
-        .quad offset + (index << 21) + 0x411
+        .quad offset + (index << 21) + 0x401
         index = index + 1
         .endr
 ident_pt_l2_1_ttbr0:

@@ -126,6 +126,14 @@ uefi_entry:
     mov $BOOT_CR0, %eax
     mov %rax, %cr0
 
+    # Switch to the kernel's own init stack before the stack-using lretq below.
+    # We arrived on the firmware's stack, which OSv's boot page tables (just
+    # mapped via CR3) only cover if it happens to live in the low 2 GiB they
+    # map - UEFI firmware on multi-GiB guests (e.g. AWS) places it higher, so
+    # the lretq's pushes would fault on an unmapped address. init_stack_top is
+    # in the kernel image (.bss), which the boot tables do map.
+    movabs $init_stack_top, %rsp
+
     # Reload CS and jump to the virtual entry now that our mapping is active
     # (virtual 0x40200000 -> physical 0x200000).
     pushq $0x8
