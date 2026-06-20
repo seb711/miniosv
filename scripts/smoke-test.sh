@@ -1,10 +1,17 @@
 #!/bin/bash
 #
-# Boot the UEFI kernel image (loader.efi) under QEMU + UEFI firmware and check
-# that it reaches its early serial banner. This is a smoke test of the whole
-# UEFI/ACPI boot path - firmware -> stub -> kernel premain - not a full test.
+# Boot the real bootable disk image (loader.img - a GPT/ESP raw image, exactly
+# what the public clouds ingest) under QEMU + UEFI firmware and check that it
+# reaches its early serial banner. This is a smoke test of the whole UEFI/ACPI
+# boot path - firmware -> stub -> kernel premain - not a full test.
 #
-# Usage: smoke-test.sh <x64|aarch64> <loader.efi> [timeout_seconds] [marker]
+# The image is attached as an NVMe disk (as on AWS Nitro) and the guest is given
+# >= 2 GiB of RAM on purpose: booting the vvfat ESP at 512 MiB - the old setup -
+# hid a whole class of bugs that only appear with a real GPT disk and multi-GiB
+# memory maps (hand-off structures placed high, the >1 GiB / >4 GiB mapping
+# paths, ExitBootServices on real firmware). Override the RAM with SMOKE_MEM.
+#
+# Usage: smoke-test.sh <x64|aarch64> <loader.img> [timeout_seconds] [marker]
 #
 # Passes when [marker] appears on the serial console (default: the kernel's
 # early "OSv " banner - i.e. it reached the kernel). CI passes the test-suite
@@ -14,10 +21,11 @@
 #
 set -euo pipefail
 
-arch="${1:?usage: smoke-test.sh <x64|aarch64> <loader.efi> [timeout] [marker]}"
-efi="${2:?missing path to loader.efi}"
+arch="${1:?usage: smoke-test.sh <x64|aarch64> <loader.img> [timeout] [marker]}"
+img="${2:?missing path to loader.img}"
 timeout_s="${3:-30}"
 marker="${4:-OSv }"
+mem="${SMOKE_MEM:-2048}"
 
 # First firmware candidate that exists, else empty. Always succeeds (returns 0)
 # so it is safe under `set -e` inside a command substitution.
@@ -25,13 +33,10 @@ pick() { for f in "$@"; do [ -f "$f" ] && { echo "$f"; break; }; done; return 0;
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-esp="$work/esp/EFI/BOOT"
-mkdir -p "$esp"
 log="$work/serial.log"
 
 case "$arch" in
 x64)
-    boot_name="BOOTX64.EFI"
     code="${OVMF_CODE:-$(pick /usr/share/OVMF/OVMF_CODE_4M.fd \
                               /usr/share/OVMF/OVMF_CODE.fd \
                               /usr/share/ovmf/OVMF_CODE.fd)}"
@@ -42,12 +47,13 @@ x64)
     machine=(-machine q35 -cpu max)
     ;;
 aarch64)
-    boot_name="BOOTAA64.EFI"
     code="${AAVMF_CODE:-$(pick /usr/share/AAVMF/AAVMF_CODE.fd \
                                /usr/share/qemu-efi-aarch64/QEMU_EFI.fd \
-                               /usr/share/edk2/aarch64/QEMU_EFI.fd)}"
+                               /usr/share/edk2/aarch64/QEMU_EFI.fd \
+                               "$HOME/.cache/aavmf/AAVMF_CODE.fd")}"
     vars="${AAVMF_VARS:-$(pick /usr/share/AAVMF/AAVMF_VARS.fd \
-                               /usr/share/qemu-efi-aarch64/QEMU_VARS.fd)}"
+                               /usr/share/qemu-efi-aarch64/QEMU_VARS.fd \
+                               "$HOME/.cache/aavmf/AAVMF_VARS.fd")}"
     qemu=qemu-system-aarch64
     # GICv3 + ACPI (QEMU virt provides ACPI tables; the firmware passes the
     # RSDP via the UEFI configuration table, which is what the kernel consumes).
@@ -61,6 +67,11 @@ esac
 
 if ! command -v "$qemu" >/dev/null 2>&1; then
     echo "smoke-test: $qemu not installed - skipping $arch smoke test." >&2
+    exit 3
+fi
+if [ ! -f "$img" ]; then
+    echo "smoke-test: disk image '$img' not found (build it with" >&2
+    echo "  'make arch=$arch $img'; it needs mtools + gdisk for mkuefi.sh)." >&2
     exit 3
 fi
 
@@ -79,30 +90,33 @@ if [ -z "${code:-}" ] || [ -z "${vars:-}" ]; then
     exit 3
 fi
 
-cp "$efi" "$esp/$boot_name"
-# pflash needs a writable copy of the variable store.
-varscopy="$work/vars.fd"
-cp "$vars" "$varscopy"
+# pflash needs a writable copy of the variable store. QEMU's aarch64 virt
+# pflash also requires the firmware images to be exactly 64 MiB; the typical
+# distro/AAVMF files already are, but pad copies defensively so an unpadded
+# QEMU_EFI works too.
+codecopy="$work/code.fd"; cp "$code" "$codecopy"
+varscopy="$work/vars.fd"; cp "$vars" "$varscopy"
+if [ "$arch" = aarch64 ]; then
+    truncate -s 64M "$codecopy"
+    truncate -s 64M "$varscopy"
+fi
 
-# QEMU's read-write vvfat ("fat:rw:") keeps its backing file under /var/tmp;
-# create it if the environment is missing it (some minimal images are).
-mkdir -p /var/tmp 2>/dev/null || true
-
-echo "smoke-test: $arch via $qemu (accel=$accel)"
+echo "smoke-test: $arch via $qemu (accel=$accel, ${mem} MiB, NVMe disk)"
 echo "  firmware: $code"
-echo "  booting:  $boot_name (timeout ${timeout_s}s)"
+echo "  booting:  $img (timeout ${timeout_s}s)"
 
-# -accel tcg so the test does not depend on KVM being available. OVMF/AAVMF
-# mirror the UEFI console to the serial port, so $log captures both the
-# firmware/stub messages and the kernel's COM/PL011 early-console output.
-# QEMU's own diagnostics go to qemu.out so failures (e.g. firmware/vvfat) show.
+# Boot the GPT/ESP image as an NVMe disk and let the firmware find the default
+# \EFI\BOOT\BOOT{X64,AA64}.EFI - the exact path AWS Nitro takes. OVMF/AAVMF
+# mirror the UEFI console to the serial port, so $log captures the firmware,
+# stub and kernel early-console output. QEMU diagnostics go to qemu.out.
 set +e
 timeout --foreground "$timeout_s" "$qemu" \
-    "${machine[@]}" -m 512 -accel "$accel" -no-reboot \
+    "${machine[@]}" -m "$mem" -accel "$accel" -no-reboot \
     -display none -vga none -nic none \
-    -drive "if=pflash,format=raw,readonly=on,file=$code" \
+    -drive "if=pflash,format=raw,readonly=on,file=$codecopy" \
     -drive "if=pflash,format=raw,file=$varscopy" \
-    -drive "format=raw,file=fat:rw:$work/esp" \
+    -drive "id=smokedisk,format=raw,if=none,file=$img" \
+    -device nvme,serial=smoke,drive=smokedisk \
     -serial "file:$log" >"$work/qemu.out" 2>&1
 set -e
 
