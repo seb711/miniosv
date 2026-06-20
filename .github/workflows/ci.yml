@@ -53,7 +53,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             cmake ninja-build python3 git ca-certificates wget gnupg lsb-release \
-            binutils linux-libc-dev qemu-utils \
+            binutils linux-libc-dev qemu-utils mtools gdisk \
             ${{ matrix.cross_pkgs }} ${{ matrix.qemu_pkg }} ${{ matrix.fw_pkg }}
           # clang 20: the runtimes are llvm-22 and must be built with a compiler
           # >= the source version. The runner ships clang 16/17/18 with the
@@ -100,7 +100,12 @@ jobs:
           key: llvm-${{ matrix.arch }}-${{ hashFiles('scripts/build-libcxx.sh', 'scripts/build-llvm-libc.sh', 'scripts/build-compiler-rt.sh') }}
 
       - name: Build test kernel
-        run: make app=tests arch=${{ matrix.arch }} -j"$(nproc)"
+        run: |
+          make app=tests arch=${{ matrix.arch }} -j"$(nproc)"
+          # Also build the bootable GPT/ESP disk image the smoke test boots as
+          # an NVMe disk (needs mtools + gdisk, installed above).
+          make app=tests arch=${{ matrix.arch }} \
+            build/release.${{ matrix.arch }}/loader.img
 
       - name: Dump toolchain build logs on failure
         if: failure()
@@ -115,11 +120,12 @@ jobs:
       - name: Run test suite under QEMU + UEFI
         run: |
           set -eux
-          # Boot the UEFI image (loader.efi) under QEMU + UEFI firmware (OVMF on
-          # x64, AAVMF on aarch64) and wait for the test driver's success line.
-          # smoke-test.sh exits non-zero if that marker never appears.
+          # Boot the real disk image (loader.img) as an NVMe disk under QEMU +
+          # UEFI firmware (OVMF on x64, AAVMF on aarch64) and wait for the test
+          # driver's success line. smoke-test.sh exits non-zero if that marker
+          # never appears.
           scripts/smoke-test.sh ${{ matrix.arch }} \
-            build/release.${{ matrix.arch }}/loader.efi \
+            build/release.${{ matrix.arch }}/loader.img \
             900 "OSv test application: SUCCESS" 2>&1 | tee run.log
           # Fail on an explicit FAILURE marker (case-sensitive, so it won't match
           # the "failures: 0" summary lines) or any non-zero failure count.

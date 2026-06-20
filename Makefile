@@ -186,12 +186,15 @@ links:
 	$(call very-quiet, ln -nsf $(notdir $(out)) $(outlink2))
 .PHONY: links
 
-# Boot the UEFI image under QEMU + UEFI firmware (OVMF for x64, AAVMF for
-# aarch64) and check it reaches the kernel's early banner. Override firmware
-# with OVMF_CODE/OVMF_VARS or AAVMF_CODE/AAVMF_VARS; SMOKE_TIMEOUT sets the
-# wait (default 30s). Exits non-zero if firmware/QEMU is missing or it fails.
-smoke-test: $(out)/loader.efi
-	scripts/smoke-test.sh $(arch) $(out)/loader.efi $(SMOKE_TIMEOUT)
+# Boot the real bootable disk image (loader.img) as an NVMe disk under QEMU +
+# UEFI firmware (OVMF for x64, AAVMF for aarch64) and check it reaches the
+# kernel's early banner. This exercises the actual GPT/ESP image the clouds
+# ingest, at >= 2 GiB RAM (override with SMOKE_MEM) - unlike the old vvfat-at-
+# 512 MiB path, which hid the high-memory boot bugs. Override firmware with
+# OVMF_CODE/OVMF_VARS or AAVMF_CODE/AAVMF_VARS; SMOKE_TIMEOUT sets the wait
+# (default 30s). Exits non-zero if firmware/QEMU is missing or it fails.
+smoke-test: $(out)/loader.img
+	scripts/smoke-test.sh $(arch) $(out)/loader.img $(SMOKE_TIMEOUT)
 .PHONY: smoke-test
 
 # Remember that "make clean" needs the same parameters that set $(out) in
