@@ -574,7 +574,7 @@ struct Collection {
     printCounter(headerOut, dataOut, name, stream.str(), addComma);
   }
 
-  void printReport(std::ostream &out, uint64_t normalizationConstant) {
+  void printReport(std::ostream &out, uint64_t normalizationConstant = 1) {
     std::stringstream header;
     std::stringstream data;
     printReport(header, data, normalizationConstant);
