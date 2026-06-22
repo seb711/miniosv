@@ -77,6 +77,7 @@
             ++ (with pkgs; [
               qemu
               gdb
+              awscli2
               (python3.withPackages (
                 ps: with ps; [
                   boto3
