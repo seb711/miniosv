@@ -12,26 +12,18 @@ import boto3
 
 BLOCK_SIZE = 524288  # 512 KiB
 MAX_WORKERS = 64
-
-# Map the requested architecture to an EC2 instance type to launch.
-#   aarch64 (Graviton) -> c7g.large
-#   x86_64             -> c7a.large
 INSTANCE_TYPES = {
-    "arm64": "c7g.large",
-    "aarch64": "c7g.large",
-    "x86_64": "c7a.large",
-    "x64": "c7a.large",
-    "amd64": "c7a.large",
+    "c7g.large": "arm64",
+    "c7a.large": "x86_64",
+
 }
 
-# register_image() only accepts these two architecture values.
-EC2_ARCH = {
-    "arm64": "arm64",
-    "aarch64": "arm64",
-    "x86_64": "x86_64",
-    "x64": "x86_64",
-    "amd64": "x86_64",
-}
+def aws_login() -> None:
+    if subprocess.run(
+        ["aws", "sts", "get-caller-identity", "--query", "Arn", "--output", "text"],
+        stderr=subprocess.DEVNULL
+    ).returncode != 0:
+        subprocess.run(["aws", "login", "--remote"])
 
 def convert_to_raw(src: str) -> tuple[str, bool]:
     ext = src.rsplit(".", 1)[-1].lower()
@@ -74,18 +66,13 @@ def upload_block_worker(ebs_client, snapshot_id, block_index, data, counters, co
 
 def main():
     if len(sys.argv) != 4:
-        print(f"Usage: {sys.argv[0]} <src> <region> <arch>")
-        print(f"  <arch> is one of: {', '.join(sorted(INSTANCE_TYPES))}")
+        print(f"Usage: {sys.argv[0]} <src> <region> <instance>")
+        print(f"  <instance> is one of: {', '.join(sorted(INSTANCE_TYPES))}")
         sys.exit(1)
 
-    src, region, arch = sys.argv[1], sys.argv[2], sys.argv[3]
+    aws_login()
 
-    arch_key = arch.lower()
-    if arch_key not in INSTANCE_TYPES:
-        print(f"Unsupported arch '{arch}'. Use one of: {', '.join(sorted(INSTANCE_TYPES))}")
-        sys.exit(1)
-    ec2_arch = EC2_ARCH[arch_key]
-    instance_type = INSTANCE_TYPES[arch_key]
+    src, region, instance = sys.argv[1], sys.argv[2], sys.argv[3]
 
     if src.endswith(".raw"):
         virtual_size = os.path.getsize(src)
@@ -175,7 +162,7 @@ def main():
     ami_response = ec2_client.register_image(
         Name=ami_name,
         Description=f"MiniOSv image created from {src}",
-        Architecture=ec2_arch,
+        Architecture=INSTANCE_TYPES[instance],
         RootDeviceName="/dev/xvda",
         BlockDeviceMappings=[
             {
@@ -203,10 +190,10 @@ def main():
     print("Waiting for AMI to become 'available'...")
     ec2_client.get_waiter('image_available').wait(ImageIds=[ami_id])
 
-    print(f"Launching {instance_type} instance from {ami_id}...")
+    print(f"Launching {instance} instance from {ami_id}...")
     run_response = ec2_client.run_instances(
         ImageId=ami_id,
-        InstanceType=instance_type,
+        InstanceType=instance,
         MinCount=1,
         MaxCount=1,
         TagSpecifications=[
@@ -230,7 +217,7 @@ def main():
     inst = desc["Reservations"][0]["Instances"][0]
     public_dns = inst.get("PublicDnsName") or "(none)"
     public_ip = inst.get("PublicIpAddress") or "(none)"
-    print(f"Instance running: {instance_id} ({instance_type})")
+    print(f"Instance running: {instance_id} ({instance})")
     print(f"  Public DNS: {public_dns}")
     print(f"  Public IP:  {public_ip}")
 
