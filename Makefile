@@ -171,14 +171,10 @@ quiet = $(if $V, $1, @echo " $2"; $1)
 very-quiet = $(if $V, $1, @$1)
 
 # Both architectures boot via UEFI: the kernel ELF is wrapped into an EFI
-# application (loader.efi). 'make $(out)/loader.img' additionally builds a
-# bootable GPT/ESP disk image around it (needs mtools).
-ifeq ($(arch),x64)
-all: $(out)/loader.efi links
-endif
-ifeq ($(arch),aarch64)
-all: $(out)/loader.efi links
-endif
+# application (loader.efi), then a bootable GPT/ESP disk image (loader.img) is
+# built around it - the artifact the clouds ingest and that scripts/run.py and
+# the smoke test boot. Building loader.img needs mtools + gdisk (see mkuefi.sh).
+all: $(out)/loader.img links
 .PHONY: all
 
 links:
