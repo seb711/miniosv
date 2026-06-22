@@ -3,6 +3,10 @@ build/
 .\#*
 \#*\#
 
+.venv
+# cloud-deploy runtime state (snapshot/image/vm ids), never tracked
+/aws/
+/gcp/
 .gradle
 tags
 TAGS
