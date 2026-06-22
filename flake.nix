@@ -58,6 +58,7 @@
           ninja
           git
           ctags
+          (python3.withPackages (ps: [ ps.pyyaml ]))
         ];
 
       in
@@ -71,23 +72,25 @@
             ]);
         };
 
-        devShells.aws = pkgs.mkShell {
-          nativeBuildInputs =
-            buildDeps
-            ++ (with pkgs; [
+        devShells.aws =
+          with pkgs;
+          mkShell {
+            nativeBuildInputs = [
               qemu
               gdb
               awscli2
               gptfdisk
               (python3.withPackages (
                 ps: with ps; [
+                  awscrt
                   boto3
                   botocore
-                  awscrt
+                  pyyaml
                 ]
               ))
-            ]);
-        };
+            ]
+            ++ buildDeps;
+          };
       }
     );
 }
