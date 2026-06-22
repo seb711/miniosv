@@ -78,6 +78,7 @@
               qemu
               gdb
               awscli2
+              gptfdisk
               (python3.withPackages (
                 ps: with ps; [
                   boto3
