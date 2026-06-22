@@ -15,7 +15,6 @@ MAX_WORKERS = 64
 INSTANCE_TYPES = {
     "c7g.large": "arm64",
     "c7a.large": "x86_64",
-
 }
 
 def aws_login() -> None:
