@@ -107,82 +107,6 @@ struct page_range {
 void free_initial_memory_range(void* addr, size_t size);
 void enable_debug_allocator();
 
-extern bool tracker_enabled;
-
-enum class pressure { RELAXED, NORMAL, PRESSURE, EMERGENCY };
-
-class shrinker {
-public:
-    explicit shrinker(std::string name);
-    virtual ~shrinker() {}
-    virtual size_t request_memory(size_t n, bool hard) = 0;
-    std::string name() { return _name; };
-
-    bool should_shrink(ssize_t target) { return _enabled && (target > 0); }
-
-    void deactivate_shrinker();
-    void activate_shrinker();
-private:
-    std::string _name;
-    int _enabled = 1;
-};
-
-class reclaimer_waiters {
-public:
-    // return true if there were no waiters or if we could wait some. Returns false
-    // if there were waiters but we could not wake any of them.
-    bool wake_waiters();
-    void wait(size_t bytes);
-    bool has_waiters() { return !_waiters.empty(); }
-private:
-    struct wait_node: boost::intrusive::list_base_hook<> {
-        sched::thread* owner;
-        size_t bytes;
-    };
-    // Protected by mempool.cc's free_page_ranges_lock
-    boost::intrusive::list<wait_node,
-                          boost::intrusive::base_hook<wait_node>,
-                          boost::intrusive::constant_time_size<false>> _waiters;
-};
-
-void wake_reclaimer();
-
-class reclaimer {
-public:
-    reclaimer ();
-    void wake();
-    void wait_for_memory(size_t mem);
-    void wait_for_minimum_memory();
-
-    friend void start_reclaimer();
-    friend class shrinker;
-    friend class reclaimer_waiters;
-private:
-    void _do_reclaim();
-    void _shrinker_loop(size_t target, std::function<bool ()> hard);
-    // We could just check if the semaphore's wait_list is empty. But since we
-    // don't control the internals of the primitives we use for the
-    // implementation of semaphore, we are concerned that unlocked access may
-    // mean mayhem. Locked access, OTOH, will possibly deadlock us if someone allocates
-    // memory locked, and then we try to verify if we have waiters and need to hold the
-    // same lock
-    //std::atomic<int> _waiters_count = { 0 };
-    //bool _has_waiters() { return _waiters_count.load() != 0; }
-
-    reclaimer_waiters _oom_blocked; // Callers are blocked due to lack of memory
-    condvar _blocked;     // The reclaimer itself is blocked waiting for pressure condition
-    std::unique_ptr<sched::thread> _thread;
-
-    std::vector<shrinker *> _shrinkers;
-    mutex _shrinkers_mutex;
-    unsigned int _active_shrinkers = 0;
-    bool _can_shrink();
-
-    pressure pressure_level();
-    ssize_t bytes_until_normal(pressure curr);
-    ssize_t bytes_until_normal() { return bytes_until_normal(pressure_level()); }
-};
-
 const unsigned page_ranges_max_order = 16;
 
 namespace stats {
@@ -283,18 +207,6 @@ virt_to_phys(const phys_ptr<T>& p)
 {
     return mmu::virt_to_phys_dynamic_phys(p.get());
 }
-
-
-extern __thread unsigned emergency_alloc_level;
-
-class reclaimer_lock_type {
-public:
-    static void lock() { ++emergency_alloc_level; }
-    static void unlock() { --emergency_alloc_level; }
 };
-
-/// Hold to mark self as a memory reclaimer
-extern reclaimer_lock_type reclaimer_lock;
-}
 
 #endif
