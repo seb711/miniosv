@@ -346,361 +346,42 @@ int sigwait(const sigset_t *set, int *sig)
 OSV_LIBC_API
 int kill(pid_t pid, int sig)
 {
-    // OSv only implements one process, whose pid is getpid().
-    // Sending a signal to pid 0 or -1 is also fine, as it will also send a
-    // signal to the same single process.
-    if (pid != getpid() && pid != 0 && pid != -1) {
-        errno = ESRCH;
-        return -1;
-    }
-    if (sig == 0) {
-        // kill() with signal 0 doesn't cause an actual signal 0, just
-        // testing the pid.
-        return 0;
-    }
-    if (sig < 0 || sig > (int)nsignals) {
-        errno = EINVAL;
-        return -1;
-    }
-    unsigned sigidx = sig - 1;
-    if (is_sig_dfl(signal_actions[sigidx])) {
-        // Our default is to power off.
-        debugf("Uncaught signal %d (\"%s\"). Powering off.\n",
-                sig, strsignal(sig));
-        osv::poweroff();
-    } else if(!is_sig_ign(signal_actions[sigidx])) {
-        if ((pid == OSV_PID) || (pid == 0) || (pid == -1)) {
-            // This semantically means signalling everybody. So we will signal
-            // every thread that is waiting for this.
-            //
-            // The thread does not expect the signal handler to still be delivered,
-            // so if we wake up some folks (usually just the one waiter), we should
-            // not continue processing.
-            if (wake_up_signal_waiters(sig)) {
-                return 0;
-            }
-        }
-
-        // User-defined signal handler. Run it in a new thread. This isn't
-        // very Unix-like behavior, but if we assume that the program doesn't
-        // care which of its threads handle the signal - why not just create
-        // a completely new thread and run it there...
-        // The newly created thread is tagged as an application one
-        // to make sure that user provided signal handler code has access to all
-        // the features like syscall stack which matters for Golang apps
-        const auto sa = signal_actions[sigidx];
-        auto t = sched::thread::make([=] {
-            if (sa.sa_flags & SA_RESETHAND) {
-                signal_actions[sigidx].sa_flags = 0;
-                signal_actions[sigidx].sa_handler = SIG_DFL;
-            }
-            if (sa.sa_flags & SA_SIGINFO) {
-                // FIXME: proper second (siginfo) and third (context) arguments (See example in call_signal_handler)
-                sa.sa_sigaction(sig, nullptr, nullptr);
-            } else {
-                sa.sa_handler(sig);
-            }
-        }, sched::thread::attr().detached().stack(65536).name("signal_handler"),
-                false, true);
-        t->start();
-    }
-    return 0;
+  return -1;     
 }
 
 OSV_LIBC_API
 int pause(void) {
-    try
-    {
-        sched::thread::wait_until_interruptible([] {return false;});
-    }
-    catch (int e)
-    {
-        assert(e == EINTR);
-    }
-
-    errno = EINTR;
-    return -1;
-}
-
-// Our alarm() implementation has one system-wide alarm-thread, which waits
-// for the single timer (or instructions to change the timer) and sends
-// SIGALRM when the timer expires.
-// alarm() is an archaic Unix API and didn't age well. It should should never
-// be used in new programs.
-
-class itimer {
-public:
-    explicit itimer(int signum, const char *name);
-    void cancel_this_thread();
-    int set(const struct itimerval *new_value,
-        struct itimerval *old_value);
-    int get(struct itimerval *curr_value);
-
-private:
-    void work();
-
-    // Fllowing functions doesn't take mutex, caller has responsibility
-    // to take it
-    void cancel();
-    void set_interval(const struct timeval *tv);
-    void set_value(const struct timeval *tv);
-    void get_interval(struct timeval *tv);
-    void get_value(struct timeval *tv);
-
-    mutex _mutex;
-    condvar _cond;
-    sched::thread *_alarm_thread;
-    sched::thread *_owner_thread = nullptr;
-    const osv::clock::uptime::time_point _no_alarm {};
-    osv::clock::uptime::time_point _due = _no_alarm;
-    std::chrono::nanoseconds _interval;
-    int _signum;
-    bool _started = false;
-};
-
-static itimer itimer_real(SIGALRM, "itimer-real");
-static itimer itimer_virt(SIGVTALRM, "itimer-virt");
-
-itimer::itimer(int signum, const char *name)
-    : _alarm_thread(sched::thread::make([&] { work(); },
-                    sched::thread::attr().name(name)))
-    , _signum(signum)
-{
-}
-
-void itimer::cancel_this_thread()
-{
-    if(_owner_thread == sched::thread::current()) {
-        WITH_LOCK(_mutex) {
-            if(_owner_thread == sched::thread::current()) {
-                cancel();
-            }
-        }
-    }
-}
-
-int itimer::set(const struct itimerval *new_value,
-    struct itimerval *old_value)
-{
-    if (!new_value)
-        return EINVAL;
-
-    WITH_LOCK(_mutex) {
-        if (old_value) {
-            get_interval(&old_value->it_interval);
-            get_value(&old_value->it_value);
-        }
-        cancel();
-        if (new_value->it_value.tv_sec || new_value->it_value.tv_usec) {
-            set_interval(&new_value->it_interval);
-            set_value(&new_value->it_value);
-        }
-     }
-    return 0;
-}
-
-int itimer::get(struct itimerval *curr_value)
-{
-    WITH_LOCK(_mutex) {
-        get_interval(&curr_value->it_interval);
-        get_value(&curr_value->it_value);
-    }
-    return 0;
-}
- 
-void itimer::work()
-{
-    sched::timer tmr(*sched::thread::current());
-    while (true) {
-        WITH_LOCK(_mutex) {
-            if (_due != _no_alarm) {
-                tmr.set(_due);
-                _cond.wait(_mutex, &tmr);
-                if (tmr.expired()) {
-                    if (_interval != decltype(_interval)::zero()) {
-                        auto now = osv::clock::uptime::now();
-                        _due = now + _interval;
-                    } else {
-                        _due = _no_alarm;
-                    }
-                    kill(getpid(), _signum);
-                    if(!is_sig_ign(signal_actions[_signum - 1])) {
-                        _owner_thread->interrupted(true);
-                    }
-                } else {
-#if CONF_lazy_stack_invariant
-                    assert(!sched::thread::current()->is_app());
-#endif
-                    tmr.cancel();
-                }
-            } else {
-                _cond.wait(_mutex);
-            }
-        }
-    }
-}
-
-// alarm() wants to know which thread ran it, so when the alarm happens it
-// can interrupt a system call sleeping on this thread. But there's a special
-// case: if alarm() is called in a signal handler (which currently in OSv is
-// a separate thread), this probably means the alarm was re-set after the
-// previous alarm expired. In that case we obviously don't want to remember
-// the signal handler thread (which will go away almost immediately). What
-// we'll do in the is_signal_handler() case is to just keep remembering the
-// old owner thread, hoping it is still relevant...
-static bool is_signal_handler(){
-    // must be the same name used in kill() above
-    return sched::thread::current()->name() == "signal_handler";
-}
-
-void itimer::cancel()
-{
-    _due = _no_alarm;
-    _interval = decltype(_interval)::zero();
-    if (!is_signal_handler()) {
-        _owner_thread = nullptr;
-    }
-    _cond.wake_one();
-}
-
-void itimer::set_value(const struct timeval *tv)
-{
-    auto now = osv::clock::uptime::now();
-
-    if (!_started) {
-        _alarm_thread->start();
-        _started = true;
-    }
-    _due = now + tv->tv_sec * 1_s + tv->tv_usec * 1_us;
-    if (!is_signal_handler()) {
-        _owner_thread = sched::thread::current();
-    }
-    _cond.wake_one();
-}
-
-void itimer::set_interval(const struct timeval *tv)
-{
-    _interval = tv->tv_sec * 1_s + tv->tv_usec * 1_us;
-}
-
-void itimer::get_value(struct timeval *tv)
-{
-    if (_due == _no_alarm) {
-        tv->tv_sec = tv->tv_usec = 0;
-    } else {
-        auto now = osv::clock::uptime::now();
-        fill_tv(_due - now, tv);
-    }
-}
-
-void itimer::get_interval(struct timeval *tv)
-{
-    fill_tv(_interval, tv);
-}
-
-void cancel_this_thread_alarm()
-{
-    itimer_real.cancel_this_thread();
-    itimer_virt.cancel_this_thread();
+  return -1;     
 }
 
 OSV_LIBC_API
 unsigned int alarm(unsigned int seconds)
 {
-    unsigned int ret;
-    struct itimerval old_value{}, new_value{};
-
-    new_value.it_value.tv_sec = seconds;
-
-    setitimer(ITIMER_REAL, &new_value, &old_value);
-
-    ret = old_value.it_value.tv_sec;
-
-    if ((ret == 0 && old_value.it_value.tv_usec) ||
-        old_value.it_value.tv_usec >= 500000)
-        ret++;
-
-    return ret;
+   return -1; 
 }
 
 extern "C" OSV_LIBC_API
 int setitimer(int which, const struct itimerval *new_value,
     struct itimerval *old_value)
 {
-    switch (which) {
-    case ITIMER_REAL:
-        return itimer_real.set(new_value, old_value);
-    case ITIMER_VIRTUAL:
-        return itimer_virt.set(new_value, old_value);
-    default:
-        return EINVAL;
-    }
+  return -1;     
 }
 
 extern "C" OSV_LIBC_API
 int getitimer(int which, struct itimerval *curr_value)
 {
-    switch (which) {
-    case ITIMER_REAL:
-        return itimer_real.get(curr_value);
-    case ITIMER_VIRTUAL:
-        return itimer_virt.get(curr_value);
-    default:
-        return EINVAL;
-    }
+    return -1; 
 }
-
-// A per-thread stack set with sigaltstack() to be used by
-// build_signal_frame() when handling synchronous signals, most
-// importantly SIGSEGV (asynchronous signals run in a new thread in OSv,
-// so this alternative stack is irrelevant).  signal_stack_begin is the
-// beginning of stack region, and signal_stack_size is the size of this
-// region (we need to know both when stacks grow down).
-// The stack region is not guaranteed to be specially aligned, so when
-// build_signal_frame() uses it it might need to further snipped this region.
-// If signal_stack == nullptr, there is no alternative signal stack for
-// this thread.
-static __thread void* signal_stack_begin;
-static __thread size_t signal_stack_size;
 
 OSV_LIBC_API
 int sigaltstack(const stack_t *ss, stack_t *oss)
 {
-    if (oss) {
-        if (signal_stack_begin) {
-            // FIXME: we are supposed to set SS_ONSTACK if a signal
-            // handler is currently running on this stack.
-            oss->ss_flags = 0;
-            oss->ss_sp = signal_stack_begin;
-            oss->ss_size = signal_stack_size;
-        } else {
-            oss->ss_flags = SS_DISABLE;
-        }
-    }
-    if (ss == nullptr) {
-        // sigaltstack may be used with ss==nullptr for querying the
-        // current state without changing it.
-        return 0;
-    }
-    // FIXME: we're are supposed to check if a signal handler is currently
-    // running on this stack, and if it is forbid changing it (EPERM).
-    if (ss->ss_flags & SS_DISABLE) {
-        signal_stack_begin = nullptr;
-    } else if (ss->ss_flags != 0) {
-        errno = EINVAL;
-        return -1;
-    } else {
-        signal_stack_begin = ss->ss_sp;
-        signal_stack_size = ss->ss_size;
-    }
-    return 0;
+    return -1;
 }
 
 extern "C" OSV_LIBC_API
 int signalfd(int fd, const sigset_t *mask, int flags)
 {
-    WARN_STUBBED();
-    errno = ENOSYS;
     return -1;
 }
 
@@ -708,20 +389,5 @@ extern "C" OSV_LIBC_API
 int sigwaitinfo(const sigset_t *__restrict mask,
                            siginfo_t *__restrict si)
 {
-    int signo;
-
-    int ret = sigwait(mask, &signo);
-
-    if (si) {
-        memset(si, 0, sizeof(*si));
-        si->si_signo = signo;
-        si->si_errno = ret;
-    }
-
-    if (ret) {
-        errno = ret;
-        return -1;
-    }
-
-    return signo;
+    return -1; 
 }
