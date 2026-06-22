@@ -56,7 +56,6 @@
           binutils
           cmake
           ninja
-          (python3.withPackages (ps: [ ps.pyyaml ]))
           git
           ctags
         ];
@@ -69,6 +68,22 @@
             ++ (with pkgs; [
               qemu
               gdb
+            ]);
+        };
+
+        devShells.aws = pkgs.mkShell {
+          nativeBuildInputs =
+            buildDeps
+            ++ (with pkgs; [
+              qemu
+              gdb
+              (python3.withPackages (
+                ps: with ps; [
+                  boto3
+                  botocore
+                  awscrt
+                ]
+              ))
             ]);
         };
       }
