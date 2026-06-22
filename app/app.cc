@@ -11,9 +11,18 @@
 
 #include <cstdio>
 #include <osv/power.hh>
+#include <osv/uperf.hh>
 
 extern "C" void osv_app_main()
 {
+    // Threads need to be pinned to core
+    uperf::Collection bench;
+    bench.startCounters();
+
     printf("Hello, world from OSv!\n");
+
+    bench.stopCounters();
+    bench.printReport(std::cout);
+
     osv::poweroff();
 }
