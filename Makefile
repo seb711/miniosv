@@ -605,6 +605,7 @@ objects += arch/x64/dmi.o
 objects += arch/x64/ioapic.o
 objects += arch/x64/apic.o
 objects += arch/x64/apic-clock.o
+objects += arch/x64/hyperv-clock.o
 endif # x64
 
 objects += core/spinlock.o

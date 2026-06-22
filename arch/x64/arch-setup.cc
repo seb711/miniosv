@@ -28,6 +28,12 @@
 // by start64 in boot.S.
 osv::boot_info* osv_boot_info;
 
+// Wall-clock time (ns since the Unix epoch) at boot, from the UEFI firmware's
+// GetTime() captured by the stub. Used as the wall-clock base by time sources
+// that have no paravirtual wall clock of their own (e.g. the Hyper-V clock);
+// 0 when the firmware did not report a time. Mirrors the aarch64 global.
+u64 osv_boot_unixtime_ns;
+
 void setup_temporary_phys_map()
 {
     // duplicate 1:1 mapping into phys_mem
@@ -97,9 +103,10 @@ extern boot_time_chart boot_time;
 
 void arch_setup_free_memory()
 {
+    extern u64 kernel_vm_shift;
     static ulong edata, edata_phys;
     asm ("movl $.edata, %0" : "=rm"(edata));
-    edata_phys = edata - OSV_KERNEL_VM_SHIFT;
+    edata_phys = edata - kernel_vm_shift;
 
     // Copy the UEFI memory map out of low RAM before we touch the page tables.
     snapshot_memmap();
@@ -154,9 +161,12 @@ void arch_setup_free_memory()
     // is loaded in physical memory - elf_phys_start - and
     // where it is linked to start in virtual memory - elf_start
     static mmu::phys elf_phys_start = reinterpret_cast<mmu::phys>(elf_header);
-    // There is simple invariant between elf_phys_start and elf_start
-    // as expressed by the assignment below
-    elf_start = reinterpret_cast<void*>(elf_phys_start + OSV_KERNEL_VM_SHIFT);
+    // Publish the kernel image's physical base for the phys/virt helpers in
+    // core/mmu.cc (the kernel is loaded at a firmware-chosen base, not a fixed
+    // one). There is a simple invariant between elf_phys_start and elf_start as
+    // expressed by the assignment below.
+    mmu::elf_phys_start = reinterpret_cast<void*>(elf_phys_start);
+    elf_start = reinterpret_cast<void*>(elf_phys_start + kernel_vm_shift);
     elf_size = edata_phys - elf_phys_start;
     mmu::linear_map(elf_start, elf_phys_start, elf_size, "kernel", OSV_KERNEL_BASE);
     // now that we have some free memory, we can start mapping the rest
@@ -215,6 +225,11 @@ void arch_init_premain()
     // The UEFI stub passes the ACPI RSDP it read from the firmware config table.
     acpi::pvh_rsdp_paddr = osv_boot_info->acpi_rsdp;
 #endif
+
+    // Publish the firmware wall-clock base before the clock constructors run
+    // (this runs in premain, ahead of the .init_array). Set it for both arches
+    // here; the Hyper-V clock uses it as its wall-clock base.
+    osv_boot_unixtime_ns = osv_boot_info->boot_unixtime_ns;
 
     disable_pic();
 }

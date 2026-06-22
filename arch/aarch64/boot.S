@@ -309,6 +309,14 @@ ident_pt_l3_ttbr0:
         .rept 448
         .quad 0
         .endr
+// ident_pt_l2_0_ttbr0 .. ident_pt_l2_3_ttbr0 are four contiguous 512-entry L2
+// tables covering physical 0-4 GiB in 2 MiB blocks (entry i maps i*2MiB). Made
+// global so the early C++ (uefi_memory_setup) can re-mark the blocks that are
+// actually RAM as Normal cacheable - the static map below assumes the low 1 GiB
+// is pure MMIO (true on QEMU/AWS/GCP), which is wrong on Azure where RAM lives
+// in the low 1 GiB.
+.globl ident_pt_l2_0_ttbr0
+.hidden ident_pt_l2_0_ttbr0
 ident_pt_l2_0_ttbr0:
         // The low 1GB is platform MMIO (GIC, UART, PCIe ECAM, ...) - RAM starts
         // at 1GB on QEMU virt and AWS Graviton alike. Map it as Device memory

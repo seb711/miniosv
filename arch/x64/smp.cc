@@ -29,6 +29,11 @@ extern "C" { void smp_main(void); }
 extern u32 smpboot_cr0, smpboot_cr4;
 extern u64 smpboot_efer, smpboot_cr3;
 extern init_stack* smp_stack_free;
+// Physical addresses the AP trampoline needs before paging is on. The kernel is
+// loaded at a firmware-chosen base, so these are resolved at runtime rather than
+// from the build-time OSV_KERNEL_VM_SHIFT (see arch/x64/boot.S).
+extern u32 smpboot_gdt_base, smpboot_boot_cr3;
+extern char gdt[], ident_pt_l4[];
 
 extern char smpboot[], smpboot_end[];
 
@@ -211,6 +216,8 @@ void smp_init()
     smpboot_cr4 = read_cr4();
     smpboot_efer = rdmsr(msr::IA32_EFER);
     smpboot_cr3 = read_cr3();
+    smpboot_gdt_base = mmu::virt_to_phys(gdt);
+    smpboot_boot_cr3 = mmu::virt_to_phys(ident_pt_l4);
     memcpy(mmu::phys_to_virt(0), smpboot, smpboot_end - smpboot);
 }
 

@@ -57,6 +57,31 @@ void __attribute__((constructor(init_prio::dtb))) uefi_memory_setup()
     auto mm = reinterpret_cast<osv::boot_memmap_entry*>(bi->memmap_addr);
     u64 kbase = bi->kernel_phys_base;
 
+    // Re-mark the boot identity map: any usable RAM below 4 GiB must be Normal
+    // cacheable, not Device. The static map in boot.S marks the low 1 GiB Device
+    // because on QEMU/AWS/GCP that range is pure MMIO and RAM starts at 1 GiB -
+    // but Azure places RAM in the low 1 GiB, and running RAM (atomics, unaligned
+    // access) through a Device mapping faults. ident_pt_l2_0_ttbr0 is the base
+    // of four contiguous 512-entry L2 tables (entry i maps physical i*2 MiB over
+    // 0-4 GiB); rewrite the blocks covered by usable RAM to Normal (attr index
+    // 4 = 0x411), leaving MMIO blocks Device. This runs before any heap/atomic
+    // use (init_prio::dtb, the first post-banner constructor) and while we are
+    // still on the boot page tables, so the tables are writable.
+    extern u64 ident_pt_l2_0_ttbr0[];
+    constexpr u64 BLOCK = 0x200000;            // 2 MiB
+    constexpr u64 NR_BLOCKS_4G = 0x100000000ull / BLOCK;  // 2048
+    for (u32 i = 0; i < bi->memmap_count; i++) {
+        if (mm[i].type != osv::boot_mem_type::usable)
+            continue;
+        u64 first = mm[i].addr / BLOCK;
+        u64 last = (mm[i].addr + mm[i].size + BLOCK - 1) / BLOCK;  // exclusive
+        if (last > NR_BLOCKS_4G)
+            last = NR_BLOCKS_4G;
+        for (u64 b = first; b < last; b++)
+            ident_pt_l2_0_ttbr0[b] = (b * BLOCK) | 0x411;  // Normal cacheable block
+    }
+    mmu::flush_tlb_all();
+
     // mem_addr is the 2MB-aligned base the boot page tables map the kernel
     // window onto. The UEFI stub loaded the kernel here with AllocatePages,
     // which splits the surrounding RAM into several map entries, so we take the
@@ -243,9 +268,20 @@ static void __attribute__((constructor(init_prio::gic))) init_gic_acpi()
         abort("arch-setup: no MADT table - cannot locate the GIC.\n");
     }
 
-    u64 gicd = 0, gicr = 0, gits = 0, gicc_cpuif = 0;
-    size_t gicr_len = 0;
+    u64 gicd = 0, gits = 0, gicc_cpuif = 0;
     u8 version = 0;
+
+    // Collect redistributor regions in both forms the MADT may use: contiguous
+    // GICR discovery ranges (one subtable, many frames - QEMU/AWS) and per-CPU
+    // gicr_base_address in each GICC entry (one frame each - Azure). Keep them
+    // separate and prefer the GICR subtables; fall back to the GICC form only
+    // when no GICR subtable is present (the two are mutually exclusive in
+    // practice, and a system using GICR subtables sets gicr_base_address to 0).
+    mmu::phys gicr_base[MAX_GICR_REGIONS];
+    size_t    gicr_len[MAX_GICR_REGIONS];
+    int       nr_gicr = 0;
+    mmu::phys gicc_redist_base[MAX_GICR_REGIONS];
+    int       nr_gicc_redist = 0;
 
     auto subtable = reinterpret_cast<const char*>(madt + 1);
     auto madt_end = reinterpret_cast<const char*>(madt) + madt->header.length;
@@ -260,8 +296,11 @@ static void __attribute__((constructor(init_prio::gic))) init_gic_acpi()
         }
         case acpi::MADT_GICR: {
             auto r = reinterpret_cast<const acpi::madt_gicr*>(s);
-            gicr = r->discovery_range_base_address;
-            gicr_len = r->discovery_range_length;
+            if (nr_gicr < MAX_GICR_REGIONS) {
+                gicr_base[nr_gicr] = r->discovery_range_base_address;
+                gicr_len[nr_gicr] = r->discovery_range_length;
+                nr_gicr++;
+            }
             break;
         }
         case acpi::MADT_GIC_ITS: {
@@ -271,14 +310,13 @@ static void __attribute__((constructor(init_prio::gic))) init_gic_acpi()
         }
         case acpi::MADT_GICC: {
             auto c = reinterpret_cast<const acpi::madt_gicc*>(s);
-            // GICv2 takes the CPU interface base from here; GICv3 may publish
-            // the per-cpu redistributor here instead of in a GICR subtable.
+            // GICv2 takes the CPU interface base from here; GICv3 publishes a
+            // per-cpu redistributor here when there is no GICR subtable.
             if (!gicc_cpuif) {
                 gicc_cpuif = c->physical_base_address;
             }
-            if (!gicr && c->gicr_base_address) {
-                gicr = c->gicr_base_address;
-                gicr_len = 0x20000;
+            if (c->gicr_base_address && nr_gicc_redist < MAX_GICR_REGIONS) {
+                gicc_redist_base[nr_gicc_redist++] = c->gicr_base_address;
             }
             break;
         }
@@ -289,13 +327,23 @@ static void __attribute__((constructor(init_prio::gic))) init_gic_acpi()
     }
 
     // The MADT carries base addresses but not region sizes; use the
-    // architectural defaults (the GICR length does come from the MADT).
+    // architectural defaults (the GICR discovery-range length comes from the
+    // MADT; per-CPU GICC redistributors are one 0x20000 frame each).
     constexpr size_t GICD_LEN = 0x10000;
     constexpr size_t GITS_LEN = 0x20000;
+    constexpr size_t GICR_FRAME_LEN = 0x20000;
 
-    if (version == 3 || gicr) {
-        gic::gic = new gic::gic_v3_driver(gicd, GICD_LEN, gicr, gicr_len,
-                                          gits, gits ? GITS_LEN : 0);
+    if (nr_gicr == 0) {
+        for (int i = 0; i < nr_gicc_redist; i++) {
+            gicr_base[i] = gicc_redist_base[i];
+            gicr_len[i] = GICR_FRAME_LEN;
+        }
+        nr_gicr = nr_gicc_redist;
+    }
+
+    if (version == 3 || nr_gicr) {
+        gic::gic = new gic::gic_v3_driver(gicd, GICD_LEN, gicr_base, gicr_len,
+                                          nr_gicr, gits, gits ? GITS_LEN : 0);
     } else if (gicd && gicc_cpuif) {
         gic::gic = new gic::gic_v2_driver(gicd, GICD_LEN, gicc_cpuif, 0x2000, 0, 0);
     } else {
