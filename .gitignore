@@ -36,3 +36,4 @@ compile_commands.json
 downloaded_packages
 .firecracker
 external/llvm-project/
+aws

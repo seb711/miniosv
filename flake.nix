@@ -6,19 +6,25 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
-    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (system:
+  outputs =
+    {
+      self,
+      nixpkgs,
+      flake-utils,
+    }:
+    flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" ] (
+      system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
         llvmPkgs = pkgs.llvmPackages_20;
 
-        rtArch   = if system == "x86_64-linux" then "x86_64" else "aarch64";
+        rtArch = if system == "x86_64-linux" then "x86_64" else "aarch64";
         rtTriple = "${rtArch}-unknown-linux-gnu";
 
         # nixpkgs splits clang into clang-unwrapped (binary) + clang-unwrapped.lib
         # (resource-dir headers) + compiler-rt (builtins).  clang 20 expects all
         # three to live under a single -resource-dir root, so we merge them here.
-        clangResourceDir = pkgs.runCommand "clang-20-resource-dir" {} ''
+        clangResourceDir = pkgs.runCommand "clang-20-resource-dir" { } ''
           mkdir -p $out/include
           cp -r ${llvmPkgs.clang-unwrapped.lib}/lib/clang/20/include/. $out/include/
 
@@ -35,7 +41,7 @@
           fi
         '';
 
-        clang   = pkgs.writeShellScriptBin "clang"   ''
+        clang = pkgs.writeShellScriptBin "clang" ''
           exec ${llvmPkgs.clang-unwrapped}/bin/clang   -resource-dir ${clangResourceDir} "$@"
         '';
         clangPP = pkgs.writeShellScriptBin "clang++" ''
@@ -50,14 +56,36 @@
           binutils
           cmake
           ninja
-          (python3.withPackages (ps: [ ps.pyyaml ]))
           git
           ctags
         ];
 
-      in {
+      in
+      {
         devShells.default = pkgs.mkShell {
-          nativeBuildInputs = buildDeps ++ (with pkgs; [ qemu gdb ]);
+          nativeBuildInputs =
+            buildDeps
+            ++ (with pkgs; [
+              qemu
+              gdb
+            ]);
+        };
+
+        devShells.aws = pkgs.mkShell {
+          nativeBuildInputs =
+            buildDeps
+            ++ (with pkgs; [
+              qemu
+              gdb
+              awscli2
+              (python3.withPackages (
+                ps: with ps; [
+                  boto3
+                  botocore
+                  awscrt
+                ]
+              ))
+            ]);
         };
       }
     );
