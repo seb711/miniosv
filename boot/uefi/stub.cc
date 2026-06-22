@@ -29,13 +29,11 @@
 #include "efi.hh"
 #include <osv/boot-info.hh>
 
-// The kernel is linked at a fixed virtual base and loaded at a fixed physical
-// base; the constant difference (OSV_KERNEL_VM_SHIFT, supplied by the build)
-// lets the stub place each segment without relying on ELF p_paddr, which the
-// aarch64 (position-independent) link does not set usefully.
-#ifndef OSV_KERNEL_VM_SHIFT
-#error "OSV_KERNEL_VM_SHIFT must be defined for the UEFI stub"
-#endif
+// The kernel links its segments to a fixed virtual window but is loaded at a
+// firmware-chosen physical base (see load_kernel). The stub places each segment
+// by its offset from the image's lowest virtual address, so it relies on
+// neither ELF p_paddr (which the aarch64 position-independent link does not set
+// usefully) nor a fixed load address.
 
 // ---- embedded kernel ELF (kernel-blob.S) ---------------------------------
 extern "C" const unsigned char kernel_elf_start[];
@@ -225,7 +223,19 @@ uint32_t read_cmdline(EFI_HANDLE image, char *out, uint32_t cap)
     return len;
 }
 
-// Load the embedded kernel ELF. Returns the physical entry point.
+// Load the embedded kernel ELF at a firmware-chosen physical base. Returns the
+// physical entry point and reports the ELF image's physical base (the address
+// of the lowest-vaddr PT_LOAD segment, i.e. where the ELF header lands) in
+// *kernel_phys_base.
+//
+// The kernel is *not* pinned to a fixed physical address: the kernel's boot
+// page tables map its fixed virtual link window to wherever we load it (the
+// per-arch boot.S derives the virt->phys offset at runtime from
+// kernel_phys_base). We only constrain the load to a 2 MiB-aligned region that
+// the boot tables' identity map is guaranteed to cover, so that the kernel
+// entry can keep executing at its physical address across the page-table
+// switch. Relying on a single fixed address being free is exactly what breaks
+// on firmware that reserves it (e.g. x86 Azure reserves low RAM at 2 MiB).
 uint64_t load_kernel(uint64_t *kernel_phys_base)
 {
     auto blob = kernel_elf_start;
@@ -234,51 +244,101 @@ uint64_t load_kernel(uint64_t *kernel_phys_base)
         ehdr->e_ident[2] != 'L' || ehdr->e_ident[3] != 'F')
         die("embedded kernel is not an ELF");
 
-    uint64_t lowest_phys = ~0ull;
-    uint64_t entry_phys = 0;
+    // Virtual span of the image (lowest segment vaddr .. highest segment end).
+    uint64_t lowest_vaddr = ~0ull, highest_end = 0;
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        auto ph = reinterpret_cast<const Elf64_Phdr *>(
+            blob + ehdr->e_phoff + i * ehdr->e_phentsize);
+        if (ph->p_type != PT_LOAD || ph->p_memsz == 0)
+            continue;
+        if (ph->p_vaddr < lowest_vaddr)
+            lowest_vaddr = ph->p_vaddr;
+        if (ph->p_vaddr + ph->p_memsz > highest_end)
+            highest_end = ph->p_vaddr + ph->p_memsz;
+    }
+    if (lowest_vaddr == ~0ull)
+        die("embedded kernel has no loadable segments");
+
+    constexpr uint64_t TWO_MIB = 0x200000ull;
+    // 2 MiB-aligned virtual base the image is laid out relative to; the kernel
+    // links its window on a 2 MiB boundary, so the boot tables map it with
+    // 2 MiB pages and the physical base must share that alignment.
+    uint64_t vbase = lowest_vaddr & ~(TWO_MIB - 1);
+    uint64_t span = highest_end - vbase;
+
+    // Cap the load below the upper bound of the boot tables' identity map:
+    // x64 boot.S identity-maps the low 1 GiB; aarch64 boot.S maps 0-63 GiB.
+#if defined(__x86_64__)
+    EFI_PHYSICAL_ADDRESS max_addr = 0x40000000ull;   // < 1 GiB
+#elif defined(__aarch64__)
+    EFI_PHYSICAL_ADDRESS max_addr = 0xfc0000000ull;  // < 63 GiB
+#else
+#error "unsupported architecture"
+#endif
+
+    // Pick the *lowest* free, 2 MiB-aligned region of at least `span` bytes below
+    // that ceiling, by scanning the UEFI memory map. Loading low matters for two
+    // reasons: it keeps the kernel within the boot identity map, and it keeps it
+    // at the base of usable RAM - the aarch64 memory model (uefi_memory_setup)
+    // anchors OSv's heap at the kernel's physical base and grows upward, so a
+    // high placement would strand most of RAM. We must not, however, depend on
+    // any single fixed address being free: that is what fails on firmware which
+    // reserves it (e.g. x86 Azure reserves low RAM at 2 MiB). Keep clear of the
+    // lowest 1 MiB (real-mode/firmware scratch, and the x86 SMP trampoline's
+    // physical-zero target reclaimed later).
+    constexpr uint64_t FLOOR = 0x100000ull;
+    UINTN map_size = 0, map_key = 0, desc_size = 0;
+    uint32_t desc_ver = 0;
+    BS->GetMemoryMap(&map_size, nullptr, &map_key, &desc_size, &desc_ver);
+    map_size += 8 * desc_size;  // slack for the allocation this very query makes
+    EFI_MEMORY_DESCRIPTOR *map = nullptr;
+    if (EFI_ERROR(BS->AllocatePool(EfiLoaderData, map_size,
+                                   reinterpret_cast<void **>(&map))))
+        die("out of memory probing the memory map");
+    if (EFI_ERROR(BS->GetMemoryMap(&map_size, map, &map_key, &desc_size,
+                                   &desc_ver)))
+        die("GetMemoryMap failed");
+
+    uint64_t base = ~0ull;  // phys addr of vbase (the kernel's 2 MiB-aligned base)
+    for (UINTN off = 0; off < map_size; off += desc_size) {
+        auto d = reinterpret_cast<EFI_MEMORY_DESCRIPTOR *>(
+            reinterpret_cast<unsigned char *>(map) + off);
+        if (d->Type != EfiConventionalMemory)
+            continue;
+        uint64_t rstart = d->PhysicalStart;
+        uint64_t rend = rstart + d->NumberOfPages * EFI_PAGE_SIZE;
+        uint64_t astart = rstart < FLOOR ? FLOOR : rstart;
+        astart = (astart + TWO_MIB - 1) & ~(TWO_MIB - 1);
+        if (astart + span <= rend && astart + span <= max_addr && astart < base)
+            base = astart;
+    }
+    BS->FreePool(map);
+    if (base == ~0ull)
+        die("no usable low memory for the kernel");
+
+    // EfiLoaderCode keeps the image executable: the kernel entry runs a few
+    // instructions under the firmware's identity map before installing its own
+    // page tables, and strict firmware (e.g. AArch64 AAVMF) faults on
+    // instruction fetch from non-executable EfiLoaderData pages.
+    UINTN pages = ((span + TWO_MIB - 1) & ~(TWO_MIB - 1)) / EFI_PAGE_SIZE;
+    EFI_PHYSICAL_ADDRESS got = base;
+    if (EFI_ERROR(BS->AllocatePages(AllocateAddress, EfiLoaderCode, pages, &got)))
+        die("cannot reserve kernel physical memory");
 
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
         auto ph = reinterpret_cast<const Elf64_Phdr *>(
             blob + ehdr->e_phoff + i * ehdr->e_phentsize);
         if (ph->p_type != PT_LOAD || ph->p_memsz == 0)
             continue;
-
-        // Physical load address = virtual link address minus the fixed shift.
-        uint64_t seg_pa = ph->p_vaddr - OSV_KERNEL_VM_SHIFT;
-
-        // Reserve the segment's physical range at its fixed load address. The
-        // kernel's boot page tables hard-map these physical addresses, so the
-        // kernel must land exactly where it was linked.
-        EFI_PHYSICAL_ADDRESS pa = seg_pa & ~(EFI_PAGE_SIZE - 1);
-        UINTN pages = (seg_pa + ph->p_memsz - pa + EFI_PAGE_SIZE - 1)
-                          / EFI_PAGE_SIZE;
-        EFI_PHYSICAL_ADDRESS got = pa;
-        // Allocate as EfiLoaderCode so the firmware maps the kernel image
-        // executable. The kernel entry runs a few instructions under the
-        // firmware's identity map before installing its own page tables, and
-        // strict firmware (e.g. AArch64 AAVMF) faults on instruction fetch
-        // from non-executable EfiLoaderData pages.
-        if (EFI_ERROR(BS->AllocatePages(AllocateAddress, EfiLoaderCode,
-                                        pages, &got)))
-            die("cannot reserve kernel physical memory (load address busy)");
-
-        memcpy(reinterpret_cast<void *>(seg_pa),
-                blob + ph->p_offset, ph->p_filesz);
+        uint64_t dst = base + (ph->p_vaddr - vbase);
+        memcpy(reinterpret_cast<void *>(dst), blob + ph->p_offset, ph->p_filesz);
         if (ph->p_memsz > ph->p_filesz)
-            memset(reinterpret_cast<void *>(seg_pa + ph->p_filesz), 0,
+            memset(reinterpret_cast<void *>(dst + ph->p_filesz), 0,
                     ph->p_memsz - ph->p_filesz);
-
-        if (seg_pa < lowest_phys)
-            lowest_phys = seg_pa;
-        // Translate the virtual entry point to physical via its segment.
-        if (ehdr->e_entry >= ph->p_vaddr &&
-            ehdr->e_entry < ph->p_vaddr + ph->p_memsz)
-            entry_phys = seg_pa + (ehdr->e_entry - ph->p_vaddr);
     }
-    if (!entry_phys)
-        die("could not resolve kernel entry point");
-    *kernel_phys_base = lowest_phys;
-    return entry_phys;
+
+    *kernel_phys_base = base + (lowest_vaddr - vbase);
+    return base + (ehdr->e_entry - vbase);
 }
 
 // Per-arch handoff: set the kernel's first argument register to boot_info and

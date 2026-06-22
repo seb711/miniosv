@@ -99,7 +99,8 @@ void smp_launch()
         attr.stack(81920).pin(c).name(name);
         c->init_idle_thread();
         c->bringup_thread = new sched::thread([=] { secondary_bringup(c); }, attr, true);
-        psci::_psci.cpu_on(c->arch.mpid, mmu::virt_to_phys(reinterpret_cast<void *>(start_secondary_cpu)));
+        psci::_psci.cpu_on(c->arch.mpid,
+                mmu::virt_to_phys(reinterpret_cast<void *>(start_secondary_cpu)));
     }
     while (smp_processors != sched::cpus.size())
         barrier();
