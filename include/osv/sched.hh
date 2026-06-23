@@ -995,7 +995,9 @@ struct cpu : private timer_base::client {
     void idle_poll_start();
     void idle_poll_end();
     void send_wakeup_ipi();
-    void load_balance();
+    // Fire the per-CPU "cpu up" notifiers on this CPU during bringup. This was
+    // formerly the first action of the (now removed) load-balancer thread.
+    void on_cpu_up();
     unsigned load();
     /**
      * Try to reschedule.

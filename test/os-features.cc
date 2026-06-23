@@ -38,6 +38,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <semaphore.h>
+#include <sched.h>
 #include <dlfcn.h>
 #include <time.h>
 #include <sys/time.h>
@@ -48,6 +49,8 @@
 // arc4random() is provided by the OSv kernel (drivers/random.cc) but not
 // declared by any libc header here.
 extern "C" uint32_t arc4random(void);
+// sched_getcpu() returns the id of the CPU the caller is currently running on.
+extern "C" int sched_getcpu(void);
 
 static std::atomic<int> g_checks{0};
 static std::atomic<int> g_fails{0};
@@ -160,6 +163,111 @@ static void test_threads()
         CHECK(pthread_setname_np(pthread_self(), "feature-main") == 0);
         CHECK(pthread_getname_np(pthread_self(), name, sizeof name) == 0);
         CHECK(std::string(name) == "feature-main");
+    }
+}
+
+/* ================================================== CPU pinning / affinity */
+
+// Probe filled in by a pinned worker: it records which CPU it runs on right
+// after start, after a sleep, and after a burst of yields. With migration
+// removed, a thread pinned at creation must start on its target CPU and never
+// leave it - so all three samples must equal the target.
+struct pin_probe {
+    int target;
+    int first;
+    int after_sleep;
+    int after_yields;
+};
+
+static void *pin_probe_fn(void *arg)
+{
+    auto *p = static_cast<pin_probe *>(arg);
+    p->first = sched_getcpu();
+    struct timespec req { 0, 20 * 1000 * 1000 }, rem{};   // 20ms
+    nanosleep(&req, &rem);
+    p->after_sleep = sched_getcpu();
+    for (int i = 0; i < 2000; i++) sched_yield();
+    p->after_yields = sched_getcpu();
+    return nullptr;
+}
+
+// Spawn one worker pinned (at creation) to `target` via pthread affinity.
+static bool spawn_pinned(pthread_t *tid, pin_probe *probe, int target)
+{
+    cpu_set_t one;
+    CPU_ZERO(&one);
+    CPU_SET(target, &one);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    bool ok = pthread_attr_setaffinity_np(&attr, sizeof(one), &one) == 0
+           && pthread_create(tid, &attr, pin_probe_fn, probe) == 0;
+    pthread_attr_destroy(&attr);
+    return ok;
+}
+
+static void test_cpu_pinning()
+{
+    group("CPU pinning: start a thread on a dedicated CPU (no migration)");
+
+    // The main thread is created pinned to every CPU and affinity is inherited,
+    // so the process affinity mask enumerates all online CPUs.
+    cpu_set_t all;
+    CPU_ZERO(&all);
+    CHECK(sched_getaffinity(0, sizeof(all), &all) == 0);
+    std::vector<int> cpus;
+    for (int c = 0; c < __CPU_SETSIZE; c++)
+        if (CPU_ISSET(c, &all)) cpus.push_back(c);
+
+    section("sched_getaffinity reports at least one online CPU");
+    CHECK(!cpus.empty());
+    printf("    (%zu cpus online)\n", cpus.size());
+
+    section("one thread per CPU: each starts on its target CPU and stays there");
+    {
+        std::vector<pin_probe> probes(cpus.size());
+        std::vector<pthread_t> tids(cpus.size());
+        bool spawn_ok = true;
+        for (size_t k = 0; k < cpus.size(); k++) {
+            probes[k] = { cpus[k], -1, -1, -1 };
+            if (!spawn_pinned(&tids[k], &probes[k], cpus[k])) spawn_ok = false;
+        }
+        CHECK(spawn_ok);
+        for (size_t k = 0; k < cpus.size(); k++) pthread_join(tids[k], nullptr);
+
+        bool started_on_target = true, stayed_put = true;
+        std::vector<int> observed;
+        for (auto &p : probes) {
+            if (p.first != p.target) started_on_target = false;
+            if (p.after_sleep != p.target || p.after_yields != p.target) stayed_put = false;
+            observed.push_back(p.first);
+        }
+        CHECK(started_on_target);   // pinning at creation honored, every CPU
+        CHECK(stayed_put);          // no migration across sleep / yields
+        // Every distinct CPU was actually reached (guards against pinning being
+        // ignored and all work collapsing onto one CPU).
+        std::sort(observed.begin(), observed.end());
+        observed.erase(std::unique(observed.begin(), observed.end()), observed.end());
+        CHECK(observed.size() == cpus.size());
+    }
+
+    section("many threads pinned to the same CPU all run on that CPU");
+    {
+        const int target = cpus.back();   // exercise a non-zero CPU when ncpu>1
+        const int NT = 8;
+        std::vector<pin_probe> probes(NT);
+        std::vector<pthread_t> tids(NT);
+        bool spawn_ok = true;
+        for (int k = 0; k < NT; k++) {
+            probes[k] = { target, -1, -1, -1 };
+            if (!spawn_pinned(&tids[k], &probes[k], target)) spawn_ok = false;
+        }
+        CHECK(spawn_ok);
+        for (int k = 0; k < NT; k++) pthread_join(tids[k], nullptr);
+        bool all_on_target = true;
+        for (auto &p : probes)
+            if (p.first != target || p.after_sleep != target || p.after_yields != target)
+                all_on_target = false;
+        CHECK(all_on_target);
     }
 }
 
@@ -343,6 +451,52 @@ static void test_time()
         CHECK(slept >= 25);                  // allow scheduling slack
     }
 
+    // These exercise nanosleep on many threads at once. With more threads than
+    // vcpus, the sleeps land on multiple CPUs simultaneously, so they fail (hang
+    // or wake instantly) if any CPU's per-CPU timer was never set up - the bug
+    // that appears if the "cpu up" notifiers don't fire during bringup.
+    section("concurrent nanosleep: many threads sleep at once and all wake ~on time");
+    {
+        const int NT = 16;                   // more threads than vcpus
+        const long SLEEP_MS = 50;
+        std::vector<long> slept(NT, -1);
+        std::vector<std::thread> ts;
+        long t0 = now_ms();
+        for (int i = 0; i < NT; i++)
+            ts.emplace_back([i, &slept] {
+                long s0 = now_ms();
+                struct timespec req { 0, SLEEP_MS * 1000 * 1000 }, rem{};
+                slept[i] = (nanosleep(&req, &rem) == 0) ? now_ms() - s0 : -1;
+            });
+        for (auto &t : ts) t.join();
+        long wall = now_ms() - t0;
+
+        bool all_slept = true;
+        for (int i = 0; i < NT; i++)
+            if (slept[i] < SLEEP_MS - 10) all_slept = false;  // none early / errored
+        CHECK(all_slept);                    // every thread's own sleep was honored
+        // Concurrent sleeps finish in ~one period; if the scheduler serialized
+        // them (or one CPU's timer was dead) it would take ~NT*period.
+        CHECK(wall < SLEEP_MS * NT / 2);
+    }
+
+    section("concurrent nanosleep with mixed durations: each thread waits its own time");
+    {
+        const int NT = 12;
+        std::atomic<int> bad{0};
+        std::vector<std::thread> ts;
+        for (int i = 0; i < NT; i++)
+            ts.emplace_back([i, &bad] {
+                long want = 20 + i * 10;     // 20..130 ms, all distinct
+                long s0 = now_ms();
+                struct timespec req { 0, want * 1000 * 1000 }, rem{};
+                if (nanosleep(&req, &rem) != 0 || now_ms() - s0 < want - 10)
+                    bad.fetch_add(1);
+            });
+        for (auto &t : ts) t.join();
+        CHECK(bad.load() == 0);
+    }
+
     section("gettimeofday agrees roughly with CLOCK_REALTIME");
     {
         struct timeval tv; struct timespec ts;
@@ -456,6 +610,7 @@ int os_features_main()
 
     test_process_model();
     test_threads();
+    test_cpu_pinning();
     test_sync();
     test_memory();
     test_time();
