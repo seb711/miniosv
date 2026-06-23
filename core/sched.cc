@@ -1037,10 +1037,60 @@ void* thread::do_remote_thread_local_var(void* var)
     return tls_this + offset;
 }
 
+#ifndef NDEBUG
+std::atomic<uint64_t> thread::versioned_status::wake_version_mismatches{0};
+#endif
+
+// Type-stable pool for thread::detached_state. Slots are never returned to the
+// general allocator: a freed slot goes on a freelist and is later handed to a
+// new thread with its version bumped. This is what makes a stale thread_handle
+// pointer always safe to dereference; the version then detects the recycle.
+//
+// For now a single global freelist behind a mutex. detached_state alloc/free
+// happens only at thread create/destroy - not on the wake fast path - so the
+// lock is effectively uncontended. The alloc()/free() interface is kept trivial
+// so it can be sharded into per-CPU freelists later without touching callers.
+// (A friend of thread so it can construct/recycle the private detached_state.)
+class detached_state_pool {
+public:
+    thread::detached_state* alloc(thread* owner) {
+        thread::detached_state* ds = nullptr;
+        WITH_LOCK(_mtx) {
+            if (_free) {
+                ds = _free;
+                _free = ds->_next_free;
+            }
+        }
+        if (!ds) {
+            // Grow the pool. This memory is intentionally never freed back.
+            ds = new thread::detached_state(owner);
+        }
+        // Bump this slot's per-slot version and stamp the new owner.
+        ds->reinit(owner, ds->st.version() + 1);
+        return ds;
+    }
+    void free(thread::detached_state* ds) {
+        WITH_LOCK(_mtx) {
+            ds->_next_free = _free;
+            _free = ds;
+        }
+    }
+private:
+    mutex _mtx;
+    thread::detached_state* _free = nullptr;
+};
+
+static detached_state_pool detached_states;
+
+void thread::detached_state_pool_deleter::operator()(thread::detached_state* ds) const
+{
+    detached_states.free(ds);
+}
+
 thread::thread(std::function<void ()> func, attr attr, bool main, bool app)
     : _func(func)
     , _runtime(thread::priority_default)
-    , _detached_state(new detached_state(this))
+    , _detached_state(detached_states.alloc(this))
     , _attr(attr)
     , _migration_lock_counter(0)
     , _pinned(false)
@@ -1154,7 +1204,10 @@ thread::~thread()
     // _tls holds only the core (module 0) TLS, whose storage is the TCB freed
     // by free_tcb(); there are no dynamically loaded modules to clean up.
     free_tcb();
-    rcu_dispose(_detached_state.release());
+    // The unique_ptr's pool deleter returns the detached_state slot to the
+    // type-stable pool (it is never actually freed), so a thread_handle that
+    // outlives us can still safely read it.
+    _detached_state.reset();
 }
 
 void thread::start()
@@ -1207,7 +1260,7 @@ void thread::destroy()
     // manages to set _joiner first, it will sleep and we need to wake it.
     // But if we set _joiner first, join() will never wait.
     sched::thread *joiner = nullptr;
-    WITH_LOCK(rcu_read_lock_in_preempt_disabled) {
+    WITH_LOCK(preempt_lock) {
         auto ds = _detached_state.get();
         // Note we can't set status to "terminated" before the CAS on _joiner:
         // As soon as we set status to terminated, a concurrent join might
@@ -1224,23 +1277,31 @@ void thread::destroy()
     }
 }
 
-// Must be called under rcu_read_lock
+// Must be called with preemption disabled (preempt_lock)
 //
 // allowed_initial_states_mask *must* contain status::waiting, and
 // *may* contain status::sending_lock (for waitqueue wait morphing).
 // it will transition from one of the allowed initial states to the
 // waking state.
+// Direct-pointer wake: the caller holds the thread alive, so the slot's current
+// version always matches and the wake never spuriously no-ops.
 void thread::wake_impl(detached_state* st, unsigned allowed_initial_states_mask)
 {
-    status old_status = status::waiting;
+    wake_impl(st, allowed_initial_states_mask, st->st.version());
+}
+
+void thread::wake_impl(detached_state* st, unsigned allowed_initial_states_mask,
+                       uint64_t version)
+{
     trace_sched_wake(st->t);
-    while (!st->st.compare_exchange_weak(old_status, status::waking)) {
-        if (!((1 << unsigned(old_status)) & allowed_initial_states_mask)) {
-            return;
-        }
+    // Single version-gated CAS: succeeds only if `st` still belongs to the same
+    // incarnation (version matches) AND it is in a wakeable state. A stale
+    // handle to a recycled slot fails here and the wake is silently dropped.
+    if (!st->st.wake_cas(version, allowed_initial_states_mask, status::waking)) {
+        return;
     }
     auto tcpu = st->_cpu;
-    WITH_LOCK(preempt_lock_in_rcu) {
+    WITH_LOCK(preempt_lock) {
         unsigned c = cpu::current()->id;
         // we can now use st->t here, since the thread cannot terminate while
         // it's waking, but not afterwards, when it may be running
@@ -1271,7 +1332,7 @@ void thread::wake()
 #if CONF_lazy_stack
     sched::ensure_next_stack_page_if_preemptable();
 #endif
-    WITH_LOCK(rcu_read_lock) {
+    WITH_LOCK(preempt_lock) {
         wake_impl(_detached_state.get());
     }
 }
@@ -1281,7 +1342,7 @@ void thread::wake_with_irq_disabled()
 #if CONF_lazy_stack_invariant
     assert(!arch::irq_enabled());
 #endif
-    WITH_LOCK(rcu_read_lock) {
+    WITH_LOCK(preempt_lock) {
         wake_impl(_detached_state.get());
     }
 }
@@ -1295,7 +1356,7 @@ void thread::wake_lock(mutex* mtx, wait_record* wr)
 #if CONF_lazy_stack
     arch::ensure_next_stack_page();
 #endif
-    WITH_LOCK(rcu_read_lock) {
+    WITH_LOCK(preempt_lock) {
         auto st = _detached_state.get();
         // We want to send_lock() to this thread, but we want to be sure we're the only
         // ones doing it, and that it doesn't wake up while we do
@@ -1327,7 +1388,7 @@ bool thread::unsafe_stop()
 #if CONF_lazy_stack
     arch::ensure_next_stack_page();
 #endif
-    WITH_LOCK(rcu_read_lock) {
+    WITH_LOCK(preempt_lock) {
         auto st = _detached_state.get();
         auto expected = status::waiting;
         return st->st.compare_exchange_strong(expected,
@@ -1526,10 +1587,10 @@ void thread_handle::wake()
 #if CONF_lazy_stack
     arch::ensure_next_stack_page();
 #endif
-    WITH_LOCK(rcu_read_lock) {
-        thread::detached_state* ds = _t.read();
+    WITH_LOCK(preempt_lock) {
+        thread::detached_state* ds = _ds.load(std::memory_order_acquire);
         if (ds) {
-            thread::wake_impl(ds);
+            thread::wake_impl(ds, 1u << unsigned(thread::status::waiting), _ver);
         }
     }
 }
@@ -1539,10 +1600,10 @@ void thread_handle::wake_from_kernel_or_with_irq_disabled()
 #if CONF_lazy_stack_invariant
     assert(!sched::thread::current()->is_app() || !arch::irq_enabled());
 #endif
-    WITH_LOCK(rcu_read_lock) {
-        thread::detached_state* ds = _t.read();
+    WITH_LOCK(preempt_lock) {
+        thread::detached_state* ds = _ds.load(std::memory_order_acquire);
         if (ds) {
-            thread::wake_impl(ds);
+            thread::wake_impl(ds, 1u << unsigned(thread::status::waiting), _ver);
         }
     }
 }

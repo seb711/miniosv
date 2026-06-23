@@ -75,6 +75,7 @@ namespace sched {
 
 class thread;
 class thread_handle;
+class detached_state_pool;
 struct cpu;
 class timer;
 class timer_list;
@@ -448,6 +449,95 @@ public:
         terminated,
     };
 
+    // The thread status word, with a per-slot version packed alongside it:
+    //
+    //     [ version : 56 | status : 8 ]
+    //
+    // The version exists because a thread's detached_state is recycled from a
+    // type-stable pool (see core/sched.cc): once a slot is freed it is never
+    // returned to the allocator, only handed to a new thread, with the version
+    // bumped on each handout. A thread_handle captures (slot, version) and a
+    // wake validates the version *in the same CAS* as the status transition, so
+    // a stale handle to a recycled slot fails the CAS instead of waking the
+    // wrong thread. The "in-life" accessors (load/store/CAS/operator status)
+    // transparently carry the slot's current version, so the scheduler's own
+    // status manipulation is unaffected; only the handle path passes an explicit
+    // captured version via wake_cas().
+    class versioned_status {
+        static constexpr unsigned status_bits = 8;
+        static constexpr uint64_t status_mask = (uint64_t(1) << status_bits) - 1;
+        static constexpr uint64_t pack(uint64_t ver, status s) {
+            return (ver << status_bits) | uint64_t(s);
+        }
+        std::atomic<uint64_t> _v;
+        // Cached current version. Written only at pool handout (reinit), when the
+        // slot is private to the allocating thread, so reads need no atomicity.
+        uint64_t _ver;
+    public:
+        versioned_status() : _v(pack(0, status::unstarted)), _ver(0) {}
+
+        // --- interface mirroring std::atomic<status> (carries current _ver) ---
+        operator status() const { return load(); }
+        status load(std::memory_order mo = std::memory_order_seq_cst) const {
+            return status(_v.load(mo) & status_mask);
+        }
+        void store(status s, std::memory_order mo = std::memory_order_seq_cst) {
+            _v.store(pack(_ver, s), mo);
+        }
+        bool compare_exchange_strong(status& expected, status desired,
+                                     std::memory_order mo = std::memory_order_seq_cst) {
+            uint64_t e = pack(_ver, expected);
+            bool ok = _v.compare_exchange_strong(e, pack(_ver, desired), mo);
+            if (!ok) { expected = status(e & status_mask); }
+            return ok;
+        }
+        bool compare_exchange_weak(status& expected, status desired,
+                                   std::memory_order mo = std::memory_order_seq_cst) {
+            uint64_t e = pack(_ver, expected);
+            bool ok = _v.compare_exchange_weak(e, pack(_ver, desired), mo);
+            if (!ok) { expected = status(e & status_mask); }
+            return ok;
+        }
+
+        // --- version-aware API used by the (possibly stale) thread_handle path ---
+        uint64_t version() const { return _ver; }
+        // Move status to `to` only if the slot's version still equals `ver` and
+        // the current status is in `allowed_mask`. Fails (no-op) on a recycled
+        // slot or a non-wakeable status.
+        bool wake_cas(uint64_t ver, unsigned allowed_mask, status to) {
+            uint64_t cur = _v.load(std::memory_order_relaxed);
+            for (;;) {
+                if ((cur >> status_bits) != ver) {
+#ifndef NDEBUG
+                    // The slot was recycled out from under a stale handle - the
+                    // case this whole mechanism exists to catch.
+                    wake_version_mismatches.fetch_add(1, std::memory_order_relaxed);
+#endif
+                    return false;
+                }
+                status s = status(cur & status_mask);
+                if (!((1u << unsigned(s)) & allowed_mask)) {
+                    return false;
+                }
+                if (_v.compare_exchange_weak(cur, pack(ver, to))) {
+                    return true;
+                }
+            }
+        }
+        // Re-stamp this slot for a new owner at pool handout: new version, fresh
+        // status. Called when the slot is private to the allocating thread.
+        void reinit(uint64_t ver) {
+            _ver = ver;
+            _v.store(pack(ver, status::unstarted), std::memory_order_release);
+        }
+#ifndef NDEBUG
+        // Debug observability: number of wake_cas() rejections due to a version
+        // mismatch (stale handle vs recycled slot). Used by stress tests to
+        // confirm the recycle race is actually being hit.
+        static std::atomic<uint64_t> wake_version_mismatches;
+#endif
+    };
+
     // New threads must be created by the sched::make() function, which
     // creates the thread structure on the heap. The constructor is made
     // private so that thread objects *cannot* be created on the stack.
@@ -699,8 +789,14 @@ public:
     bool unsafe_stop();
     void* get_exception_stack_top() { return _arch.exception_stack + sizeof(_arch.exception_stack); }
 private:
+    // Direct-pointer wake: the caller guarantees `st` belongs to a live thread,
+    // so the slot's current version always matches.
     static void wake_impl(detached_state* st,
             unsigned allowed_initial_states_mask = 1 << unsigned(status::waiting));
+    // Versioned wake: `st` may have been recycled (it came from a thread_handle).
+    // The wake is a no-op unless the slot's version still equals `version`.
+    static void wake_impl(detached_state* st,
+            unsigned allowed_initial_states_mask, uint64_t version);
     static void sleep_impl(timer &tmr);
     void main();
 #ifdef __x86_64__
@@ -787,17 +883,34 @@ private:
     // wake() on any state except waiting is discarded.
     thread_runtime _runtime;
     thread_realtime _realtime;
-    // part of the thread state is detached from the thread structure,
-    // and freed by rcu, so that waking a thread and destroying it can
-    // occur in parallel without synchronization via thread_handle
+    // Part of the thread state is detached from the thread structure so that
+    // waking a thread (via a thread_handle) and destroying it can occur in
+    // parallel without synchronization. The lifetime of a detached_state is
+    // managed by a type-stable pool (core/sched.cc): its memory is never
+    // returned to the allocator, so a stale handle can always safely *read* it,
+    // and the per-slot version in `st` lets a wake detect a recycled slot.
     struct detached_state {
         explicit detached_state(thread* t) : t(t) {}
         thread* t;
         cpu* _cpu = nullptr;
         bool lock_sent = false;   // send_lock() was called for us
-        std::atomic<status> st = { status::unstarted };
+        versioned_status st;
+        // Intrusive freelist link, used only while the slot sits in the pool's
+        // free list. Kept separate from `st` so it never disturbs the version.
+        detached_state* _next_free = nullptr;
+        // Re-stamp a pooled slot for a new owner at handout (bumps the version).
+        void reinit(thread* owner, uint64_t version) {
+            t = owner;
+            _cpu = nullptr;
+            lock_sent = false;
+            st.reinit(version);
+        }
     };
-    std::unique_ptr<detached_state> _detached_state;
+    // Returns slots to the type-stable pool instead of freeing them.
+    struct detached_state_pool_deleter {
+        void operator()(detached_state* ds) const;
+    };
+    std::unique_ptr<detached_state, detached_state_pool_deleter> _detached_state;
     attr _attr;
     int _migration_lock_counter;
     // _migration_lock_counter being set may be temporary, but if _pinned
@@ -855,6 +968,7 @@ private:
     class reaper;
     friend class reaper;
     friend class thread_handle;
+    friend class detached_state_pool;
     static reaper* _s_reaper;
     friend void init_detached_threads_reaper();
 
@@ -897,25 +1011,42 @@ private:
     robust_list_head *_robust_list_head;
 };
 
+// A long-lived reference to a thread that can outlive the thread itself. It
+// captures the thread's detached_state slot *and the version* that slot had
+// when the handle was taken. Because slots come from a type-stable pool, the
+// pointer is always safe to dereference; the version lets wake() detect that
+// the slot has since been recycled to a different thread (see versioned_status
+// and core/sched.cc).
 class thread_handle {
 public:
     thread_handle() = default;
-    thread_handle(const thread_handle& t) { _t.assign(t._t.read()); }
+    thread_handle(const thread_handle& t) {
+        _ver = t._ver;
+        _ds.store(t._ds.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    }
     thread_handle(thread& t) { reset(t); }
     thread_handle& operator=(const thread_handle& x) {
-	_t.assign(x._t.read());
-	return *this;
+        _ver = x._ver;
+        _ds.store(x._ds.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        return *this;
     }
-    void reset(thread& t) { _t.assign(t._detached_state.get()); }
+    void reset(thread& t) {
+        auto ds = t._detached_state.get();
+        // Capture the version first; the release store of _ds publishes it.
+        _ver = ds->st.version();
+        _ds.store(ds, std::memory_order_release);
+    }
     void wake();
     void wake_from_kernel_or_with_irq_disabled();
-    void clear() { _t.assign(nullptr); }
-    operator bool() const { return _t; }
+    void clear() { _ds.store(nullptr, std::memory_order_release); }
+    operator bool() const { return _ds.load(std::memory_order_relaxed) != nullptr; }
     bool operator==(const thread_handle& x) const {
-        return _t.read_by_owner() == x._t.read_by_owner();
+        return _ds.load(std::memory_order_relaxed) == x._ds.load(std::memory_order_relaxed);
     }
 private:
-    osv::rcu_ptr<thread::detached_state> _t;
+    std::atomic<thread::detached_state*> _ds {nullptr};
+    uint64_t _ver = 0;
+    friend class thread;
 };
 
 void init_detached_threads_reaper();
@@ -1401,7 +1532,7 @@ void thread::wait_for(waitable&&... waitables)
 // while in an rcu read-side critical section
 //     thread_handle h(t.handle());
 //     *x = 0;
-//     h.wake();  // uses rcu to prevent concurrent detached state destruction
+//     h.wake();  // the captured version guards against concurrent destruction
 // wake_with is a convenient one-line shortcut for the above three lines,
 // with a syntax mirroring that of wait_until():
 //     t->wake_with([&] { *x = 0; });
@@ -1410,11 +1541,16 @@ template <class Action>
 inline
 void thread::do_wake_with(Action action, unsigned allowed_initial_states_mask)
 {
-    WITH_LOCK(osv::rcu_read_lock) {
-        auto ds = _detached_state.get();
-        action();
-        wake_impl(ds, allowed_initial_states_mask);
-    }
+    // Disable preemption directly rather than WITH_LOCK(preempt_lock):
+    // preempt-lock.hh includes this header, so using it here is a circular
+    // include. Capture (ds, version) before action(), since action() may let
+    // the thread wake and exit; the versioned wake then no-ops if it did.
+    preempt_disable();
+    auto ds = _detached_state.get();
+    auto version = ds->st.version();
+    action();
+    wake_impl(ds, allowed_initial_states_mask, version);
+    preempt_enable();
 }
 
 template <class Rep, class Period>

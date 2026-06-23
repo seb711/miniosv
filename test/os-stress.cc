@@ -22,6 +22,7 @@
 #include <future>
 #include <vector>
 #include <queue>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -30,6 +31,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <pthread.h>
+#include <sched.h>
 #include <sys/mman.h>
 #include <time.h>
 
@@ -271,6 +273,151 @@ static void test_time_sched()
     CHECK(errors.load() == 0);
 }
 
+/* =================================================== big cross-core stress */
+
+// These deliberately spawn a large number of threads spread across every CPU
+// and force heavy cross-core wakeups (mutex handoff, condvar broadcast). That
+// exercises the scheduler's wake path and the detached_state recycle path
+// (lots of thread create/destroy) far harder than the small tests above.
+
+extern "C" int sched_getcpu(void);
+
+static std::vector<int> online_cpus()
+{
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    sched_getaffinity(0, sizeof(set), &set);
+    std::vector<int> cpus;
+    for (int c = 0; c < __CPU_SETSIZE; c++)
+        if (CPU_ISSET(c, &set)) cpus.push_back(c);
+    return cpus;
+}
+
+// Spawn `fn(arg)` pinned to `cpu` with a small stack (we create hundreds of
+// these, so the default 1 MiB pthread stack would be far too much memory).
+static bool spawn_pinned_small(pthread_t *tid, int cpu, void *(*fn)(void *), void *arg)
+{
+    cpu_set_t one;
+    CPU_ZERO(&one);
+    CPU_SET(cpu, &one);
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 64 * 1024);
+    pthread_attr_setaffinity_np(&attr, sizeof(one), &one);
+    bool ok = pthread_create(tid, &attr, fn, arg) == 0;
+    pthread_attr_destroy(&attr);
+    return ok;
+}
+
+namespace {
+struct storm_arg {
+    std::mutex *m;
+    long *counter;     // guarded by *m
+    int iters;
+};
+}
+
+static void *mutex_storm_fn(void *p)
+{
+    auto *a = static_cast<storm_arg *>(p);
+    for (int i = 0; i < a->iters; i++) {
+        std::lock_guard<std::mutex> lk(*a->m);
+        (*a->counter)++;
+    }
+    return nullptr;
+}
+
+static void test_cross_core_mutex_storm()
+{
+    section("threads: 128/core hammering a few shared mutexes (cross-core)");
+    auto cpus = online_cpus();
+    if (cpus.empty()) { CHECK(false); return; }
+
+    const int NPER  = 128;                  // threads per CPU
+    const int NMTX  = 4;                     // shared mutexes, contended cross-core
+    const int ITERS = 2000;                  // lock/unlock per thread per round
+    const int ROUNDS = 4;                    // repeat to churn the thread pool hard
+    const int NT = NPER * (int)cpus.size();  // e.g. 512 on 4 vcpus
+
+    bool ok = true;
+    for (int round = 0; round < ROUNDS; round++) {
+        std::array<std::mutex, NMTX> mtx;
+        std::array<long, NMTX> counter;
+        counter.fill(0);
+        std::vector<storm_arg> args(NT);
+        std::vector<pthread_t> tids(NT);
+
+        bool spawn_ok = true;
+        for (int k = 0; k < NT; k++) {
+            int cpu = cpus[k % cpus.size()];
+            // Decouple the mutex index from the CPU so each mutex is shared by
+            // threads on *different* cores (the cross-core part).
+            int mi = (k / (int)cpus.size()) % NMTX;
+            args[k] = { &mtx[mi], &counter[mi], ITERS };
+            if (!spawn_pinned_small(&tids[k], cpu, mutex_storm_fn, &args[k]))
+                spawn_ok = false;
+        }
+        for (int k = 0; k < NT; k++) pthread_join(tids[k], nullptr);
+
+        long sum = 0;
+        for (int mi = 0; mi < NMTX; mi++) sum += counter[mi];
+        if (!spawn_ok || sum != (long)NT * ITERS) ok = false;
+    }
+    // Passing means: no lost updates under heavy contention, and every round
+    // of hundreds of cross-core threads ran to completion (no deadlock/hang).
+    CHECK(ok);
+}
+
+namespace {
+struct broadcast_arg {
+    std::mutex *m;
+    std::condition_variable *cv;
+    bool *go;
+    std::atomic<int> *woken;
+};
+}
+
+static void *broadcast_wait_fn(void *p)
+{
+    auto *a = static_cast<broadcast_arg *>(p);
+    std::unique_lock<std::mutex> lk(*a->m);
+    a->cv->wait(lk, [&] { return *a->go; });
+    a->woken->fetch_add(1, std::memory_order_relaxed);
+    return nullptr;
+}
+
+static void test_cross_core_condvar_broadcast()
+{
+    section("threads: 128/core all wait on one condvar, single broadcast wakes all");
+    auto cpus = online_cpus();
+    if (cpus.empty()) { CHECK(false); return; }
+
+    const int NPER = 128;
+    const int NT = NPER * (int)cpus.size();
+
+    std::mutex m;
+    std::condition_variable cv;
+    bool go = false;
+    std::atomic<int> woken{0};
+
+    std::vector<broadcast_arg> args(NT);
+    std::vector<pthread_t> tids(NT);
+    bool spawn_ok = true;
+    for (int k = 0; k < NT; k++) {
+        args[k] = { &m, &cv, &go, &woken };
+        if (!spawn_pinned_small(&tids[k], cpus[k % cpus.size()], broadcast_wait_fn, &args[k]))
+            spawn_ok = false;
+    }
+    // Give the workers time to all reach cv.wait() across every CPU.
+    { struct timespec req { 0, 50 * 1000 * 1000 }, rem{}; nanosleep(&req, &rem); }
+    { std::lock_guard<std::mutex> lk(m); go = true; }
+    cv.notify_all();                       // one mass cross-core wake of NT threads
+
+    for (int k = 0; k < NT; k++) pthread_join(tids[k], nullptr);
+    CHECK(spawn_ok);
+    CHECK(woken.load() == NT);             // every waiter observed the broadcast
+}
+
 int os_stress_main()
 {
     printf("==== OSv OS-interaction stress tests ====\n");
@@ -282,6 +429,9 @@ int os_stress_main()
     test_thread_local();
     test_pthread_barrier();
     test_rwlock();
+
+    test_cross_core_mutex_storm();
+    test_cross_core_condvar_broadcast();
 
     test_mmap_anon();
     test_mmap_concurrent();
