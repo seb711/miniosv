@@ -20,7 +20,6 @@
 #include <osv/error.h>
 #include <osv/trace.hh>
 #include "dump.hh"
-#include <osv/rcu.hh>
 #include <osv/rwlock.h>
 #include <algorithm>
 #include <numeric>
@@ -201,16 +200,6 @@ void allocate_intermediate_level(hw_ptep<N> ptep)
     }
 }
 
-// only 4k can be cow for now
-pt_element<0> pte_mark_cow(pt_element<0> pte, bool cow)
-{
-    if (cow) {
-        pte.set_writable(false);
-    }
-    pte.set_sw_bit(pte_cow, cow);
-    return pte;
-}
-
 template<int N>
 bool change_perm(hw_ptep<N> ptep, unsigned int perm)
 {
@@ -219,10 +208,6 @@ bool change_perm(hw_ptep<N> ptep, unsigned int perm)
     unsigned int old = (pte.valid() ? perm_read : 0) |
         (pte.writable() ? perm_write : 0) |
         (pte.executable() ? perm_exec : 0);
-
-    if (pte_is_cow(pte)) {
-        perm &= ~perm_write;
-    }
 
     // Note: in x86, if the present bit (0x1) is off, not only read is
     // disallowed, but also write and exec. So in mprotect, if any
@@ -686,8 +671,13 @@ public:
         return true;
     }
     void intermediate_page_post(hw_ptep<1> ptep, uintptr_t offset) {
-        osv::rcu_defer([](void *page) { memory::free_page(page); }, phys_to_virt(ptep.read().addr()));
+        // Free the now-unlinked intermediate page-table page immediately. This
+        // runs under vma_list_mutex held for write, and there is no longer any
+        // lockless page-table walker (fast_sigsegv_check was removed), so no
+        // reader can be traversing this page-table page concurrently.
+        void *page = phys_to_virt(ptep.read().addr());
         ptep.write(make_empty_pte<1>());
+        memory::free_page(page);
     }
     bool tlb_flush_needed(void) {
         return !_tlb_gather.flush() && do_flush;
@@ -789,7 +779,10 @@ public:
                 assert(v[i] == 0);
             }
             ptep.write(make_empty_pte<1>());
-            osv::rcu_defer([](void *page) { memory::free_page(page); }, phys_to_virt(old.addr()));
+            // Immediate free: this runs under page_table_high_mutex on the
+            // non-VMA (kernel) range, and there is no lockless page-table walker
+            // anymore, so nothing can be reading this page-table page.
+            memory::free_page(phys_to_virt(old.addr()));
             do_flush = true;
         }
     }
@@ -799,31 +792,6 @@ public:
 private:
     unsigned live_ptes;
     bool do_flush = false;
-};
-
-class virt_to_pte_map_rcu :
-        public page_table_operation<allocate_intermediate_opt::no, skip_empty_opt::yes,
-        descend_opt::yes, once_opt::yes, split_opt::no> {
-private:
-    virt_pte_visitor& _visitor;
-    virt_to_pte_map_rcu(virt_pte_visitor& visitor) : _visitor(visitor) {}
-
-public:
-    friend void virt_visit_pte_rcu(uintptr_t, virt_pte_visitor&);
-    template<int N>
-    pt_element<N> ptep_read(hw_ptep<N> ptep) {
-        return ptep.ll_read();
-    }
-    template<int N>
-    bool page(hw_ptep<N> ptep, uintptr_t offset) {
-        auto pte = ptep_read(ptep);
-        _visitor.pte(pte);
-        assert(pt_level_traits<N>::large_capable::value == pte.large());
-        return true;
-    }
-    void sub_page(hw_ptep<1> ptep, int l, uintptr_t offset) {
-        page(ptep, offset);
-    }
 };
 
 template<typename T> ulong operate_range(T mapper, void *vma_start, void *start, size_t size)
@@ -856,15 +824,6 @@ phys virt_to_phys_pt(void* virt)
     virt_to_phys_map v2p_mapper(v);
     map_range(vbase, vbase, page_size, v2p_mapper);
     return v2p_mapper.addr();
-}
-
-void virt_visit_pte_rcu(uintptr_t virt, virt_pte_visitor& visitor)
-{
-    auto vbase = align_down(virt, page_size);
-    virt_to_pte_map_rcu v2pte_mapper(visitor);
-    WITH_LOCK(osv::rcu_read_lock) {
-        map_range(vbase, vbase, page_size, v2pte_mapper);
-    }
 }
 
 bool contains(uintptr_t start, uintptr_t end, vma& y)
@@ -1302,11 +1261,6 @@ static void vm_sigsegv(uintptr_t addr, exception_frame* ef)
 void vm_fault(uintptr_t addr, exception_frame* ef)
 {
     trace_mmu_vm_fault(addr, ef->get_error());
-    if (fast_sigsegv_check(addr, ef)) {
-        vm_sigsegv(addr, ef);
-        trace_mmu_vm_fault_sigsegv(addr, ef->get_error(), "fast");
-        return;
-    }
 #if CONF_lazy_stack
     auto stack = sched::thread::current()->get_stack_info();
     void *v_addr = reinterpret_cast<void*>(addr);

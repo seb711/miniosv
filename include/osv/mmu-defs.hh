@@ -90,10 +90,6 @@ enum {
     advise_nohugepage = 1ul << 1,
 };
 
-enum {
-    pte_cow = 0,
-};
-
 /* flush tlb for the current processor */
 void flush_tlb_local();
 /* flush tlb for all */
@@ -180,8 +176,6 @@ pt_element<4> *get_root_pt(uintptr_t virt);
    whether the error reports a page fault (insn/write) */
 bool is_page_fault_insn(unsigned int err);
 bool is_page_fault_write(unsigned int err);
-
-bool fast_sigsegv_check(uintptr_t addr, exception_frame* ef);
 
 template<int N>
 class hw_ptep_impl_base {

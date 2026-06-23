@@ -139,26 +139,14 @@ bool ismapped(const void *addr, size_t size);
 bool isreadable(void *addr, size_t size);
 
 
-template<int N>
-inline bool pte_is_cow(pt_element<N> pte)
-{
-    return false;
-}
-
-template<>
-inline bool pte_is_cow(pt_element<0> pte)
-{
-    return pte.sw_bit(pte_cow); // only 4k pages can be cow for now
-}
-
-static TRACEPOINT(trace_clear_pte, "ptep=%p, cow=%d, pte=%x", void*, bool, uint64_t);
+static TRACEPOINT(trace_clear_pte, "ptep=%p, pte=%x", void*, uint64_t);
 
 template<int N>
 __attribute__((always_inline)) // Necessary because of issue #1029
 inline pt_element<N> clear_pte(hw_ptep<N> ptep)
 {
     auto old = ptep.exchange(make_empty_pte<N>());
-    trace_clear_pte(ptep.release(), pte_is_cow(old), old.addr());
+    trace_clear_pte(ptep.release(), old.addr());
     return old;
 }
 
@@ -205,14 +193,6 @@ inline pt_element<N> make_leaf_pte(hw_ptep<N> ptep, phys addr,
     return make_pte<N>(addr, true, perm, mem_attr);
 }
 
-class virt_pte_visitor {
-public:
-    virtual void pte(pt_element<0>) = 0;
-    virtual void pte(pt_element<1>) = 0;
-};
-
-void virt_visit_pte_rcu(uintptr_t virt, virt_pte_visitor& visitor);
-
 template<int N>
 inline bool write_pte(void *addr, hw_ptep<N> ptep, pt_element<N> old_pte, pt_element<N> new_pte)
 {
@@ -226,8 +206,6 @@ inline bool write_pte(void *addr, hw_ptep<N> ptep, pt_element<N> pte)
     pte.mod_addr(virt_to_phys(addr));
     return ptep.compare_exchange(ptep.read(), pte);
 }
-
-pt_element<0> pte_mark_cow(pt_element<0> pte, bool cow);
 
 template <typename OutputFunc>
 inline

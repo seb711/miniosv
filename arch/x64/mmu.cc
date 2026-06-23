@@ -142,41 +142,6 @@ bool is_page_fault_write(unsigned int error_code) {
     return error_code & page_fault_write;
 }
 
-bool is_page_fault_rsvd(unsigned int error_code) {
-    return error_code & page_fault_rsvd;
-}
-
-bool is_page_fault_prot_write(unsigned int error_code) {
-    return (error_code & (page_fault_write | page_fault_prot)) == (page_fault_write | page_fault_prot);
-}
-
-bool fast_sigsegv_check(uintptr_t addr, exception_frame* ef)
-{
-    if (is_page_fault_rsvd(ef->get_error())) {
-        return true;
-    }
-
-    struct check_cow : public virt_pte_visitor {
-        bool _result = false;
-        void pte(pt_element<0> pte) override {
-            _result = !pte_is_cow(pte) && !pte.writable();
-        }
-        void pte(pt_element<1> pte) override {
-            // large ptes are never cow yet
-        }
-    } visitor;
-
-    // if page is present, but write protected without cow bit set
-    // it means that this address belong to PROT_READ vma, so no need
-    // to search vma to verify permission
-    if (is_page_fault_prot_write(ef->get_error())) {
-        virt_visit_pte_rcu(addr, visitor);
-        return visitor._result;
-    }
-
-    return false;
-}
-
 // The x86_64 is considered to conform to the von Neumann architecture with unified
 // data and instruction caches. Therefore we do not need to do anything as they are always in sync.
 void synchronize_cpu_caches(void *v, size_t size) {}

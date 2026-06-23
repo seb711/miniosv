@@ -155,10 +155,6 @@ bool is_page_fault_write(unsigned int esr) {
     return (ec == 0x24 || ec == 0x25) && (esr & 0x40);
 }
 
-bool fast_sigsegv_check(uintptr_t addr, exception_frame* ef) {
-    return false;
-}
-
 void synchronize_cpu_caches(void *v, size_t size) {
     // The aarch64 qualifies as Modified Harvard architecture and defines separate
     // cpu instruction and data caches - I-cache and D-cache. Therefore it is necessary
