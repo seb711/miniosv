@@ -1296,7 +1296,7 @@ static void vm_sigsegv(uintptr_t addr, exception_frame* ef)
         dump_registers(ef);
         abort();
     }
-    osv::handle_mmap_fault(addr, SIGSEGV, ef);
+    abort("mmap faults are not handled currently");
 }
 
 void vm_fault(uintptr_t addr, exception_frame* ef)
