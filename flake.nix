@@ -58,6 +58,7 @@
           ninja
           git
           ctags
+          gptfdisk
           (python3.withPackages (ps: [ ps.pyyaml ]))
         ];
 
@@ -79,7 +80,6 @@
               qemu
               gdb
               awscli2
-              gptfdisk
               (python3.withPackages (
                 ps: with ps; [
                   awscrt
