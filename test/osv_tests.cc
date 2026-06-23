@@ -11,6 +11,8 @@
  *                  qsort, setjmp, errno, calendar time) (conformance).
  *   - os-stress:   hammers threads, the allocator, TLS, synchronization, files
  *                  and IPC concurrently to shake out races (stress).
+ *   - os-sched:    scheduler / thread-lifecycle tests -- create/join/detach,
+ *                  TLS isolation, stack reuse, pthread_exit, detach races.
  *
  * Both used to be standalone PIE programs with their own main(); those entry
  * points are renamed (os_features_main / os_stress_main) and invoked here.
@@ -24,6 +26,7 @@ int os_libc_main();
 int os_stress_main();
 int os_iostream_main();
 int os_memmove_main();
+int os_sched_main();
 
 extern "C" void osv_app_main()
 {
@@ -39,6 +42,8 @@ extern "C" void osv_app_main()
     rc |= os_memmove_main();
     printf("\n");
     rc |= os_stress_main();
+    printf("\n");
+    rc |= os_sched_main();
 
     printf("\n######## OSv test application: %s ########\n\n",
            rc ? "FAILURE" : "SUCCESS");
