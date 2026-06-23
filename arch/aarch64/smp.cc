@@ -117,6 +117,11 @@ void smp_main()
     sched::cpu* cpu = smp_initial_find_current_cpu();
     assert(cpu);
     cpu->init_on_cpu();
+    // Give this AP its own copy of the interrupt handler tables (the common
+    // timer/IPI handlers from the boot CPU). After GIC per-CPU init, before the
+    // AP takes any interrupt. Pass `cpu` explicitly - cpu::current() isn't
+    // usable this early.
+    idt.copy_handlers_to_cpu(cpu);
     cpu->bringup_thread->_detached_state->_cpu = cpu;
     cpu->bringup_thread->switch_to_first();
 }

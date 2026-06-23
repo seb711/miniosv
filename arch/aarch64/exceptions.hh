@@ -13,13 +13,14 @@
 #include <stdint.h>
 #include <functional>
 #include <osv/types.h>
-#include <osv/rcu.hh>
 #include <osv/mutex.h>
 #include <osv/interrupt.hh>
 #include <vector>
 #include <atomic>
 
 #include "gic-common.hh"
+
+namespace sched { struct cpu; }
 
 struct exception_frame {
     u64 regs[31];
@@ -60,19 +61,32 @@ public:
     void init_msi_vector_base(u32 initial);
     void set_max_msi_vector(u32 max) { _max_msi_vector = max; }
 
+    // Each CPU owns its own handler tables. The common handlers (timer PPI, IPI
+    // SGIs) are registered before SMP into the boot CPU's tables, which are
+    // copied to each AP at bringup by this call (see arch/aarch64/smp.cc). This
+    // mirrors the x64 per-core IDT and removes the single shared table.
+    void copy_handlers_to_cpu(sched::cpu *cpu);
+
 private:
     void enable_irq(int id);
     void disable_irq(int id);
 
     void enable_msi_vector(unsigned vector);
 
+    static constexpr unsigned max_cpus = 64;
+
     std::atomic<u32> _next_msi_vector;
     u32 _max_msi_vector;
     u32 _msi_vector_base;
-    std::function<void ()> _msi_handlers[gic::max_msi_handlers] = {};
+    // Per-CPU handler tables, indexed by cpu id. _*[0] is the boot CPU's table
+    // and doubles as the template shared into each AP at bringup. irq_desc holds
+    // pointers (shared by pointer - the desc objects are immutable once
+    // published); _msi_handlers holds std::function values (empty until a device
+    // registers one, so the bringup copy allocates nothing).
+    std::function<void ()> _msi_handlers[max_cpus][gic::max_msi_handlers] = {};
 
     unsigned int nr_irqs; /* number of supported InterruptIDs, read from gic */
-    osv::rcu_ptr<interrupt_desc> irq_desc[gic::max_nr_irqs];
+    std::atomic<interrupt_desc*> irq_desc[max_cpus][gic::max_nr_irqs];
     mutex _lock;
 };
 

@@ -9,6 +9,7 @@
 #include <osv/prio.hh>
 #include <osv/sched.hh>
 #include <osv/interrupt.hh>
+#include <osv/preempt-lock.hh>
 #include <osv/kernel_config.h>
 
 #include "exceptions.hh"
@@ -75,7 +76,7 @@ unsigned interrupt_table::register_handler(std::function<void ()> handler)
         abort("The MSI vector %d too large\n", index);
     }
 
-    _msi_handlers[index] = handler;
+    _msi_handlers[0][index] = handler;
     enable_msi_vector(vector);
     return vector;
 }
@@ -86,7 +87,7 @@ void interrupt_table::unregister_handler(unsigned vector)
     if (index >= max_msi_handlers) {
         abort("The MSI vector %d too large\n", index);
     }
-    _msi_handlers[index] = nullptr;
+    _msi_handlers[0][index] = nullptr;
     disable_irq(vector);
 }
 
@@ -95,10 +96,10 @@ void interrupt_table::register_interrupt(interrupt *interrupt)
     WITH_LOCK(_lock) {
         unsigned id = interrupt->get_id();
         assert(id < this->nr_irqs);
-        interrupt_desc *old = this->irq_desc[id].read_by_owner();
+        interrupt_desc *old = this->irq_desc[0][id].load(std::memory_order_relaxed);
         interrupt_desc *desc = new interrupt_desc(old, interrupt);
-        this->irq_desc[id].assign(desc);
-        osv::rcu_dispose(old);
+        this->irq_desc[0][id].store(desc, std::memory_order_release);
+        delete old;
 #if CONF_logger_debug
         debug_early_u64(" registered IRQ id=", (u64)id);
 #endif
@@ -111,7 +112,7 @@ void interrupt_table::unregister_interrupt(interrupt *interrupt)
     WITH_LOCK(_lock) {
         unsigned id = interrupt->get_id();
         assert(id < this->nr_irqs);
-        interrupt_desc *old = this->irq_desc[id].read_by_owner();
+        interrupt_desc *old = this->irq_desc[0][id].load(std::memory_order_relaxed);
         if (!old) {
             disable_irq(id);
             return;
@@ -142,8 +143,8 @@ void interrupt_table::unregister_interrupt(interrupt *interrupt)
             desc = nullptr;
         }
 
-        this->irq_desc[id].assign(desc);
-        osv::rcu_dispose(old);
+        this->irq_desc[0][id].store(desc, std::memory_order_release);
+        delete old;
 #if CONF_logger_debug
         debug_early_u64("unregistered IRQ id=", (u64)id);
 #endif
@@ -165,17 +166,20 @@ bool interrupt_table::invoke_interrupt(unsigned int iar)
 #if CONF_lazy_stack_invariant
     assert(!arch::irq_enabled());
 #endif
-    WITH_LOCK(osv::rcu_read_lock) {
+    WITH_LOCK(preempt_lock) {
+        // Read this CPU's own handler tables (interrupt context: irq disabled,
+        // so the current CPU id is stable). No lock/RCU.
+        unsigned cid = sched::cpu::current()->id;
         // First see if it is an MSI vector and handle it
         if (iar && iar >= _msi_vector_base && iar <= _max_msi_vector) {
             unsigned handler_idx = iar - _msi_vector_base;
-            if (handler_idx >= max_msi_handlers || !_msi_handlers[handler_idx]) {
+            if (handler_idx >= max_msi_handlers || !_msi_handlers[cid][handler_idx]) {
                 // This should never happen unless there is some bug
                 // in the MSI configuration code
                 debug_early_u64("misconfigured MSI interruptID iar=", iar);
                 assert(0);
             } else {
-                _msi_handlers[handler_idx]();
+                _msi_handlers[cid][handler_idx]();
             }
             return true;
         }
@@ -187,7 +191,7 @@ bool interrupt_table::invoke_interrupt(unsigned int iar)
             debug_early_u64("special InterruptID detected irq=", irq);
             return false;
         } else {
-            interrupt_desc *desc = this->irq_desc[irq].read();
+            interrupt_desc *desc = this->irq_desc[cid][irq].load(std::memory_order_consume);
 
             if (!desc || desc->handlers.empty()) {
                 debug_early_u64("unhandled InterruptID irq=", irq);
@@ -209,6 +213,28 @@ bool interrupt_table::invoke_interrupt(unsigned int iar)
             debug_early_u64("unhandled InterruptID irq=", irq);
             return true;
         }
+    }
+}
+
+void interrupt_table::copy_handlers_to_cpu(sched::cpu *cpu)
+{
+    // Give this CPU its own handler tables, initialized from the boot CPU's
+    // template (the common timer PPI / IPI SGI handlers registered before SMP).
+    // Runs at AP bringup before this CPU takes any interrupt; `cpu` is passed
+    // explicitly because sched::cpu::current() is not usable that early.
+    // irq_desc entries are shared by pointer (the desc objects are immutable
+    // once published); _msi_handlers are empty here, so the copy allocates
+    // nothing (matching the x64 "no allocation at AP bringup" rule).
+    unsigned id = cpu->id;
+    if (id == 0) {
+        return;  // boot CPU uses [0] (the template) directly
+    }
+    for (unsigned i = 0; i < gic::max_nr_irqs; ++i) {
+        irq_desc[id][i].store(irq_desc[0][i].load(std::memory_order_relaxed),
+                              std::memory_order_relaxed);
+    }
+    for (unsigned i = 0; i < gic::max_msi_handlers; ++i) {
+        _msi_handlers[id][i] = _msi_handlers[0][i];
     }
 }
 
