@@ -12,7 +12,6 @@
 #include "exceptions.hh"
 #include <string.h>
 #include <iterator>
-#include "libc/signal.hh"
 #include <osv/align.hh>
 #include <osv/ilog2.hh>
 #include <osv/prio.hh>

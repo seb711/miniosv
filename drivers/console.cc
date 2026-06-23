@@ -18,7 +18,6 @@
 #include "early-console.hh"
 
 #include <termios.h>
-#include <signal.h>
 
 
 namespace console {

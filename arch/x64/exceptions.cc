@@ -12,7 +12,6 @@
 #include <osv/interrupt.hh>
 #include <osv/sched.hh>
 #include <osv/debug.hh>
-#include <libc/signal.hh>
 #include <apic.hh>
 #include <osv/prio.hh>
 #include <osv/mutex.h>

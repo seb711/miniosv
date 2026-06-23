@@ -7,7 +7,6 @@
 
 #include <osv/sched.hh>
 #include <api/sched.h>
-#include "signal.hh"
 #include <pthread.h>
 #include <errno.h>
 #include <mutex>

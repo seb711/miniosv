@@ -6,7 +6,6 @@
 
 #include <osv/uio.h>
 #include <osv/debug.hh>
-#include <signal.h>
 #include "console-multiplexer.hh"
 
 namespace console {
