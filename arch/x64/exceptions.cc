@@ -129,49 +129,6 @@ void interrupt_descriptor_table::unregister_handler(unsigned vector)
     }
 }
 
-shared_vector interrupt_descriptor_table::register_level_triggered_handler(
-        unsigned gsi,
-        std::function<bool ()> pre_eoi,
-        std::function<void ()> post_eoi)
-{
-    WITH_LOCK(_lock) {
-        for (unsigned i = 32; i < 256; ++i) {
-            auto o = _handlers[i].read_by_owner();
-            if ((o && o->gsi == gsi) || o == nullptr) {
-                auto n = new handler(o, pre_eoi, [] { processor::apic->eoi(); }, post_eoi);
-                n->gsi = gsi;
-
-                _handlers[i].assign(n);
-                osv::rcu_dispose(o);
-
-                return shared_vector(i, n->id);
-            }
-        }
-    }
-    abort();
-}
-
-void interrupt_descriptor_table::unregister_level_triggered_handler(shared_vector v)
-{
-    auto vector = v.vector;
-    auto id = v.id;
-    WITH_LOCK(_lock) {
-        auto o = _handlers[vector].read_by_owner();
-        assert(o);
-        interrupt_descriptor_table::handler *n;
-
-        if (o->size() > 1) {
-            // Remove shared vector with 'id' from handler
-            n = new handler(o, id);
-        } else {
-            // Last shared vector is unregistered.
-            n = nullptr;
-        }
-        _handlers[vector].assign(n);
-        osv::rcu_dispose(o);
-    }
-}
-
 unsigned interrupt_descriptor_table::register_handler(std::function<void ()> post_eoi)
 {
     return register_interrupt_handler([] { return true; }, [] { processor::apic->eoi(); }, post_eoi);
@@ -186,34 +143,6 @@ void interrupt_descriptor_table::register_interrupt(inter_processor_interrupt *i
 void interrupt_descriptor_table::unregister_interrupt(inter_processor_interrupt *interrupt)
 {
     unregister_handler(interrupt->get_vector());
-}
-
-void interrupt_descriptor_table::register_interrupt(gsi_edge_interrupt *interrupt)
-{
-    unsigned v = register_handler(interrupt->get_handler());
-    interrupt->set_vector(v);
-    interrupt->enable();
-}
-
-void interrupt_descriptor_table::unregister_interrupt(gsi_edge_interrupt *interrupt)
-{
-    interrupt->disable();
-    unregister_handler(interrupt->get_vector());
-}
-
-void interrupt_descriptor_table::register_interrupt(gsi_level_interrupt *interrupt)
-{
-    shared_vector v = register_level_triggered_handler(interrupt->get_id(),
-                                                       interrupt->get_ack(),
-                                                       interrupt->get_handler());
-    interrupt->set_vector(v);
-    interrupt->enable();
-}
-
-void interrupt_descriptor_table::unregister_interrupt(gsi_level_interrupt *interrupt)
-{
-    interrupt->disable();
-    unregister_level_triggered_handler(interrupt->get_vector());
 }
 
 void interrupt_descriptor_table::invoke_interrupt(unsigned vector)

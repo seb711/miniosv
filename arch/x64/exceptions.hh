@@ -15,8 +15,6 @@
 #include <osv/mutex.h>
 #include <vector>
 
-class gsi_edge_interrupt;
-class gsi_level_interrupt;
 class inter_processor_interrupt;
 
 struct exception_frame {
@@ -48,24 +46,12 @@ struct exception_frame {
 
 extern __thread exception_frame* current_interrupt_frame;
 
-struct shared_vector {
-    unsigned vector;
-    unsigned id;
-    shared_vector(unsigned v, unsigned i)
-        : vector(v), id(i)
-    {};
-};
-
 class interrupt_descriptor_table {
 public:
     interrupt_descriptor_table();
     void load_on_cpu();
     void register_interrupt(inter_processor_interrupt *interrupt);
     void unregister_interrupt(inter_processor_interrupt *interrupt);
-    void register_interrupt(gsi_edge_interrupt *interrupt);
-    void unregister_interrupt(gsi_edge_interrupt *interrupt);
-    void register_interrupt(gsi_level_interrupt *interrupt);
-    void unregister_interrupt(gsi_level_interrupt *interrupt);
     void invoke_interrupt(unsigned vector);
 
     /* TODO: after merge of MSI and Xen callbacks as interrupt class,
@@ -149,12 +135,6 @@ private:
     };
     osv::rcu_ptr<handler> _handlers[256];
     mutex _lock;
-
-    shared_vector register_level_triggered_handler(unsigned gsi,
-                                                   std::function<bool ()> pre_eoi,
-                                                   std::function<void ()> post_eoi);
-
-    void unregister_level_triggered_handler(shared_vector v);
 };
 
 extern interrupt_descriptor_table idt;

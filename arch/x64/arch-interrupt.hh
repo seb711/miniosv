@@ -24,45 +24,4 @@ private:
     unsigned _vector;
 };
 
-class gsi_interrupt {
-public:
-    void set(unsigned gsi, unsigned vector);
-    void clear();
-private:
-    unsigned _gsi;
-};
-
-class gsi_edge_interrupt : public interrupt {
-public:
-    gsi_edge_interrupt(unsigned id, std::function<void ()> h);
-    ~gsi_edge_interrupt();
-
-    void set_vector(unsigned v);
-    unsigned get_vector();
-
-    void enable();
-    void disable();
-
-private:
-    unsigned _vector;
-    gsi_interrupt _gsi;
-};
-
-class gsi_level_interrupt : public interrupt {
-public:
-    gsi_level_interrupt(unsigned id, std::function<bool ()> a,
-                        std::function<void ()> h);
-    ~gsi_level_interrupt();
-
-    void set_vector(shared_vector v);
-    shared_vector get_vector();
-
-    void enable();
-    void disable();
-
-private:
-    shared_vector _vector;
-    gsi_interrupt _gsi;
-};
-
 #endif /* ARCH_INTERRUPT_HH */

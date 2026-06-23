@@ -47,21 +47,3 @@ void init()
 }
 
 }
-
-using namespace ioapic;
-
-void gsi_interrupt::set(unsigned gsi, unsigned vector)
-{
-    WITH_LOCK(mtx) {
-        write(0x10 + gsi * 2 + 1, sched::cpus[0]->arch.apic_id << 24);
-        write(0x10 + gsi * 2, vector);
-    }
-    _gsi = gsi;
-}
-
-void gsi_interrupt::clear()
-{
-    WITH_LOCK(mtx) {
-        write(0x10 + _gsi * 2, 1 << 16);  // mask
-    }
-}
