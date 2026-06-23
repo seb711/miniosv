@@ -2,17 +2,12 @@
 #include <osv/power.hh>
 #include <osv/debug.hh>
 #include <osv/sched.hh>
-#include <osv/strace.hh>
 #include <osv/kernel_config.h>
 
 namespace osv {
 
 void shutdown()
 {
-#if CONF_tracepoints_strace
-    wait_strace_complete();
-#endif
-
     // Stop all other application threads before powering off, so they cannot
     // run partially-torn-down code during shutdown.
     bool stopped_others = false;

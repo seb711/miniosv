@@ -132,12 +132,10 @@ outlink2 = build/last
 # --- tracepoints -----------------------------------------------------------
 conf_tracepoints=1
 conf_tracepoints_sampler=1
-conf_tracepoints_strace=1
 
 # --- core ------------------------------------------------------------------
 conf_core_c_wrappers=1
 conf_core_commands_runscript=1
-conf_core_rcu_defer_queue_size=2000
 conf_core_debug_buffer_size=0xc800
 conf_core_dynamic_percpu_size=65536
 
@@ -607,7 +605,6 @@ objects += core/rwlock.o
 objects += core/semaphore.o
 objects += core/condvar.o
 objects += core/debug.o
-objects += core/rcu.o
 objects += core/mempool.o
 ifeq ($(conf_memory_tracker),1)
 objects += core/alloctracker.o
@@ -622,13 +619,9 @@ objects += core/mmio.o
 objects += core/kprintf.o
 ifeq ($(conf_tracepoints),1)
 objects += core/trace.o
-ifeq ($(conf_tracepoints_strace),1)
-objects += core/strace.o
-endif
 endif
 objects += core/power.o
 objects += core/percpu.o
-objects += core/percpu-worker.o
 objects += core/shutdown.o
 objects += core/version.o
 objects += core/waitqueue.o

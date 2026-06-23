@@ -20,7 +20,7 @@
 #include <drivers/clock.hh>
 #include <cstring>
 #include <arch.hh>
-#include <osv/rcu.hh>
+#include <osv/barrier.hh>
 #include <safe-ptr.hh>
 #include <stdint.h>
 #include <atomic>
@@ -49,19 +49,15 @@ struct trace_record {
     };
 };
 
-//Simple lock-less multiple-producer single-consumer structure
-//designed to act as a data gateway between threads generating trace
-//records and the strace thread printing them to the console
+//Simple lock-less multiple-producer single-consumer structure that acts as a
+//data gateway between threads generating trace records and a consumer (e.g. a
+//debugger) reading them. _trace_log is null by default; set it to a trace_log
+//to start capturing into this ring (in addition to the per-CPU trace buffers).
 //
-//In essence it is an array of pointers to the trace records
-//indexed by write_offset which stores next entry offset to write and
-//is atomic to guarantee no two producers step on each other and
-//read_offset that stores offset of next entry to read
-//
-//The trace_log is designed as a circular buffer where
-//both read and write offsets would wrap around from 0xffff to 0
-//so it is possible that with huge number of trace record written
-//and slow consumer some data may get overwritten
+//In essence it is an array of pointers to the trace records indexed by
+//write_offset (atomic, so producers don't step on each other) and read_offset.
+//It is a circular buffer where both offsets wrap from 0xffff to 0, so with a
+//slow consumer and many records some data may get overwritten.
 constexpr const size_t trace_log_size = 0x10000;
 struct trace_log {
     trace_record *traces[trace_log_size];
@@ -275,9 +271,6 @@ public:
                              const char* _name, const char* _format);
     ~tracepoint_base();
 
-    void add_probe(probe* p);
-    void del_probe(probe* p);
-
     bool enabled() const {
         return _logging;
     }
@@ -306,8 +299,9 @@ protected:
     bool _backtrace = false;
     bool _logging = false;
     bool active = false; // logging || !probes.empty()
-    osv::rcu_ptr<std::vector<probe*>> probes_ptr;
-    mutex probes_mutex;
+    // Written once at construction and only ever read afterward (probes can no
+    // longer be added/removed at runtime), so a plain atomic pointer suffices.
+    std::atomic<std::vector<probe*>*> probes_ptr;
     void run_probes();
     void log_backtrace(trace_record* tr, u8*& buffer) {
         if (!tr->backtrace) {

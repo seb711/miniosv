@@ -10,7 +10,6 @@
 
 #include <stdint.h>
 #include <atomic>
-#include <osv/rcu.hh>
 #include <osv/virt_to_phys.hh>
 
 struct exception_frame;
@@ -110,7 +109,7 @@ struct pt_level_traits {
 
 template<int N> class hw_ptep;
 template<int N> class hw_ptep_impl;
-template<int N> class hw_ptep_rcu_impl;
+template<int N> class hw_ptep_atomic_impl;
 
 /* common arch-independent interface for pt_element */
 template<int N>
@@ -158,7 +157,7 @@ protected:
     u64 x;
     friend class hw_ptep<N>;
     friend class hw_ptep_impl<N>;
-    friend class hw_ptep_rcu_impl<N>;
+    friend class hw_ptep_atomic_impl<N>;
 };
 }
 
@@ -201,21 +200,21 @@ protected:
 };
 
 template<int N>
-class hw_ptep_rcu_impl : public hw_ptep_impl_base<N> {
+class hw_ptep_atomic_impl : public hw_ptep_impl_base<N> {
 public:
     pt_element<N> read() const { return x->load(std::memory_order_relaxed); }
     pt_element<N> ll_read() const { return x->load(std::memory_order_consume); }
     void write(pt_element<N> pte) { x->store(pte, std::memory_order_release); }
 
 protected:
-    hw_ptep_rcu_impl(pt_element<N>* ptep) : hw_ptep_impl_base<N>(ptep) {}
+    hw_ptep_atomic_impl(pt_element<N>* ptep) : hw_ptep_impl_base<N>(ptep) {}
     using hw_ptep_impl_base<N>::x;
 };
 
 template<int N>
 using hw_ptep_base = typename std::conditional<
-                std::integral_constant<bool, (N == 1) || (N == 2)>::value, // only L1 and L2 PTs are RCU protected
-                hw_ptep_rcu_impl<N>,
+                std::integral_constant<bool, (N == 1) || (N == 2)>::value, // L1/L2 PTEs use atomic (ordered) access for the lockless hardware walker
+                hw_ptep_atomic_impl<N>,
                 hw_ptep_impl<N>>::type;
 
 /* a pointer to a pte mapped by hardware.

@@ -8,6 +8,7 @@
 #include "osv/trace.hh"
 #include <osv/sched.hh>
 #include <osv/mutex.h>
+#include <osv/preempt-lock.hh>
 #include "arch.hh"
 #include <atomic>
 #include <unordered_map>
@@ -124,6 +125,11 @@ PERCPU(trace_buf, percpu_trace_buffer);
 bool trace_enabled;
 static bool global_backtrace_enabled;
 
+// Optional global trace-record ring (consumed e.g. by a debugger). Null by
+// default - set it to a trace_log to start capturing. (Its former owner,
+// the strace thread, was removed; the ring itself is independent.)
+trace_log* _trace_log = nullptr;
+
 typeof(tracepoint_base::tp_list) tracepoint_base::tp_list __attribute__((init_priority((int)init_prio::tracepoint_base)));
 
 void enable_trace()
@@ -196,7 +202,7 @@ tracepoint_base::tracepoint_base(unsigned _id, const std::type_info& tp_type,
         debugf("duplicate tracepoint id %d (%s)\n", std::get<0>(id), name);
         abort();
     }
-    probes_ptr.assign(new std::vector<probe*>);
+    probes_ptr.store(new std::vector<probe*>, std::memory_order_release);
     tp_list.push_back(*this);
 }
 
@@ -204,7 +210,7 @@ tracepoint_base::~tracepoint_base()
 {
     tp_list.erase(tp_list.iterator_to(*this));
     known_ids().erase(id);
-    delete probes_ptr.read();
+    delete probes_ptr.load(std::memory_order_consume);
 }
 
 static lockfree::mutex trace_control_lock;
@@ -241,8 +247,8 @@ void tracepoint_base::update()
 #if CONF_lazy_stack
         arch::ensure_next_stack_page();
 #endif
-        WITH_LOCK(osv::rcu_read_lock) {
-            auto& probes = *probes_ptr.read();
+        WITH_LOCK(preempt_lock) {
+            auto& probes = *probes_ptr.load(std::memory_order_consume);
 
             empty = probes.empty();
         }
@@ -277,38 +283,12 @@ void tracepoint_base::deactivate()
 }
 
 void tracepoint_base::run_probes() {
-    WITH_LOCK(osv::rcu_read_lock) {
-        auto &probes = *probes_ptr.read();
+    WITH_LOCK(preempt_lock) {
+        auto &probes = *probes_ptr.load(std::memory_order_consume);
         for (auto probe : probes) {
             probe->hit();
         }
     }
-}
-
-void tracepoint_base::add_probe(probe* p)
-{
-    WITH_LOCK(probes_mutex) {
-        auto old = probes_ptr.read_by_owner();
-        auto _new = new std::vector<probe*>(*old);
-        _new->push_back(p);
-        probes_ptr.assign(_new);
-        osv::rcu_dispose(old);
-    }
-    update();
-}
-
-void tracepoint_base::del_probe(probe* p)
-{
-    WITH_LOCK(probes_mutex) {
-        auto old = probes_ptr.read_by_owner();
-        auto _new = new std::vector<probe*>(*old);
-        auto i = std::remove(_new->begin(), _new->end(), p);
-        _new->erase(i, _new->end());
-        probes_ptr.assign(_new);
-        osv::rcu_dispose(old);
-    }
-    osv::rcu_synchronize();
-    update();
 }
 
 std::unordered_set<tracepoint_id>& tracepoint_base::known_ids()

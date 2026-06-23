@@ -21,9 +21,7 @@
 #include "arch.hh"
 #include "arch-setup.hh"
 #include "osv/trace.hh"
-#include <osv/strace.hh>
 #include <osv/power.hh>
-#include <osv/rcu.hh>
 #include <osv/mempool.hh>
 #include <osv/version.h>
 #include <osv/shutdown.hh>
@@ -118,9 +116,6 @@ bool opt_power_off_on_abort = false;
 #if CONF_tracepoints
 static bool opt_log_backtrace = false;
 static bool opt_list_tracepoints = false;
-#if CONF_tracepoints_strace
-static bool opt_strace = false;
-#endif
 #endif
 static bool opt_random = true;
 static std::string opt_console = "all";
@@ -229,11 +224,6 @@ void main_cont()
         // and backtrace_safe() fails as soon as we get an exception
         enable_backtraces();
     }
-#if CONF_tracepoints_strace
-    if (opt_strace) {
-        start_strace();
-    }
-#endif
 #endif
     sched::init_detached_threads_reaper();
 

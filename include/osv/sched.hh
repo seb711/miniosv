@@ -23,7 +23,7 @@
 #include <list>
 #include <memory>
 #include <vector>
-#include <osv/rcu.hh>
+#include <osv/barrier.hh>
 #include <osv/clock.hh>
 #include <osv/timer-set.hh>
 #include <osv/export.h>
