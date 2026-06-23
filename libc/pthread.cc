@@ -31,6 +31,8 @@
 #include <osv/rwlock.h>
 #include <osv/export.h>
 #include <osv/kernel_config.h>
+#include <osv/spinlock.h>
+#include <osv/irqlock.hh>
 
 #include "pthread.hh"
 
@@ -40,6 +42,61 @@ namespace pthread_private {
 
     __thread void* tsd[tsd_nkeys];
     __thread pthread_t current_pthread;
+
+    // A spinlock taken with interrupts disabled. The thread-stack cache below
+    // is pushed to from sched::thread::destroy() (the post-context-switch path,
+    // which runs with IRQs disabled and cannot take a sleeping mutex), so its
+    // freelist is guarded by this rather than a mutex.
+    class irq_spin_guard {
+    public:
+        explicit irq_spin_guard(np_spinlock_t& sl) : _sl(sl) {
+            _flags.save();
+            arch::irq_disable();
+            np_spin_lock(&_sl);
+        }
+        ~irq_spin_guard() { np_spin_unlock(&_sl); _flags.restore(); }
+        irq_spin_guard(const irq_spin_guard&) = delete;
+        irq_spin_guard& operator=(const irq_spin_guard&) = delete;
+    private:
+        np_spinlock_t& _sl;
+        arch::irq_flag _flags;
+    };
+
+    // Cache of pthread thread stacks, so a detached pthread's stack can be
+    // returned from sched::thread::destroy() (IRQs disabled) without munmap(),
+    // which would take sleeping locks. A freed stack is pushed onto an intrusive
+    // freelist via a node written into its own top bytes (always resident: the
+    // thread just ran on it), tagged with its size; a same-size request reuses
+    // it, keeping the mmap'd region and its guard page. munmap only happens if
+    // we never reuse (the region is otherwise retained -- a deliberate cache).
+    struct cached_stack { cached_stack* next; size_t size; };
+    static np_spinlock_t stack_cache_lock;
+    static cached_stack* stack_cache_free;
+
+    static void* stack_node_for(void* begin, size_t size) {
+        return static_cast<char*>(begin) + size - sizeof(cached_stack);
+    }
+    static void* stack_begin_from_node(cached_stack* s, size_t size) {
+        return reinterpret_cast<char*>(s) + sizeof(cached_stack) - size;
+    }
+    static void* stack_cache_pop(size_t size) {
+        irq_spin_guard g(stack_cache_lock);
+        for (cached_stack** pp = &stack_cache_free; *pp; pp = &(*pp)->next) {
+            if ((*pp)->size == size) {
+                cached_stack* s = *pp;
+                *pp = s->next;
+                return stack_begin_from_node(s, size);
+            }
+        }
+        return nullptr;
+    }
+    static void stack_cache_push(void* begin, size_t size) {
+        auto* s = static_cast<cached_stack*>(stack_node_for(begin, size));
+        s->size = size;
+        irq_spin_guard g(stack_cache_lock);
+        s->next = stack_cache_free;
+        stack_cache_free = s;
+    }
     __thread int cancel_state = PTHREAD_CANCEL_ENABLE;
     __thread int cancel_type = PTHREAD_CANCEL_DEFERRED;
 
@@ -74,29 +131,48 @@ namespace pthread_private {
         }
     }
 
-    void __attribute__((constructor)) pthread_register_tsd_dtor_notifier()
-    {
-        sched::thread::register_exit_notifier([] {
-            run_tsd_dtors();
-        });
-    }
-
     struct thread_attr;
 
     class pthread {
     public:
-        explicit pthread(void *(*start)(void *arg), void *arg, 
+        explicit pthread(void *(*start)(void *arg), void *arg,
             const thread_attr* attr);
         void start();
         static pthread* from_libc(pthread_t p);
         pthread_t to_libc();
         int join(void** retval);
+        // Lifetime handshake for a detached pthread wrapper. The wrapper outlives
+        // the user's start routine (the running thread reads current_pthread for
+        // pthread_self()/TSD), and for a detached thread nobody calls
+        // pthread_join() to delete it. So it frees itself once it observes BOTH
+        // that the thread has finished and that it is detached, whichever happens
+        // last. on_thread_exit() is called from the dying thread's exit notifier;
+        // mark_detached() from create-detached / pthread_detach of a running
+        // thread. (The detach-after-completion case is handled inline in
+        // pthread_detach(), which reclaims and deletes directly.)
+        void on_thread_exit() { free_if_done(COMPLETED); }
+        void mark_detached()  { free_if_done(DETACHED); }
         void* _retval;
         std::unique_ptr<sched::thread> _thread;
     private:
         sched::thread::stack_info allocate_stack(thread_attr attr);
         static void free_stack(sched::thread::stack_info si);
         sched::thread::attr attributes(thread_attr attr);
+
+        enum { COMPLETED = 1, DETACHED = 2 };
+        std::atomic<int> _state{0};
+        void free_if_done(int bit) {
+            int prev = _state.fetch_or(bit, std::memory_order_acq_rel);
+            if ((prev | bit) == (COMPLETED | DETACHED) &&
+                prev != (COMPLETED | DETACHED)) {
+                // We set the last of the two bits: the (detached) sched::thread
+                // self-reclaims in destroy(), so just release our ownership and
+                // free the wrapper. Runs in a preemptable context (the exit
+                // notifier, or pthread_detach), so delete is fine here.
+                _thread.release();
+                delete this;
+            }
+        }
     };
 
     struct thread_attr {
@@ -109,14 +185,21 @@ namespace pthread_private {
         thread_attr() : stack_begin{}, stack_size{CONF_threads_default_pthread_stack_size}, guard_size{4096}, detached{false}, cpuset{nullptr}, cpu{nullptr} {}
     };
 
-    pthread::pthread(void *(*start)(void *arg), void *arg, 
+    pthread::pthread(void *(*start)(void *arg), void *arg,
                      const thread_attr* attr)
             : _thread(sched::thread::make([=, this] {
                 current_pthread = to_libc();
                 _retval = start(arg);
             }, attributes(attr ? *attr : thread_attr()), false, true))
     {
-        _thread->set_cleanup([this] { delete this; });
+        // A thread created detached self-reclaims (the sched::thread is detached)
+        // and is never joined, so the wrapper must free itself when the thread
+        // exits. Record the detached half of the handshake before start(); the
+        // exit notifier supplies the completed half. (Set before start() so the
+        // thread cannot finish and look for it first.)
+        if (attr && attr->detached) {
+            mark_detached();
+        }
     }
 
     void pthread::start()
@@ -141,6 +224,13 @@ namespace pthread_private {
             return {attr.stack_begin, attr.stack_size};
         }
         size_t size = attr.stack_size;
+        // Reuse a cached stack of the same size if available (keeps its existing
+        // mmap'd region and guard page).
+        if (void *cached = stack_cache_pop(size)) {
+            sched::thread::stack_info si{cached, size};
+            si.deleter = free_stack;
+            return si;
+        }
 #if CONF_lazy_stack
         unsigned stack_flags = mmu::mmap_stack;
 #else
@@ -155,7 +245,27 @@ namespace pthread_private {
 
     void pthread::free_stack(sched::thread::stack_info si)
     {
-        mmu::munmap(si.begin, si.size);
+        // Return the stack to the cache instead of munmap()ing it: for a
+        // detached thread this runs from sched::thread::destroy() with IRQs
+        // disabled, where munmap() (sleeping locks) is illegal. The region and
+        // its guard page are retained for reuse by a same-size thread.
+        stack_cache_push(si.begin, si.size);
+    }
+
+    // Registered after the pthread class is defined, since the notifier refers
+    // to pthread::from_libc(). Constructor order is irrelevant -- it only needs
+    // to run before any thread exits.
+    void __attribute__((constructor)) pthread_register_tsd_dtor_notifier()
+    {
+        sched::thread::register_exit_notifier([] {
+            run_tsd_dtors();
+            // After TSD cleanup (which may use pthread_self()), let a detached
+            // pthread's wrapper free itself. current_pthread is null for
+            // non-pthread (kernel) threads, which have no wrapper.
+            if (current_pthread) {
+                pthread::from_libc(current_pthread)->on_thread_exit();
+            }
+        });
     }
 
     int pthread::join(void** retval)
@@ -879,7 +989,17 @@ int pthread_cancel(pthread_t thread)
 int pthread_detach(pthread_t thread)
 {
     pthread* p = pthread::from_libc(thread);
-    p->_thread->detach();
+    if (p->_thread->detach()) {
+        // The thread had already completed while still attached: it did not
+        // self-reclaim and no one will join it, so reclaim it and free the
+        // wrapper now (we are in a preemptable context).
+        p->_thread.reset();
+        delete p;
+    } else {
+        // Still running (or unstarted): the sched::thread will self-reclaim in
+        // destroy(). The wrapper frees itself once the thread also exits.
+        p->mark_detached();
+    }
     return 0;
 }
 

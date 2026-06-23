@@ -699,8 +699,10 @@ public:
     cpu* tcpu() const __attribute__((no_instrument_function));
     status get_status() const;
     void join();
-    void detach();
-    void set_cleanup(std::function<void ()> cleanup);
+    // Detach the thread. Returns true iff it had already completed while still
+    // attached, in which case the caller must reclaim it (no one will join it,
+    // and it did not self-reclaim). See thread::detach() in sched.cc.
+    bool detach();
     bool is_app() const { return _app; }
     bool migratable() const { return _migration_lock_counter == 0; }
     bool pinned() const { return _pinned; }
@@ -948,12 +950,17 @@ private:
     arch_thread _arch;
     unsigned int _id;
     std::atomic<bool> _interrupted;
-    std::function<void ()> _cleanup;
+    // True while this thread is registered in thread_map (every thread except
+    // the main thread). Drives unregister_thread()'s exactly-once erase.
+    std::atomic<bool> _in_thread_map{false};
     std::vector<char*> _tls;
     bool _app;
 public:
     void destroy();
 private:
+    // Remove this thread from thread_map exactly once (atomic-flag guarded), in
+    // a preemptable context. See sched.cc.
+    void unregister_thread();
 #ifdef __aarch64__
     friend void ::destroy_current_cpu_terminating_thread();
 #endif
@@ -990,12 +997,8 @@ public:
      */
     static void register_exit_notifier(std::function<void ()> &&n);
 private:
-    class reaper;
-    friend class reaper;
     friend class thread_handle;
     friend class detached_state_pool;
-    static reaper* _s_reaper;
-    friend void init_detached_threads_reaper();
 
     // Some per-thread statistics
 public:
@@ -1073,8 +1076,6 @@ private:
     uint64_t _ver = 0;
     friend class thread;
 };
-
-void init_detached_threads_reaper();
 
 class timer_list {
 public:

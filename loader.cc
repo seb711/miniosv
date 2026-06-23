@@ -225,7 +225,6 @@ void main_cont()
         enable_backtraces();
     }
 #endif
-    sched::init_detached_threads_reaper();
 
     arch::irq_enable();
 

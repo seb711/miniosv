@@ -132,17 +132,6 @@ std::list<cpu::notifier*> cpu::notifier::_notifiers __attribute__((init_priority
 
 namespace sched {
 
-class thread::reaper {
-public:
-    reaper();
-    void reap();
-    void add_zombie(thread* z);
-private:
-    mutex _mtx;
-    std::list<thread*> _zombies;
-    thread_unique_ptr _thread;
-};
-
 cpu::cpu(unsigned _id)
     : id(_id)
     , preemption_timer(*this)
@@ -1236,7 +1225,6 @@ thread::thread(std::function<void ()> func, attr attr, bool main, bool app)
     , _migration_lock_counter(0)
     , _pinned(false)
     , _id(0)
-    , _cleanup([this] { dispose(this); })
     , _app(app)
     , _joiner(nullptr)
 {
@@ -1265,6 +1253,7 @@ thread::thread(std::function<void ()> func, attr attr, bool main, bool app)
                 if (!find_by_id(tid)) {
                     _s_idgen = _id = tid;
                     thread_map.insert(std::make_pair(_id, this));
+                    _in_thread_map.store(true, std::memory_order_relaxed);
                     break;
                 }
             } while (tid != ttid); // One full round trip is enough
@@ -1334,14 +1323,27 @@ static void run_exit_notifiers()
     }
 }
 
+// Remove this thread from the (numeric-id) registry. Idempotent and safe to
+// call from multiple teardown paths: the atomic flag ensures the sleeping
+// thread_map_mutex is taken exactly once, and never from a context that cannot
+// block. A cleanly-detached thread unregisters itself in complete() (preemptable);
+// every other thread unregisters here in ~thread() (also preemptable). This is
+// what keeps destroy()'s detached reclaim free of the sleeping mutex.
+void thread::unregister_thread()
+{
+    if (_in_thread_map.exchange(false, std::memory_order_relaxed)) {
+        WITH_LOCK(thread_map_mutex) {
+            thread_map.erase(_id);
+        }
+    }
+}
+
 thread::~thread()
 {
     if (!_attr._detached) {
         join();
     }
-    WITH_LOCK(thread_map_mutex) {
-        thread_map.erase(_id);
-    }
+    unregister_thread();
     if (_attr._stack.deleter) {
         _attr._stack.deleter(_attr._stack);
     }
@@ -1400,6 +1402,23 @@ void thread::destroy()
     assert(thread::current() != this);
 
     assert(_detached_state->st.load(std::memory_order_relaxed) == status::terminating);
+
+    if (_detach_state.load(std::memory_order_relaxed) == detach_state::detached) {
+        // Cleanly detached: nobody will ever join us, so reclaim inline (this
+        // replaces the old reaper thread). We run right after the dying thread's
+        // final context switch, with IRQs disabled, so everything here must be
+        // non-blocking. complete() already did the parts that need a preemptable
+        // context -- it unregistered us from thread_map and freed our heap-owning
+        // members (_func, _tls) -- leaving only pooled resources. dispose() then
+        // runs ~thread() (join() skipped as detached, unregister is a no-op since
+        // the flag is clear, stack -> stack pool, embedded TCB freed with the
+        // object, detached_state -> its pool) and returns the storage slot to the
+        // thread pool. No general-allocator free, no sleeping lock.
+        _detached_state->st.store(status::terminated, std::memory_order_relaxed);
+        dispose(this);
+        return;
+    }
+
     // Solve a race between join() and the thread's completion. If join()
     // manages to set _joiner first, it will sleep and we need to wake it.
     // But if we set _joiner first, join() will never wait.
@@ -1588,7 +1607,21 @@ void thread::complete()
     auto value = detach_state::attached;
     _detach_state.compare_exchange_strong(value, detach_state::attached_complete);
     if (value == detach_state::detached) {
-        _s_reaper->add_zombie(this);
+        // We are cleanly detached: no one will ever join us, so we self-reclaim
+        // in destroy() after the final context switch. destroy() runs with IRQs
+        // disabled and can only return pooled resources -- it cannot take the
+        // thread_map mutex or free heap. So do those preemptable steps now, here,
+        // while we still can:
+        //  - unregister from thread_map (sleeping mutex);
+        //  - release our heap-owning members. _func has run to completion on the
+        //    normal path (thread_main_c calls complete() only after it returns);
+        //    on the pthread_exit() path its frame is still on the stack but its
+        //    captures are trivial and never used again, so destroying it now is
+        //    safe. _tls is unused once we stop running. Any future heap-owning
+        //    member of thread must likewise be released here.
+        unregister_thread();
+        _func = nullptr;
+        std::vector<char*>().swap(_tls);
     }
     // If this thread gets preempted after changing status it will never be
     // scheduled again to set terminating_thread. So must disable preemption.
@@ -1662,22 +1695,19 @@ void thread::join()
     wait_until([&] { return st.load() == status::terminated; });
 }
 
-void thread::detach()
+// Mark the thread detached. Returns true iff the thread had already completed
+// while still attached (detach_state::attached_complete): in that case complete()
+// did NOT self-reclaim (it ran the joinable path), and nobody will join, so the
+// caller becomes responsible for reclaiming the thread (e.g. pthread_detach
+// reclaims it inline). Returns false if the thread is still running (or unstarted):
+// it will observe detach_state::detached in complete() and self-reclaim in
+// destroy().
+bool thread::detach()
 {
     _attr._detached = true;
     auto value = detach_state::attached;
     _detach_state.compare_exchange_strong(value, detach_state::detached);
-    if (value == detach_state::attached_complete) {
-        // Complete was called prior to our call to detach. If we
-        // don't add ourselves to the reaper now, nobody will.
-        _s_reaper->add_zombie(this);
-    }
-}
-
-void thread::set_cleanup(std::function<void ()> cleanup)
-{
-    assert(_detached_state->st == status::unstarted);
-    _cleanup = cleanup;
+    return value == detach_state::attached_complete;
 }
 
 thread::stack_info thread::get_stack_info()
@@ -1943,43 +1973,6 @@ bool operator<(const timer_base& t1, const timer_base& t2)
     } else {
         return false;
     }
-}
-
-thread::reaper::reaper()
-    : _mtx{}, _zombies{}, _thread(thread::make_unique([this] { reap(); }))
-{
-    _thread->start();
-}
-
-void thread::reaper::reap()
-{
-    while (true) {
-        WITH_LOCK(_mtx) {
-            wait_until(_mtx, [this] { return !_zombies.empty(); });
-            while (!_zombies.empty()) {
-                auto z = _zombies.front();
-                _zombies.pop_front();
-                z->join();
-                z->_cleanup();
-            }
-        }
-    }
-}
-
-void thread::reaper::add_zombie(thread* z)
-{
-    assert(z->_attr._detached);
-    WITH_LOCK(_mtx) {
-        _zombies.push_back(z);
-        _thread->wake();
-    }
-}
-
-thread::reaper *thread::_s_reaper;
-
-void init_detached_threads_reaper()
-{
-    thread::_s_reaper = new thread::reaper;
 }
 
 void start_early_threads()
