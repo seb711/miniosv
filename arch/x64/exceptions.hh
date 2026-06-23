@@ -9,11 +9,13 @@
 #define EXCEPTIONS_HH
 
 #include <stdint.h>
+#include <atomic>
 #include <functional>
 #include <osv/types.h>
-#include <osv/rcu.hh>
 #include <osv/mutex.h>
 #include <vector>
+
+namespace sched { struct cpu; }
 
 class inter_processor_interrupt;
 
@@ -54,6 +56,12 @@ public:
     void unregister_interrupt(inter_processor_interrupt *interrupt);
     void invoke_interrupt(unsigned vector);
 
+    // The hardware IDT is identical on every CPU (the stubs are shared code),
+    // but each CPU owns its own software handler table. The common handlers
+    // (IPIs, APIC timer) are registered before SMP into the boot CPU's table,
+    // which is copied to each AP at bringup by this call.
+    void copy_handlers_to_cpu(sched::cpu *cpu);
+
     /* TODO: after merge of MSI and Xen callbacks as interrupt class,
      * exposing these as 'public' should not be necessary anymore.
      */
@@ -62,7 +70,9 @@ public:
                                         std::function<void ()> post_eoi);
 
     /* register_handler is a simplified way to call register_interrupt_handler
-     * with no pre_eoi, and apic eoi.
+     * with no pre_eoi, and apic eoi. These target the boot CPU's table (= the
+     * template copied to every CPU) and are used for the common IPI/timer
+     * handlers registered before SMP.
      */
     unsigned register_handler(std::function<void ()> post_eoi);
     void unregister_handler(unsigned vector);
@@ -133,8 +143,13 @@ private:
         unsigned id;
         unsigned gsi;
     };
-    osv::rcu_ptr<handler> _handlers[256];
-    mutex _lock;
+    // One software handler table per CPU, indexed by cpu id. Plain atomic
+    // pointers (no RCU, no lock): each table is read only by its owning CPU's
+    // invoke_interrupt() and written only single-threaded at boot. _handlers[0]
+    // is the boot CPU's table and doubles as the template copied into each AP's
+    // table at bringup.
+    static constexpr unsigned max_cpus = 64;
+    std::atomic<handler*> _handlers[max_cpus][256] = {};
 };
 
 extern interrupt_descriptor_table idt;

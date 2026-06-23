@@ -15,7 +15,6 @@
 #include <libc/signal.hh>
 #include <apic.hh>
 #include <osv/prio.hh>
-#include <osv/rcu.hh>
 #include <osv/mutex.h>
 #include <osv/intr_random.hh>
 #include <osv/kernel_config.h>
@@ -104,34 +103,56 @@ unsigned interrupt_descriptor_table::register_interrupt_handler(
         std::function<void ()> eoi,
         std::function<void ()> post_eoi)
 {
-    WITH_LOCK(_lock) {
-        for (unsigned i = 32; i < 256; ++i) {
-            auto o = _handlers[i].read_by_owner();
-            if (o == nullptr) {
-                auto n = new handler(o, pre_eoi, eoi, post_eoi);
-
-                _handlers[i].assign(n);
-                osv::rcu_dispose(o);
-
-                return i;
-            }
+    // The common IPI / APIC-timer handlers are registered single-threaded during
+    // boot (IPIs at static init, timer at clock init) into the boot CPU's table,
+    // which is the template copied to every CPU at bringup. An atomic release
+    // store publishes the handler, so no lock is needed here - and because each
+    // CPU's table is mutated only at boot and read only by its own
+    // invoke_interrupt(), that path needs no lock either.
+    for (unsigned i = 32; i < 256; ++i) {
+        if (_handlers[0][i].load(std::memory_order_relaxed) == nullptr) {
+            auto n = new handler(nullptr, pre_eoi, eoi, post_eoi);
+            _handlers[0][i].store(n, std::memory_order_release);
+            return i;
         }
     }
     abort();
 }
 
-void interrupt_descriptor_table::unregister_handler(unsigned vector)
-{
-    WITH_LOCK(_lock) {
-        auto o = _handlers[vector].read_by_owner();
-        _handlers[vector].assign(nullptr);
-        osv::rcu_dispose(o);
-    }
-}
-
 unsigned interrupt_descriptor_table::register_handler(std::function<void ()> post_eoi)
 {
     return register_interrupt_handler([] { return true; }, [] { processor::apic->eoi(); }, post_eoi);
+}
+
+void interrupt_descriptor_table::unregister_handler(unsigned vector)
+{
+    // Only the IPI globals use this, and they are never destroyed at runtime.
+    auto o = _handlers[0][vector].load(std::memory_order_relaxed);
+    _handlers[0][vector].store(nullptr, std::memory_order_relaxed);
+    delete o;
+}
+
+void interrupt_descriptor_table::copy_handlers_to_cpu(sched::cpu *cpu)
+{
+    static_assert(max_cpus >= sched::max_cpus,
+                  "per-CPU handler table must cover every CPU");
+    // Point this CPU's table at the boot CPU's template handlers. We copy the
+    // POINTERS, not the handler objects: the common IPI/timer handlers are
+    // immutable after registration and never freed, so they can be shared by
+    // every CPU. Crucially this allocates nothing - smp_main runs before this
+    // CPU's per-CPU memory allocator is set up, so calling new here would hang.
+    // (Per-CPU device handlers, when added, are allocated later and owned by
+    // their own CPU, so sharing the template entries causes no double-free.)
+    // `cpu` is passed explicitly because sched::cpu::current() is not usable
+    // this early in smp_main.
+    unsigned id = cpu->id;
+    if (id == 0) {
+        return;  // boot CPU uses _handlers[0] (the template) directly
+    }
+    for (unsigned i = 0; i < 256; ++i) {
+        _handlers[id][i].store(_handlers[0][i].load(std::memory_order_relaxed),
+                               std::memory_order_relaxed);
+    }
 }
 
 void interrupt_descriptor_table::register_interrupt(inter_processor_interrupt *interrupt)
@@ -150,28 +171,33 @@ void interrupt_descriptor_table::invoke_interrupt(unsigned vector)
 #if CONF_lazy_stack_invariant
     assert(!arch::irq_enabled());
 #endif
-    WITH_LOCK(osv::rcu_read_lock) {
-        unsigned i, nr_shared;
-        bool handled = false;
+    // Interrupt context (irq disabled), so the current CPU id is stable and we
+    // read this CPU's own handler table - no lock/RCU needed.
+    auto ptr = _handlers[sched::cpu::current()->id][vector].load(std::memory_order_consume);
+    if (!ptr) {
+        // No handler for this vector on this CPU. Common vectors (IPIs, timer)
+        // are in every CPU's table via the template copy, so this can only be a
+        // device MSI delivered to a CPU that doesn't own it - a routing/pinning
+        // bug, which the "every MSI is pinned" invariant is meant to prevent.
+        // (We deliberately do NOT EOI: the APIC spurious vector also lands with
+        // no handler and must not be EOI'd.)
+        assert(false && "interrupt delivered to a CPU with no handler for this vector");
+        return;
+    }
 
-        auto ptr = _handlers[vector].read();
-        if (!ptr) {
-            return;
-        }
-
-        nr_shared = ptr->size();
-        for (i = 0 ; i < nr_shared; i++) {
-            handled = ptr->pre_eois[i]();
-            if (handled) {
-                break;
-            }
-        }
-
-        ptr->eoi();
-
+    unsigned i, nr_shared = ptr->size();
+    bool handled = false;
+    for (i = 0 ; i < nr_shared; i++) {
+        handled = ptr->pre_eois[i]();
         if (handled) {
-            ptr->post_eois[i]();
+            break;
         }
+    }
+
+    ptr->eoi();
+
+    if (handled) {
+        ptr->post_eois[i]();
     }
 }
 

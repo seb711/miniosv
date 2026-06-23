@@ -510,7 +510,6 @@ drivers += drivers/pci-generic.o
 drivers += drivers/pci-device.o
 drivers += drivers/pci-function.o
 drivers += drivers/pci-bridge.o
-drivers += drivers/msi.o
 endif
 drivers += drivers/driver.o
 
@@ -578,7 +577,6 @@ objects += arch/$(arch)/hypervisor.o
 objects += arch/$(arch)/interrupt.o
 ifeq ($(conf_drivers_pci),1)
 objects += arch/$(arch)/pci.o
-objects += arch/$(arch)/msi.o
 endif
 objects += arch/$(arch)/power.o
 objects += arch/$(arch)/feexcept.o

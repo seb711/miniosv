@@ -279,6 +279,11 @@ void smp_main()
     sched::cpu* cpu = smp_initial_find_current_cpu();
     assert(cpu);
     cpu->init_on_cpu();
+    // Give this AP its own copy of the interrupt handler table (the common
+    // IPI/timer handlers registered on the boot CPU before SMP). Must happen
+    // after lidt and before this CPU takes any interrupt. Pass `cpu` explicitly
+    // - sched::cpu::current() is not usable this early in smp_main.
+    idt.copy_handlers_to_cpu(cpu);
     cpu->bringup_thread->_detached_state->_cpu = cpu;
     cpu->bringup_thread->switch_to_first();
 }
