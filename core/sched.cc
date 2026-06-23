@@ -23,6 +23,7 @@
 #include <stdlib.h>
 #include <math.h>
 #include <unordered_map>
+#include <osv/spinlock.h>
 #include <osv/wait_record.hh>
 #include <osv/preempt-lock.hh>
 #include <osv/symbols.hh>
@@ -915,7 +916,9 @@ thread::stack_info::stack_info(void* _begin, size_t _size)
 
 void thread::stack_info::default_deleter(thread::stack_info si)
 {
-    free(si.begin);
+    // Return the stack to the pool rather than free()ing it, so it can also be
+    // run from destroy(). Matches alloc_stack_mem() used by init_stack().
+    thread::free_stack_mem(si.begin, si.size);
 }
 
 // thread_map is used for a list of all threads, but also as a map from
@@ -925,8 +928,6 @@ static mutex thread_map_mutex;
 using id_type = std::invoke_result_t<decltype(&thread::id), thread>;
 std::unordered_map<id_type, thread *> thread_map
     __attribute__((init_priority((int)init_prio::threadlist)));
-
-static thread_runtime::duration total_app_time_exited(0);
 
 thread_runtime::duration thread::thread_clock() {
     if (this == current()) {
@@ -997,10 +998,13 @@ osv::clock::uptime::duration process_cputime()
 
 std::chrono::nanoseconds osv_run_stats()
 {
-    thread_runtime::duration total_app_time;
+    // Sum of the CPU time of all currently-live threads. CPU time of threads
+    // that have already exited is not tracked (it was the only state thread
+    // teardown shared with thread_map_mutex, and removing it lets a detached
+    // thread be reclaimed inline in destroy() without that sleeping mutex).
+    thread_runtime::duration total_app_time(0);
 
     WITH_LOCK(thread_map_mutex) {
-        total_app_time = total_app_time_exited;
         for (auto th : thread_map) {
             thread *t = th.second;
             total_app_time += t->thread_clock();
@@ -1041,21 +1045,47 @@ void* thread::do_remote_thread_local_var(void* var)
 std::atomic<uint64_t> thread::versioned_status::wake_version_mismatches{0};
 #endif
 
+namespace {
+// A spinlock taken with interrupts disabled. The thread-resource pools below
+// are freed from destroy() (the post-context-switch path, which runs with IRQs
+// already disabled and cannot take a sleeping mutex) as well as from normal
+// context, so their freelists are guarded by this rather than a mutex. The
+// saved IRQ flag is per-acquisition (on the stack), never shared in the lock.
+class irq_spin_guard {
+public:
+    explicit irq_spin_guard(np_spinlock_t& sl) : _sl(sl) {
+        _flags.save();
+        arch::irq_disable();
+        np_spin_lock(&_sl);
+    }
+    ~irq_spin_guard() {
+        np_spin_unlock(&_sl);
+        _flags.restore();
+    }
+    irq_spin_guard(const irq_spin_guard&) = delete;
+    irq_spin_guard& operator=(const irq_spin_guard&) = delete;
+private:
+    np_spinlock_t& _sl;
+    arch::irq_flag _flags;
+};
+}
+
 // Type-stable pool for thread::detached_state. Slots are never returned to the
 // general allocator: a freed slot goes on a freelist and is later handed to a
 // new thread with its version bumped. This is what makes a stale thread_handle
 // pointer always safe to dereference; the version then detects the recycle.
 //
-// For now a single global freelist behind a mutex. detached_state alloc/free
-// happens only at thread create/destroy - not on the wake fast path - so the
-// lock is effectively uncontended. The alloc()/free() interface is kept trivial
-// so it can be sharded into per-CPU freelists later without touching callers.
+// The freelist is guarded by an irq-disabled spinlock (not a mutex) because
+// free() is called from destroy(). Only the freelist push/pop is under the
+// lock; the grow path (new) runs from alloc() in normal context. The interface
+// is kept trivial so it can be sharded into per-CPU freelists later.
 // (A friend of thread so it can construct/recycle the private detached_state.)
 class detached_state_pool {
 public:
     thread::detached_state* alloc(thread* owner) {
         thread::detached_state* ds = nullptr;
-        WITH_LOCK(_mtx) {
+        {
+            irq_spin_guard g(_lock);
             if (_free) {
                 ds = _free;
                 _free = ds->_next_free;
@@ -1063,6 +1093,7 @@ public:
         }
         if (!ds) {
             // Grow the pool. This memory is intentionally never freed back.
+            // (alloc() only runs at thread creation, in normal context.)
             ds = new thread::detached_state(owner);
         }
         // Bump this slot's per-slot version and stamp the new owner.
@@ -1070,13 +1101,12 @@ public:
         return ds;
     }
     void free(thread::detached_state* ds) {
-        WITH_LOCK(_mtx) {
-            ds->_next_free = _free;
-            _free = ds;
-        }
+        irq_spin_guard g(_lock);
+        ds->_next_free = _free;
+        _free = ds;
     }
 private:
-    mutex _mtx;
+    np_spinlock_t _lock = {};
     thread::detached_state* _free = nullptr;
 };
 
@@ -1085,6 +1115,117 @@ static detached_state_pool detached_states;
 void thread::detached_state_pool_deleter::operator()(thread::detached_state* ds) const
 {
     detached_states.free(ds);
+}
+
+// Offset, within a thread's storage slot, of the embedded TLS block. The slot
+// laid out by thread_storage_pool is:
+//   [ thread object | pad to 64 | TLS data (tls.size) | TCB ]
+// so the TLS block shares the object's single pooled allocation and lifetime;
+// setup_tcb() points into the tail instead of allocating, and free_tcb() is a
+// no-op. align to 64 to match the kernel TLS template alignment (loader.ld).
+size_t thread::tls_block_offset()
+{
+    return align_up(sizeof(thread), (size_t)64);
+}
+
+// Type-stable storage pool for the thread object together with its embedded TLS
+// block + TCB (see tls_block_offset()). Like detached_states, a freed slot goes
+// on a freelist and is reused; backing memory is never returned to the general
+// allocator. The freelist is guarded by an irq-disabled spinlock because
+// free() is called from destroy(); the grow path (aligned_alloc) runs only from
+// alloc() in normal context.
+namespace {
+class thread_storage_pool {
+public:
+    // size/align are fixed (computed by thread::alloc_storage from the runtime
+    // TLS size), so every slot is identical and freely interchangeable.
+    void *alloc(size_t size, size_t align) {
+        {
+            irq_spin_guard g(_lock);
+            if (_free) {
+                void *p = _free;
+                _free = *static_cast<void **>(p);
+                return p;
+            }
+        }
+        // Grow the pool. This memory is intentionally never freed back.
+        return aligned_alloc(align, size);
+    }
+    void free(void *p) {
+        irq_spin_guard g(_lock);
+        *static_cast<void **>(p) = _free;
+        _free = p;
+    }
+private:
+    np_spinlock_t _lock = {};
+    void *_free = nullptr;
+};
+static thread_storage_pool thread_storage;
+
+// Pool of thread stacks, so a terminating thread's stack can be returned from
+// destroy() (which cannot call free()/munmap()). A freed stack is pushed onto
+// an intrusive freelist using a node written into its own first bytes, tagged
+// with its size; alloc() reuses a cached stack of the exact same size, else
+// allocates fresh (in normal context). Backing memory is only released on a
+// trim (not yet implemented) in a blockable context.
+struct free_stack_node {
+    free_stack_node* next;
+    size_t size;
+};
+class stack_pool {
+public:
+    void* alloc(size_t size) {
+        {
+            irq_spin_guard g(_lock);
+            for (free_stack_node** pp = &_free; *pp; pp = &(*pp)->next) {
+                if ((*pp)->size == size) {
+                    free_stack_node* s = *pp;
+                    *pp = s->next;
+                    return s;
+                }
+            }
+        }
+        // Miss: allocate fresh (normal context). malloc touches the pages, so
+        // the stack top is pre-faulted as thread_main() requires.
+        return malloc(size);
+    }
+    void free(void* begin, size_t size) {
+        auto* s = static_cast<free_stack_node*>(begin);
+        s->size = size;
+        irq_spin_guard g(_lock);
+        s->next = _free;
+        _free = s;
+    }
+private:
+    np_spinlock_t _lock = {};
+    free_stack_node* _free = nullptr;
+};
+static stack_pool stacks;
+}
+
+void *thread::alloc_storage()
+{
+    // Each slot holds the thread object plus its embedded TLS block + TCB; the
+    // alignment covers both alignof(thread) and the TLS's required 64 bytes.
+    size_t align = alignof(thread) < 64 ? 64 : alignof(thread);
+    size_t size = align_up(tls_block_offset()
+            + tls.size + sizeof(thread_control_block), align);
+    return thread_storage.alloc(size, align);
+}
+
+void thread::free_storage(void *p)
+{
+    thread_storage.free(p);
+}
+
+void *thread::alloc_stack_mem(size_t size)
+{
+    return stacks.alloc(size);
+}
+
+void thread::free_stack_mem(void *begin, size_t size)
+{
+    stacks.free(begin, size);
 }
 
 thread::thread(std::function<void ()> func, attr attr, bool main, bool app)
@@ -1101,6 +1242,10 @@ thread::thread(std::function<void ()> func, attr attr, bool main, bool app)
 {
     trace_thread_create(this);
 
+    // The main thread is constructed in place on the boot stack (not via make()),
+    // so it has no pooled storage slot to embed its TLS block into; it allocates
+    // its TLS separately. All other threads embed it in their storage slot.
+    _tls_embedded = !main;
     setup_tcb();
     // module 0 is always the core; with the application statically linked into
     // the kernel there are no additional (dynamically loaded) TLS modules.
@@ -1196,7 +1341,6 @@ thread::~thread()
     }
     WITH_LOCK(thread_map_mutex) {
         thread_map.erase(_id);
-        total_app_time_exited += _total_cpu_time;
     }
     if (_attr._stack.deleter) {
         _attr._stack.deleter(_attr._stack);
@@ -1530,16 +1674,17 @@ void thread::detach()
     }
 }
 
-thread::stack_info thread::get_stack_info()
-{
-    return _attr._stack;
-}
-
 void thread::set_cleanup(std::function<void ()> cleanup)
 {
     assert(_detached_state->st == status::unstarted);
     _cleanup = cleanup;
 }
+
+thread::stack_info thread::get_stack_info()
+{
+    return _attr._stack;
+}
+
 
 void thread::timer_fired()
 {

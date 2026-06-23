@@ -67,7 +67,7 @@ void thread::init_stack()
         stack.size = CONF_threads_default_kernel_stack_size;
     }
     if (!stack.begin) {
-        stack.begin = malloc(stack.size);
+        stack.begin = alloc_stack_mem(stack.size);
         stack.deleter = stack.default_deleter;
     } else {
         // The thread will run thread_main_c() with preemption disabled
@@ -90,10 +90,10 @@ void thread::init_stack()
 
 void thread::setup_tcb()
 {   //
-    // This method allocates the per-thread TLS memory region and sets up the
-    // TCB (Thread Control Block) that points to it. The region holds the
-    // thread-local variables (with __thread modifier) defined in the kernel
-    // and the statically-linked application.
+    // This method sets up the per-thread TLS memory region and the TCB (Thread
+    // Control Block) that points to it. The region holds the thread-local
+    // variables (with __thread modifier) defined in the kernel and the
+    // statically-linked application.
     //
     // The TLS layout conforms to variant I (1), which means all variable
     // offsets are positive (the block is laid out to the right of the TCB).
@@ -104,12 +104,22 @@ void thread::setup_tcb()
     // is just the kernel TLS template (module 0); there is no separately loaded
     // executable/shared-object TLS to splice in.
     // In arch/aarch64/loader.ld, the TLS template segment is aligned to 64
-    // bytes, and that's what the objects placed in it assume, so allocate with
-    // the same 64-byte alignment.
+    // bytes, and that's what the objects placed in it assume.
     auto kernel_tls_size = sched::tls.size;
     assert(align_check(kernel_tls_size, (size_t)64));
 
-    void* p = aligned_alloc(64, kernel_tls_size + sizeof(*_tcb));
+    // For pool-allocated threads the TCB + TLS block is embedded in the tail of
+    // the storage slot (see tls_block_offset()/thread_storage_pool), so there is
+    // nothing to allocate -- it shares the object's single pooled allocation and
+    // is freed with it. The slot base is 64-aligned and tls_block_offset() is a
+    // multiple of 64, so p is 64-aligned, matching the former aligned_alloc(64).
+    // The stack-allocated main thread has no such slot, so it allocates here.
+    void* p;
+    if (_tls_embedded) {
+        p = reinterpret_cast<char*>(this) + tls_block_offset();
+    } else {
+        p = aligned_alloc(64, kernel_tls_size + sizeof(*_tcb));
+    }
     _tcb = (thread_control_block *)p;
     _tcb[0].tls_base = &_tcb[1];
     _state.tcb = p;
@@ -125,7 +135,11 @@ void thread::setup_tcb()
 
 void thread::free_tcb()
 {
-    free(_tcb);
+    // Embedded TLS is freed together with the object by the storage pool; only
+    // the separately-allocated main-thread TLS needs an explicit free.
+    if (!_tls_embedded) {
+        free(_tcb);
+    }
 }
 
 void thread::update_dtv()

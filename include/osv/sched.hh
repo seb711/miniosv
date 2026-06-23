@@ -552,18 +552,25 @@ public:
         // Note that avoiding new() is is not *really* important because
         // sizeof(thread) very large (over 20 KB) and would get a 4096-byte
         // alignment anyway, even if we allocated it with normal new.
-        void *p = aligned_alloc(alignof(thread), sizeof(thread));
+        //
+        // The raw storage comes from a type-stable pool (alloc_storage), not
+        // the general allocator: a freed thread slot is recycled, never handed
+        // back. This keeps a 'thread*' obtained from find_by_id()/a stale
+        // handle always safe to dereference (it always points at *some* thread),
+        // which is what lets a future lock-free thread_map and inline reclaim
+        // in destroy() recycle the object without a use-after-free.
+        void *p = alloc_storage();
         if (!p) {
             return nullptr;
         }
         return new(p) thread(std::forward<Args>(args)...);
     }
-    // Since make() doesn't necessarily allocate with "new", dispose() should
-    // be used to free it, not "delete". However, in practice our new and
-    // delete are the same, so delete is fine.
+    // Since make() doesn't allocate with "new", dispose() must be used to free
+    // it, not "delete": it runs the destructor and returns the storage to the
+    // type-stable pool (free_storage), it does NOT free() it.
     static void dispose(thread* p) {
         p->~thread();
-        free(p);
+        free_storage(p);
     }
     using thread_unique_ptr = std::unique_ptr<thread, decltype(&thread::dispose)>;
     template <typename... Args>
@@ -572,6 +579,20 @@ public:
         thread::dispose);
     }
 private:
+    // Type-stable storage pool for the (large, page-aligned) thread object
+    // plus its embedded TLS block + TCB. Slots are recycled, never returned to
+    // the general allocator. See make() and tls_block_offset() in sched.cc.
+    static void *alloc_storage();
+    static void free_storage(void *p);
+    // Byte offset of the embedded TLS block within a storage slot. Used by
+    // setup_tcb() (which points into the slot tail instead of allocating).
+    static size_t tls_block_offset();
+
+    // Pool of thread stacks, so a stack can be reclaimed from destroy() without
+    // calling free()/munmap(). Used by init_stack()/the default stack deleter.
+    static void *alloc_stack_mem(size_t size);
+    static void free_stack_mem(void *begin, size_t size);
+
     explicit thread(std::function<void ()> func, attr attributes = attr(),
             bool main = false, bool app = false);
 
@@ -852,6 +873,10 @@ private:
     std::function<void ()> _func;
     thread_state _state;
     thread_control_block* _tcb;
+    // True when the TLS block + TCB is embedded in this thread's storage slot
+    // (the normal case, for pool-allocated threads via make()); false for the
+    // stack-allocated main thread, whose TLS is allocated/freed separately.
+    bool _tls_embedded = true;
 
     // State machine transition matrix
     //
