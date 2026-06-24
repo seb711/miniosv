@@ -23,6 +23,7 @@
 #if CONF_drivers_acpi
 #include "drivers/acpi.hh"
 #endif
+#include "drivers/nvme.hh"
 
 // Physical pointer to the hand-off structure filled by the UEFI stub; stored
 // by start64 in boot.S.
@@ -231,7 +232,7 @@ void arch_init_premain()
     // here; the Hyper-V clock uses it as its wall-clock base.
     osv_boot_unixtime_ns = osv_boot_info->boot_unixtime_ns;
 
-    disable_pic();
+    disable_pic(); 
 }
 
 #include "drivers/driver.hh"
@@ -249,6 +250,8 @@ void arch_init_drivers()
 
     // Initialize all drivers
     hw::driver_manager* drvman = hw::driver_manager::instance();
+    printf("register nvme driver\n"); 
+    drvman->register_driver(nvme::driver::probe);
     boot_time.event("drivers probe");
     drvman->load_all();
     drvman->list_drivers();

@@ -154,6 +154,7 @@ conf_interrupt_stack_size=0x1000
 # --- device drivers --------------------------------------------------------
 conf_drivers_acpi=1
 conf_drivers_pci=1
+conf_drivers_nvme=1
 
 ifneq ($(MAKECMDGOALS),clean)
 $(info Building into $(out))
@@ -507,7 +508,14 @@ ifeq ($(conf_drivers_pci),1)
 drivers += drivers/pci-generic.o
 drivers += drivers/pci-device.o
 drivers += drivers/pci-function.o
-drivers += drivers/pci-bridge.o
+drivers += drivers/pci-bridge.o 
+ifeq ($(conf_drivers_nvme), 1)
+drivers += drivers/nvme.o
+drivers += drivers/nvme-user-queue.o
+drivers += drivers/nvme-queue.o
+drivers += drivers/msi.o
+drivers += arch/$(arch)/msi.o
+endif
 endif
 drivers += drivers/driver.o
 
@@ -665,6 +673,10 @@ $(out)/libc/stdio/vfscanf.o: COMMON += $(wno-maybe-uninitialized)
 libc += string/explicit_bzero.o
 libc += string/strerror_r.o
 libc += string/stresep.o
+
+# wcwidth/wcswidth: llvm-libc lacks them; the tabulate table-printer used by
+# LeanStore's profiling output calls wcswidth().
+libc += locale/wcwidth.o
 
 
 libc += unistd/sync.o

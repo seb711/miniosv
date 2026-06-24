@@ -430,6 +430,147 @@ static void test_high_thread_count()
     CHECK(ran.load() == N);
 }
 
+/* ============================== periodic-writer pacing / no runaway sleep */
+
+// Pacing math used by periodic "writer" threads (e.g. LeanStore's profiling
+// thread): sleep for the remainder of a fixed period after doing some work.
+// The subtraction MUST be clamped: `diff` is unsigned, so if an iteration
+// overruns the period -- or the monotonic clock reads backwards, making the
+// measured elapsed time a near-2^64 value -- a raw `period - diff` underflows
+// and sleep_for() parks the thread for thousands of years (it "begins to sleep
+// and never comes back"). The clamp guarantees we never sleep longer than the
+// period. This helper is the fixed form; the test pins the invariant.
+static uint64_t paced_sleep_us(uint64_t period_us, uint64_t elapsed_us)
+{
+    return elapsed_us < period_us ? period_us - elapsed_us : 0;
+}
+
+static void test_paced_sleep_no_underflow()
+{
+    section("sched: periodic pacing never underflows into a runaway sleep");
+    const uint64_t period = 1000 * 1000;   // 1s, like the writer loop
+
+    // Normal cases: sleep the remainder of the period.
+    CHECK(paced_sleep_us(period, 0)       == period);
+    CHECK(paced_sleep_us(period, 400000)  == 600000);
+    CHECK(paced_sleep_us(period, period)  == 0);
+
+    // The regression: overrun and backwards-clock readings. The raw expression
+    // `period - elapsed` (unsigned) would yield a value FAR larger than the
+    // period here; the clamp must keep it in [0, period].
+    const uint64_t bad_inputs[] = {
+        period + 1,              // tiny overrun
+        period * 2,              // big overrun
+        (uint64_t)-1,            // clock read backwards by ~1us (now < last)
+        ((uint64_t)1 << 63) + 5, // backwards reading that lands in +int64 range
+        ((uint64_t)1 << 63) - 5, // boundary of the signed/unsigned reinterpret
+    };
+    for (uint64_t e : bad_inputs) {
+        uint64_t s = paced_sleep_us(period, e);
+        CHECK(s == 0);            // overrun => don't sleep at all
+        CHECK(s <= period);       // and NEVER longer than the period
+    }
+}
+
+/* ============================ pinned-at-creation long-sleep regression =====
+ *
+ * The bug: LeanStore created threads unpinned (on CPU0) and re-pinned them at
+ * runtime with pthread_setaffinity_np. That runtime self-migration only moves
+ * the thread's *logical* CPU; it keeps physically running on CPU0, so a timed
+ * sleep arms its timer in the target core's timer_list while CPU0's LAPIC is
+ * what fires -- the timer is never serviced and the thread never wakes. The fix
+ * pins at creation (sched::thread attr().pin() / pthread_attr_setaffinity_np),
+ * keeping logical and physical CPU identical. These tests exercise the fixed
+ * pattern: a thread pinned AT CREATION to a dedicated (otherwise idle) core must
+ * wake from repeated long (~1s) sleeps -- which is precisely the writer thread.
+ */
+
+// sched_getcpu() is not declared by every <sched.h> variant in this build.
+extern "C" int sched_getcpu(void);
+
+struct sleeper_arg {
+    int cpu;
+    int iters;
+    std::atomic<int> woke{0};
+    std::atomic<int> observed_cpu{-1};
+};
+
+static void* sleeper_fn(void* p)
+{
+    auto* a = static_cast<sleeper_arg*>(p);
+    a->observed_cpu.store(sched_getcpu());
+    for (int i = 0; i < a->iters; i++) {
+        small_sleep(1000 * 1000);   // 1s on an otherwise-idle dedicated core
+        a->woke.fetch_add(1, std::memory_order_release);
+    }
+    return nullptr;
+}
+
+// Pin to `cpu` AT CREATION via the pthread attr, the way the fix creates
+// LeanStore's threads (maps to OSv attr().pin()). detached==true mirrors the
+// profiling/writer thread, which its parent detaches.
+static int spawn_pinned_at_creation(pthread_t* tid, int cpu, bool detached,
+                                    void* arg)
+{
+    cpu_set_t set; CPU_ZERO(&set); CPU_SET(cpu, &set);
+    pthread_attr_t attr; pthread_attr_init(&attr);
+    pthread_attr_setaffinity_np(&attr, sizeof(set), &set);
+    if (detached)
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+    int rc = pthread_create(tid, &attr, sleeper_fn, arg);
+    pthread_attr_destroy(&attr);
+    return rc;
+}
+
+static void test_pinned_at_creation_long_sleep()
+{
+    section("sched: threads pinned at creation wake from repeated 1s sleeps on idle cores");
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    const int NT = (ncpu >= 4) ? 4 : (int)ncpu;   // worker i -> cpu i, like LeanStore
+    const int ITERS = 3;
+
+    std::vector<sleeper_arg*> args(NT, nullptr);
+    std::vector<pthread_t> tids(NT);
+    bool spawn_ok = true;
+    for (int i = 0; i < NT; i++) {
+        args[i] = new sleeper_arg{ i, ITERS };
+        if (spawn_pinned_at_creation(&tids[i], i, /*detached=*/false, args[i]) != 0)
+            spawn_ok = false;
+    }
+    CHECK(spawn_ok);
+
+    bool all = true;
+    for (int i = 0; i < NT; i++)
+        if (!wait_for(args[i]->woke, ITERS, 15000)) all = false;
+    CHECK(all);                                       // every 1s sleep woke on its core
+    for (int i = 0; i < NT; i++)
+        CHECK(args[i]->observed_cpu.load() == i);     // pinned-at-creation -> on its core
+    for (int i = 0; i < NT; i++) {
+        if (args[i]->woke.load() >= ITERS) { pthread_join(tids[i], nullptr); delete args[i]; }
+        else { pthread_detach(tids[i]); /* leak: thread may still touch arg */ }
+    }
+}
+
+// Detached coverage: the profiling/writer thread is detached by its parent.
+// Same scenario, created detached and pinned at creation.
+static void test_detached_pinned_at_creation_sleeps()
+{
+    section("sched: detached thread pinned at creation wakes from 1s sleeps");
+    long ncpu = sysconf(_SC_NPROCESSORS_ONLN);
+    const int target = (int)(ncpu - 1);          // dedicate the last CPU
+    const int ITERS = 3;
+    auto* a = new sleeper_arg{ target, ITERS };  // outlives us; leaked (detached)
+
+    pthread_t tid;
+    int rc = spawn_pinned_at_creation(&tid, target, /*detached=*/true, a);
+    CHECK(rc == 0);
+
+    bool ok = wait_for(a->woke, ITERS, 15000);
+    CHECK(ok);                                    // every 1s sleep woke on the dedicated CPU
+    CHECK(a->observed_cpu.load() == target);
+    // a is intentionally not freed: the detached thread may still touch it.
+}
+
 /* ===================================================== entry point */
 
 int os_sched_main()
@@ -455,6 +596,9 @@ int os_sched_main()
     test_concurrent_detach_storm();
     test_yield_progress();
     test_sleep_wakes();
+    test_paced_sleep_no_underflow();
+    test_pinned_at_creation_long_sleep();
+    test_detached_pinned_at_creation_sleeps();
     test_high_thread_count();
 
     int checks = g_checks.load(), fails = g_fails.load();

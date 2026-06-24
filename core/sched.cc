@@ -16,6 +16,7 @@
 #include <osv/align.hh>
 #include <osv/interrupt.hh>
 #include <smp.hh>
+#include "apic.hh"
 #include "osv/trace.hh"
 #include <osv/percpu.hh>
 #include <osv/prio.hh>
@@ -532,18 +533,14 @@ void cpu::handle_incoming_wakeups()
                     // Special case of current thread being woken before
                     // having a chance to be scheduled out.
                     t._detached_state->st.store(thread::status::running);
-                } else if (t.tcpu() != this) {
-                    // Thread was woken on the wrong cpu. Can be a side-effect
-                    // of sched::thread::pin(thread*, cpu*). Do nothing.
                 } else {
+                    // Threads never migrate (pinned at creation), so a wakeup
+                    // always lands on the thread's own CPU (t.tcpu() == this).
                     t._detached_state->st.store(thread::status::queued);
-                    // Make sure the CPU-local runtime measure is suitably
-                    // normalized. We may need to convert a global value to the
-                    // local value when waking up after a CPU migration, or to
-                    // perform renormalizations which we missed while sleeping.
+                    // Normalize the CPU-local runtime measure for renormalizations
+                    // missed while sleeping.
                     t._runtime.update_after_sleep();
                     enqueue(t);
-                    t.resume_timers();
                 }
             }
         }
@@ -579,212 +576,9 @@ unsigned cpu::load()
     return runqueue.size();
 }
 
-// function to pin the *current* thread:
-void thread::pin(cpu *target_cpu)
-{
-    // Note that this code may proceed to migrate the current thread even if
-    // it was protected by a migrate_disable(). It is the thread's own fault
-    // for doing this to itself... The function to pin a different thread
-    // (below) waits for that different thread to leave migrate_disable().
-    thread &t = *current();
-    if (!t._pinned) {
-        // _pinned comes with a +1 increase to _migration_counter.
-        migrate_disable();
-        t._pinned = true;
-    }
-    cpu *source_cpu = cpu::current();
-    if (source_cpu == target_cpu) {
-        return;
-    }
-    // We want to wake this thread on the target CPU, but can't do this while
-    // it is still running on this CPU. So we need a different thread to
-    // complete the wakeup. We could re-used an existing thread (e.g., the
-    // load balancer thread) but a "good-enough" dirty solution is to
-    // temporarily create a new ad-hoc thread, "wakeme".
-    bool do_wakeme = false;
-    thread_unique_ptr wakeme(thread::make_unique([&] () {
-        wait_until([&] { return do_wakeme; });
-        t.wake();
-    }, sched::thread::attr().pin(source_cpu)));
-    wakeme->start();
-#if CONF_lazy_stack
-    sched::ensure_next_stack_page_if_preemptable();
-#endif
-    WITH_LOCK(irq_lock) {
-        trace_sched_migrate(&t, target_cpu->id);
-        t.stat_migrations.incr();
-        t.suspend_timers();
-        t._runtime.export_runtime();
-        t._detached_state->_cpu = target_cpu;
-        percpu_base = target_cpu->percpu_base;
-        current_cpu = target_cpu;
-        t._runtime.update_after_sleep();
-        t._detached_state->st.store(thread::status::waiting);
-        // Note that wakeme is on the same CPU, and irq is disabled,
-        // so it will not actually run until we stop running.
-        wakeme->wake_with_irq_or_preemption_disabled([&] { do_wakeme = true; });
-#ifdef __aarch64__
-        reschedule_from_interrupt(source_cpu, false, thyst);
-#else
-        source_cpu->reschedule_from_interrupt();
-#endif
-    }
-    // wakeme will be implicitly join()ed here.
-}
-
-// function to pin another thread:
-void thread::pin(thread *t, cpu *target_cpu)
-{
-    if (t == current()) {
-        thread::pin(target_cpu);
-        return;
-    }
-    // To work on the target thread, we need to run code on the same CPU on
-    // where the target thread is currently running. We start here a new
-    // helper thread to follow the target thread's CPU. We could have also
-    // re-used an existing thread (e.g., the load balancer thread).
-    thread_unique_ptr helper(thread::make_unique([&] {
-#if CONF_lazy_stack_invariant
-        assert(!thread::current()->is_app());
-#endif
-        WITH_LOCK(irq_lock) {
-            // This thread started on the same CPU as t, but by now t might
-            // have moved. If that happened, we need to move too.
-            while (sched::cpu::current() != t->tcpu()) {
-                DROP_LOCK(irq_lock) {
-                    thread::pin(t->tcpu());
-                }
-            }
-            // At this point, t is not running and it belongs to this CPU, and
-            // we hold the irq lock, so we can mess with t's data structures.
-            if (t->_pinned) {
-                // The thread was already pin()ed, explaining 1 on
-                // _migration_lock_counter. Remove this pinning, so the code
-                // below can pin it again and not think a temporary
-                // migration_disable() is in force.
-                t->_migration_lock_counter--;
-            }
-            if (t->tcpu() == target_cpu) {
-                t->_migration_lock_counter++;
-                t->_pinned = true;
-                return;
-            }
-            // The target thread might be temporarily holding a migration lock
-            // and we must not migrate it in the middle of this. Currently we
-            // sleep a bit and retry, I don't know if there's a better way.
-            while(t->_migration_lock_counter) {
-                t->_migration_lock_counter++;
-                DROP_LOCK(irq_lock) {
-                    debug("sched::thread::pin() retrying\n");
-                    // we drop the irq lock but still hold migration lock on t
-                    // and also the helper thread is pinned, so when we get
-                    // the irq lock back, they will still be on same CPU.
-                    sched::thread::sleep(std::chrono::milliseconds(1));
-                }
-                t->_migration_lock_counter--;
-            }
-            t->_migration_lock_counter = 1;
-            t->_pinned = true;
-            // Racing with another CPU doing t->wake() is a complication.
-            // The biggest risk is that t will be woken up on the new (target)
-            // CPU, but read old values for some of its variables. Let's avoid
-            // this risk by pretending that the thread is already waking up.
-            // After this pretense we will have to really wake it up at the
-            // end (if not, we may lose a real wakeup!). That may be a
-            // spurious wakeup, but spurious wakeups are fine.
-            // Importantly, if the thread was already woken on this CPU before
-            // we moved it and woken it again, handle_incoming_wakeups() on
-            // this CPU will notice it doesn't belong to it and ignore it.
-            if (t->_detached_state->st.load(std::memory_order_relaxed)
-                    == status::waiting) {
-                t->_detached_state->st.store(status::waking);
-            }
-            switch (t->_detached_state->st.load(std::memory_order_relaxed)) {
-            case status::prestarted:
-            case status::sending_lock:
-            case status::waking:
-                trace_sched_migrate(t, target_cpu->id);
-                t->stat_migrations.incr();
-                t->suspend_timers();
-                t->_runtime.export_runtime();
-                t->_detached_state->_cpu = target_cpu;
-                t->remote_thread_local_var(::percpu_base) = target_cpu->percpu_base;
-                t->remote_thread_local_var(current_cpu) = target_cpu;
-                // May be a spurious wakeup, but that doesn't matter (see
-                // comment above).
-                if (t->_detached_state->st.load(std::memory_order_relaxed) == status::waking) {
-                    t->_detached_state->st.store(status::waiting);
-                    t->wake_with_irq_disabled();
-                }
-                break;
-            case status::queued:
-                current_cpu->runqueue.erase(current_cpu->runqueue.iterator_to(*t));
-                trace_sched_migrate(t, target_cpu->id);
-                t->stat_migrations.incr();
-                t->suspend_timers();
-                t->_runtime.export_runtime();
-                t->_detached_state->_cpu = target_cpu;
-                t->remote_thread_local_var(::percpu_base) = target_cpu->percpu_base;
-                t->remote_thread_local_var(current_cpu) = target_cpu;
-                // pretend the thread was waiting, so we can wake it
-                t->_detached_state->st.store(status::waiting);
-                t->wake_with_irq_disabled();
-                break;
-            default:
-                // Thread is in an unexpected state (for example, already
-                // terminated, or not started), and cannot be moved.
-                return;
-            }
-        }
-    }, sched::thread::attr().pin(t->tcpu())));
-    helper->start();
-    helper->join();
-}
-
-void thread::unpin()
-{
-    // Unpinning the current thread is straightforward. But to work on a
-    // different thread safely, without risking races with concurrent attempts
-    // to pin, unpin, or migrate the same thread, we need to run the actual
-    // unpinning code on the same CPU as the target thread.
-    if (this == current()) {
-#if CONF_lazy_stack_invariant
-        assert(arch::irq_enabled() && sched::preemptable());
-#endif
-#if CONF_lazy_stack
-        arch::ensure_next_stack_page();
-#endif
-        WITH_LOCK(preempt_lock) {
-            if (_pinned) {
-                _pinned = false;
-                 std::atomic_signal_fence(std::memory_order_release);
-                _migration_lock_counter--;
-            }
-        }
-        return;
-    }
-    thread_unique_ptr helper(thread::make_unique([this] {
-#if CONF_lazy_stack_invariant
-        assert(!thread::current()->is_app());
-#endif
-        WITH_LOCK(preempt_lock) {
-            // helper thread started on the same CPU as "this", but by now
-            // "this" might migrated. If that happened helper need to migrate.
-            while (sched::cpu::current() != this->tcpu()) {
-                DROP_LOCK(preempt_lock) {
-                    thread::pin(this->tcpu());
-                }
-            }
-            if (_pinned) {
-                _pinned = false;
-                 std::atomic_signal_fence(std::memory_order_release);
-                _migration_lock_counter--;
-            }
-        }
-    }, sched::thread::attr().pin(tcpu())));
-    helper->start();
-    helper->join();
-}
+// Runtime thread migration has been removed: threads are pinned to a CPU at
+// creation (sched::thread::attr().pin()) and never move. The old
+// thread::pin(cpu*) / pin(thread*,cpu*) / unpin() lived here.
 
 void cpu::on_cpu_up()
 {
@@ -1223,7 +1017,6 @@ thread::thread(std::function<void ()> func, attr attr, bool main, bool app)
     , _detached_state(detached_states.alloc(this))
     , _attr(attr)
     , _migration_lock_counter(0)
-    , _pinned(false)
     , _id(0)
     , _app(app)
     , _joiner(nullptr)
@@ -1274,11 +1067,6 @@ thread::thread(std::function<void ()> func, attr attr, bool main, bool app)
 
     if (_attr._detached) {
         _detach_state.store(detach_state::detached);
-    }
-
-    if (_attr._pinned_cpu) {
-        ++_migration_lock_counter;
-        _pinned = true;
     }
 
     if (main) {
@@ -1660,23 +1448,9 @@ void thread::exit()
     t->complete();
 }
 
-void timer_base::client::suspend_timers()
-{
-    if (_timers_need_reload) {
-        return;
-    }
-    _timers_need_reload = true;
-    cpu::current()->timers.suspend(_active_timers);
-}
-
-void timer_base::client::resume_timers()
-{
-    if (!_timers_need_reload) {
-        return;
-    }
-    _timers_need_reload = false;
-    cpu::current()->timers.resume(_active_timers);
-}
+// suspend_timers()/resume_timers() are gone with thread migration: a thread's
+// timers stay on its (only, pinned-at-creation) CPU's timer_list for its whole
+// life, so there is nothing to move off and back on across a migration.
 
 void thread::join()
 {
@@ -1805,6 +1579,7 @@ void timer_list::fired()
         // passed above. Better iterate in that case, instead.
         now = osv::clock::uptime::now();
         auto t = _list.get_next_timeout();
+        printf("%lu %lu\n", t, now); 
         if (t <= now) {
             goto again;
         } else {

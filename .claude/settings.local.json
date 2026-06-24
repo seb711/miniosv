@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"out\\)/%.o\\\\|%.cc\\\\|%.cpp\\\\|\\\\-c .*CXX\\\\|\\\\$\\(CXX\\)\\\\|cxx-rule\\\\|q-build-cxx\\\\|makedir\\\\|\\\\.o:\" Makefile)",
+      "Bash(grep -n \"ld\\\\|loader.elf\\\\|\\\\$\\(objects\\)\" Makefile)",
+      "Bash(make -p -q)",
+      "Bash(grep -c '\\\\.o$')",
+      "Bash(make __printobjs --eval='__printobjs: ; @echo \"TOTAL OBJS: $\\(words $\\(app-objects\\)\\)\"; @echo \"first: $\\(firstword $\\(app-objects\\)\\)\"; @echo \"last: $\\(lastword $\\(app-objects\\)\\)\"')",
+      "Bash(grep -v '^./Makefile$')",
+      "mcp__ide__getDiagnostics",
+      "Bash(command -v bear)",
+      "Bash(bear --version)",
+      "Bash(python3 -c ' *)"
+    ]
+  }
+}

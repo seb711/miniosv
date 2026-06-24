@@ -1,6 +1,6 @@
 # Vendored Boost headers
 
-This directory contains a **header-only subset of Boost 1.83.0**, vendored so
+This directory contains a **header-only subset of Boost 1.88.0**, vendored so
 that building the OSv kernel does not depend on a system-installed Boost.
 
 It is trimmed to exactly the Boost headers the **kernel** build pulls in - the

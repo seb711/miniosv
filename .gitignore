@@ -4,6 +4,7 @@ build/
 \#*\#
 
 .venv
+.cache
 # cloud-deploy runtime state (snapshot/image/vm ids), never tracked
 /aws/
 /gcp/

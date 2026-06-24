@@ -180,6 +180,7 @@ void interrupt_descriptor_table::invoke_interrupt(unsigned vector)
         // bug, which the "every MSI is pinned" invariant is meant to prevent.
         // (We deliberately do NOT EOI: the APIC spurious vector also lands with
         // no handler and must not be EOI'd.)
+        abort(); 
         assert(false && "interrupt delivered to a CPU with no handler for this vector");
         return;
     }

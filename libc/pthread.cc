@@ -1202,29 +1202,15 @@ int pthread_attr_setaffinity_np(pthread_attr_t *attr, size_t cpusetsize,
 static int setaffinity(sched::thread* t, size_t cpusetsize,
         const cpu_set_t *cpuset)
 {
-    int count = CPU_COUNT_S(cpusetsize, cpuset);
-    if (count == 0) {
-        // Having a cpuset with no CPUs in it is invalid.
-        return EINVAL;
-    } else if (count == 1) {
-        for (size_t i = 0; i < cpusetsize * 8; i++) {
-            if (CPU_ISSET(i, cpuset)) {
-                if (i < sched::cpus.size()) {
-                    sched::thread::pin(t, sched::cpus[i]);
-                    break;
-                } else {
-                    return EINVAL;
-                }
-            }
-        }
-    } else if (count == (int)sched::cpus.size()) {
-        t->unpin();
-    } else {
-        WARN_ONCE("Warning: OSv only supports cpu_set_t with at most one "
-                "CPU set.\n pthread_setaffinity_np or sched_setaffinity ignored.\n");
-        return EINVAL;
-    }
-    return 0;
+    (void)t; (void)cpusetsize; (void)cpuset;
+    // Runtime thread migration has been removed from OSv: a thread is pinned to
+    // its CPU at creation (pthread_attr_setaffinity_np + pthread_create, which
+    // maps to sched::thread::attr().pin()) and cannot be moved afterwards.
+    // Changing a running thread's affinity is therefore unsupported and must
+    // fail loudly rather than silently no-op.
+    WARN_ONCE("Warning: runtime pthread_setaffinity_np/sched_setaffinity is "
+              "unsupported (threads are pinned at creation only).\n");
+    return ENOSYS;
 }
 
 int pthread_setaffinity_np(pthread_t thread, size_t cpusetsize,

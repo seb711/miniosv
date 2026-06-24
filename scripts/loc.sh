@@ -19,7 +19,7 @@ ROOT=${1:-.}
 # Build the find exclusion prune list
 EXCLUDE_DIRS=(
     external build
-    apps app test tests
+    test tests
     tools scripts static
 )
 

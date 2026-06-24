@@ -149,7 +149,12 @@ phys virt_to_phys_pt(void* virt);
 phys virt_to_phys(void *virt)
 {
     if ((virt >= elf_start) && (virt < static_cast<char*>(elf_start) + elf_size)) {
+#ifdef __x86_64__
+        return reinterpret_cast<phys>(static_cast<char*>(virt) - OSV_KERNEL_VM_SHIFT);
+#endif
+#ifdef __aarch64__
         return reinterpret_cast<phys>(static_cast<char*>(virt) - kernel_vm_shift);
+#endif
     }
 
 #if CONF_memory_debug
@@ -158,9 +163,13 @@ phys virt_to_phys(void *virt)
     }
 #endif
 
-    // For now, only allow non-mmaped areas.  Later, we can either
-    // bounce such addresses, or lock them in memory and translate
-    assert(virt >= phys_mem);
+    // Walk page tables for addresses outside the direct-mapped main area
+    // (e.g. large anonymous mmap regions allocated below phys_mem). The
+    // in-kernel leanstore app DMAs from such an mmap'd buffer pool to NVMe, so
+    // its page buffers must be translatable to physical addresses.
+    if (virt < phys_mem) {
+        return virt_to_phys_pt(virt);
+    }
     return reinterpret_cast<uintptr_t>(virt) & (mem_area_size - 1);
 }
 
