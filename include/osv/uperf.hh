@@ -117,6 +117,11 @@ inline bool is_event_supported(uint64_t value) {
 inline void enable_pmu() {
   uint64_t pmcr;
 
+  // Clear all counters
+  asm volatile("msr pmcntenclr_el0, %0\t\n"
+               "isb" ::"r"((uint64_t)0xFFFFFFFF)
+               : "memory");
+
   // 1. Read PMCR_EL0
   // - set bit[0]: E (Enable)
   // - set bit[1]: P (Reset event counters)
@@ -477,7 +482,13 @@ private:
 //
 // To select different counters:
 struct Collection {
+  // The selection of hardware counters available to this collection.
+  PMCSelect &pmcs = default_pmcs;
+
+  // A vector of registered events. Must not be larger than the number of
+  // available hardware counters.
   std::vector<Event> events;
+
   std::chrono::time_point<std::chrono::steady_clock> startTime;
   std::chrono::time_point<std::chrono::steady_clock> stopTime;
 
@@ -496,7 +507,7 @@ struct Collection {
 
   // Constructor to use with custom set of counters.
   // Common use case: Share counters between multiple collections
-  Collection(PMCSelect pmcSelect) : pmcs(pmcSelect) { enable_pmu(); }
+  Collection(PMCSelect &pmcSelect) : pmcs(pmcSelect) { enable_pmu(); }
 
   void registerCounter(PMCEvent pmce) { events.push_back(Event(pmce, pmcs)); }
   void registerCounter(PMCEvent pmce, const char *name) {
@@ -586,11 +597,10 @@ struct Collection {
   }
 
 private:
-  // The selection of hardware counters available to this collection.
   // By default, each collection operates on known core-local counters,
   // but selections can also be shared between cores to measure uncore counters
   // (e.g. L3 cache counters)
-  PMCSelect pmcs{
+  PMCSelect default_pmcs{
 #ifdef ARCH_TARGET_X86_64
       PMC{0xC0010200, 0xC0010201, CORE}, PMC{0xC0010202, 0xC0010203, CORE},
       PMC{0xC0010204, 0xC0010205, CORE}, PMC{0xC0010206, 0xC0010207, CORE},
