@@ -106,6 +106,25 @@ void premain()
     for (auto init = inittab.start; init < inittab.start + inittab.count; ++init) {
         (*init)();
     }
+
+    // Run the deferred constructors (init_priority 100, i.e. libc++'s standard
+    // stream initialization) now that the full runtime - allocator, scheduler,
+    // console - is up. The linker script brackets them outside the normal
+    // init-array (see _init_array_late_{start,end} in arch/$(arch)/loader.ld) so
+    // premain() skipped them; libc++ needs cout/cin/cerr ready before the app's
+    // entry point.
+    extern void (*_init_array_late_start[])();
+    extern void (*_init_array_late_end[])();
+    for (auto init = _init_array_late_start; init < _init_array_late_end; ++init) {
+        (*init)();
+    }
+
+    extern void (*_init_array_late_late_start[])();
+    extern void (*_init_array_late_late_end[])();
+    for (auto init = _init_array_late_late_start; init < _init_array_late_late_end; ++init) {
+        (*init)();
+    }
+
     boot_time.event(".init functions");
 }
 
@@ -179,17 +198,7 @@ void* do_main_thread(void *_main_args)
         boot_time.print_total_time();
     }
 
-    // Run the deferred constructors (init_priority 100, i.e. libc++'s standard
-    // stream initialization) now that the full runtime - allocator, scheduler,
-    // console - is up. The linker script brackets them outside the normal
-    // init-array (see _init_array_late_{start,end} in arch/$(arch)/loader.ld) so
-    // premain() skipped them; libc++ needs cout/cin/cerr ready before the app's
-    // entry point.
-    extern void (*_init_array_late_start[])();
-    extern void (*_init_array_late_end[])();
-    for (auto init = _init_array_late_start; init < _init_array_late_end; ++init) {
-        (*init)();
-    }
+
 
     // Enter the statically linked-in application.
     osv_app_main();

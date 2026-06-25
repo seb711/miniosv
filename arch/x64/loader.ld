@@ -91,7 +91,7 @@ SECTIONS
      * premain skips it) lets us run it later, from the main thread once the
      * runtime is up - see _init_array_late in loader.cc. Listed before the main
      * .init_array so the linker assigns these inputs here first. */
-    HIDDEN(_init_array_late_start = .);
+     HIDDEN(_init_array_late_start = .);
     .init_array_late : AT(ADDR(.init_array_late) - OSV_KERNEL_VM_SHIFT) {
         KEEP(*(.init_array.100))
     } : text
@@ -99,10 +99,12 @@ SECTIONS
     HIDDEN(_init_array_start = .);
     .init_array : AT(ADDR(.init_array) - OSV_KERNEL_VM_SHIFT) {
         *(SORT_BY_INIT_PRIORITY(.init_array.*) SORT_BY_INIT_PRIORITY(.ctors.*))
-        *(.init_array .ctors) KEEP(*(.init_array .init_array.* .ctors.* .ctors))
     } : text
     HIDDEN(_init_array_end = .);
-    . = ALIGN(4096);
+    HIDDEN(_init_array_late_late_start = .);
+    .init_array_late_late : AT(ADDR(.init_array_late_late) - OSV_KERNEL_VM_SHIFT) {
+        KEEP(*(.init_array .init_array.* .ctors.* .ctors))    } : text
+    HIDDEN(_init_array_late_late_end = .);
     .percpu : AT(ADDR(.percpu) - OSV_KERNEL_VM_SHIFT) {
         HIDDEN(_percpu_start = .);
         *(.percpu)
