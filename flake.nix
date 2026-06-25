@@ -62,35 +62,40 @@
           (python3.withPackages (ps: [ ps.pyyaml ]))
         ];
 
+        ovmf_prefix = if system == "x86_64-linux" then "OVMF" else "AAVMF";
+
       in
       {
-        devShells.default = pkgs.mkShell {
-          nativeBuildInputs =
-            buildDeps
-            ++ (with pkgs; [
-              qemu
-              gdb
-            ]);
-        };
+        devShells = rec {
+          default = pkgs.mkShell {
+            nativeBuildInputs = buildDeps ++ [
+              pkgs.qemu
+              pkgs.gdb
+            ];
 
-        devShells.aws =
-          with pkgs;
-          mkShell {
+            # UEFI boot requires OVMF installation
+            "${ovmf_prefix}_CODE" = "${pkgs.OVMF.fd}/FV/${ovmf_prefix}_CODE.fd";
+            "${ovmf_prefix}_VARS" = "${pkgs.OVMF.fd}/FV/${ovmf_prefix}_VARS.fd";
+          };
+
+          aws = default.overrideAttrs (default: {
             nativeBuildInputs = [
-              qemu
-              gdb
-              awscli2
-              (python3.withPackages (
+              pkgs.awscli2
+              (pkgs.python3.withPackages (
                 ps: with ps; [
                   awscrt
                   boto3
                   botocore
+                  # We need to redeclare every python
+                  # dependency from the default shell
                   pyyaml
                 ]
               ))
             ]
-            ++ buildDeps;
-          };
+            ++ default.nativeBuildInputs;
+          });
+        };
+
       }
     );
 }
