@@ -71,6 +71,10 @@
               qemu
               gdb
             ]);
+
+          # UEFI boot requires OVMF installation
+          AAVMF_CODE = "${pkgs.OVMF.fd}/FV/AAVMF_CODE.fd";
+          AAVMF_VARS = "${pkgs.OVMF.fd}/FV/AAVMF_VARS.fd";
         };
 
         devShells.aws =
