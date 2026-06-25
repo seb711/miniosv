@@ -93,6 +93,8 @@ def setup_pflash(arch, code, vars_, workdir):
     vars_copy = os.path.join(workdir, 'vars.fd')
     shutil.copy(code, code_copy)
     shutil.copy(vars_, vars_copy)
+    os.chmod(code_copy, 0o644)
+    os.chmod(vars_copy, 0o644)
     if arch == 'aarch64':
         for f in (code_copy, vars_copy):
             with open(f, 'r+b') as fh:
