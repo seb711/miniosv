@@ -11,12 +11,11 @@
 //    - Neoverse V-2
 
 #include <atomic>
-#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
-#include <memory>
+#include <chrono>
 #include <string>
 #include <vector>
 
@@ -29,6 +28,11 @@
 #endif
 
 #ifdef ARCH_TARGET_X86_64
+
+inline uint32_t pmu_num_counters() {
+  // TODO: This is currently a stub / best guess for amd processors
+  return 6;
+}
 
 inline void msr_write(uint32_t msr, uint64_t value) {
   asm volatile("wrmsr"
@@ -63,6 +67,13 @@ inline uint64_t msr_read(uint32_t msr) {
 #elif defined ARCH_TARGET_ARM64
 
 inline constexpr uint32_t midr_fixed_mask = 0xFF0F'FFF0u;
+
+// To check how many hardware counters are available
+inline uint32_t pmu_num_counters() {
+  uint64_t pmcr;
+  asm volatile("mrs %0, pmcr_el0" : "=r"(pmcr));
+  return (pmcr >> 11) & 0x1F;
+}
 
 // To check if we currently run on a specific CPU.
 inline bool is_midr(uint32_t to_check) {
@@ -121,7 +132,6 @@ inline void enable_pmu() {
   asm volatile("msr pmcntenclr_el0, %0\t\n"
                "isb" ::"r"((uint64_t)0xFFFFFFFF)
                : "memory");
-
   // 1. Read PMCR_EL0
   // - set bit[0]: E (Enable)
   // - set bit[1]: P (Reset event counters)
@@ -243,44 +253,41 @@ struct PMC {
   PMClass pmClass;
 
   // Whether or not this pmc is currently counting
-  std::unique_ptr<std::atomic<bool>> free;
+  mutable std::atomic<bool> free{true};
 
   PMC(uint32_t perfEvtSel, uint32_t perfCtr, PMClass pmClass)
-      : perfEvtSel(perfEvtSel), perfCtr(perfCtr), pmClass(pmClass),
-        free(nullptr) {}
+      : perfEvtSel(perfEvtSel), perfCtr(perfCtr), pmClass(pmClass), free(true) {
+  }
 
+  // atomic is not copyable, so define it manually
   PMC(PMC const &pmc)
       : perfEvtSel(pmc.perfEvtSel), perfCtr(pmc.perfCtr), pmClass(pmc.pmClass),
-        free(std::make_unique<std::atomic<bool>>(true)) {}
+        free(true) {}
+
+  PMC &operator=(PMC const &pmc) {
+    perfEvtSel = pmc.perfEvtSel;
+    perfCtr = pmc.perfCtr;
+    pmClass = pmc.pmClass;
+    free.store(true);
+    return *this;
+  }
 
   uint64_t probe() { return msr_read(perfCtr); }
-
   void start_with_conf(uint64_t value) {
     msr_write_counter(perfCtr, 0);
     msr_start_with_conf(perfCtr, perfEvtSel, value);
   }
-
-  void stop() { msr_stop(perfCtr, perfEvtSel); };
+  void stop() { msr_stop(perfCtr, perfEvtSel); }
 };
 
-// TODO: Extend this logic to support sharing counters between groups of cores
 struct PMCSelect {
-  PMCSelect(std::initializer_list<PMC> pmcs) : pmcs(pmcs) {
-    if (is_midr(midr_neoverseV1)) {
-      this->pmcs.pop_back();
-      std::cout << "Detected ARM Neoverse V1: Disabling counter 0 since it "
-                   "doesn't work reliably on this CPU. You have 5 counters "
-                   "available.\n";
-    } else {
-      std::cout << "No limitations known for this CPU. Assuming 6 counters.\n";
-    }
-  }
+  PMCSelect(std::initializer_list<PMC> pmcs) : pmcs(pmcs) {}
 
   PMC *acquire(PMClass pmClass, uint8_t retries = 0) {
     for (auto &pmc : pmcs) {
       bool expected = true;
       if (pmc.pmClass == pmClass &&
-          pmc.free->compare_exchange_strong(expected, false))
+          pmc.free.compare_exchange_strong(expected, false))
         return &pmc;
     }
     if (retries == 6)
@@ -291,10 +298,37 @@ struct PMCSelect {
     return acquire(pmClass, retries);
   }
 
-  void release(PMC *pmc) { pmc->free->store(true); }
+  void release(PMC *pmc) { pmc->free.store(true); }
 
-private:
+protected:
   std::vector<PMC> pmcs;
+};
+
+// Specification for core-local counters.
+// This adjust the number of available counters at runtime,
+// since AWS slices the number of counters per VM.
+struct PMCSelectCore : PMCSelect {
+  PMCSelectCore(std::initializer_list<PMC> pmcs) : PMCSelect(pmcs) {
+    uint32_t act_ctrs = pmu_num_counters();
+    uint32_t exp_ctrs{0};
+    for (auto &c : this->pmcs) {
+      exp_ctrs += c.pmClass == CORE ? 1 : 0;
+    }
+    if (act_ctrs < exp_ctrs) {
+      std::cout << "Expected " << exp_ctrs << " hardware counters, but only "
+                << act_ctrs << " are available." << std::endl
+                << " Removing the last " << (exp_ctrs - act_ctrs)
+                << " entries..." << std::endl;
+      this->pmcs.erase(this->pmcs.begin() + act_ctrs, this->pmcs.end());
+    }
+
+    if (is_midr(midr_neoverseV1)) {
+      std::cout << "Detected ARM Neoverse V1: Disabling counter 0 since it "
+                   "doesn't work reliably on this CPU. You have "
+                << act_ctrs - 1 << " counters available" << std::endl;
+      this->pmcs.erase(this->pmcs.begin());
+    }
+  }
 };
 
 struct PMCEvent {
@@ -600,25 +634,21 @@ private:
   // By default, each collection operates on known core-local counters,
   // but selections can also be shared between cores to measure uncore counters
   // (e.g. L3 cache counters)
-  PMCSelect default_pmcs{
+  PMCSelectCore default_pmcs{
 #ifdef ARCH_TARGET_X86_64
       PMC{0xC0010200, 0xC0010201, CORE}, PMC{0xC0010202, 0xC0010203, CORE},
       PMC{0xC0010204, 0xC0010205, CORE}, PMC{0xC0010206, 0xC0010207, CORE},
       PMC{0xC0010208, 0xC0010209, CORE}, PMC{0xC001020A, 0xC001020B, CORE},
 #elif defined ARCH_TARGET_ARM64
-      // On graviton 3, core counters cannot count cycles, but the designated
-      // cycles counter can. Note that the id is made up. Make sure it doesn't
-      // conflict with anything else later on.
       PMC{1u << 31, 1u << 31, CYCLES},
 
       // Armv8_pmu3 usually has 6 counters (ids 0-5)
-      PMC{5, 5, CORE},
-      PMC{4, 4, CORE},
-      PMC{3, 3, CORE},
-      PMC{2, 2, CORE},
-      PMC{1, 1, CORE},
-      // Note: id 0 is last here so we can pop() it for graviton3 chips
       PMC{0, 0, CORE},
+      PMC{1, 1, CORE},
+      PMC{2, 2, CORE},
+      PMC{3, 3, CORE},
+      PMC{4, 4, CORE},
+      PMC{5, 5, CORE},
 #endif
   };
 };
