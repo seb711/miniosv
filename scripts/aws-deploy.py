@@ -13,8 +13,15 @@ import boto3
 BLOCK_SIZE = 524288  # 512 KiB
 MAX_WORKERS = 64
 INSTANCE_TYPES = {
-    "c7g.large": "arm64",
+    "t3.large": "x86_64",
+    "c5a.large": "x86_64",
+    "c6a.large": "x86_64",
     "c7a.large": "x86_64",
+
+    "t4g.large": "arm64",
+    "c6g.large": "arm64",
+    "c7g.large": "arm64",
+    "c8g.large": "arm64",
 }
 
 def aws_login() -> None:
