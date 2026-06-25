@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Build a bootable GPT disk image with a single FAT32 EFI System Partition
 # containing the miniosv UEFI application at the firmware's removable-media

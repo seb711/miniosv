@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 #
 # Boot the real bootable disk image (loader.img - a GPT/ESP raw image, exactly
 # what the public clouds ingest) under QEMU + UEFI firmware and check that it
