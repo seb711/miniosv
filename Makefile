@@ -511,7 +511,6 @@ drivers += drivers/pci-function.o
 drivers += drivers/pci-bridge.o 
 ifeq ($(conf_drivers_nvme), 1)
 drivers += drivers/nvme.o
-drivers += drivers/nvme-user-queue.o
 drivers += drivers/nvme-queue.o
 drivers += drivers/msi.o
 drivers += arch/$(arch)/msi.o

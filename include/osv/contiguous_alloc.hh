@@ -8,6 +8,8 @@
 #ifndef CONTIGUOUS_ALLOC_HH
 #define CONTIGUOUS_ALLOC_HH
 
+#include <cstdlib> 
+
 namespace memory {
 
 void* alloc_phys_contiguous_aligned(size_t sz, size_t align);

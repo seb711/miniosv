@@ -9,8 +9,10 @@
 #include <osv/mmio.hh>
 #include <osv/pci.hh>
 #include "device.hh"
+#include "osv/debug.h"
 #include "pci-function.hh"
 
+#include <osv/debug.h>
 using namespace hw;
 
 namespace pci {
@@ -222,14 +224,17 @@ namespace pci {
         // Location within the configuration space
         _msix.msix_location = off;
         _msix.msix_ctrl = pci_readw(off + PCIR_MSIX_CTRL);
+        // base address register (bar)
         _msix.msix_msgnum = (_msix.msix_ctrl & PCIM_MSIXCTRL_TABLE_SIZE) + 1;
         val = pci_readl(off + PCIR_MSIX_TABLE);
         _msix.msix_table_bar = val & PCIM_MSIX_BIR_MASK;
         _msix.msix_table_offset = val & ~PCIM_MSIX_BIR_MASK;
+        // pending bit array (pba)
         val = pci_readl(off + PCIR_MSIX_PBA);
         _msix.msix_pba_bar = val & PCIM_MSIX_BIR_MASK;
         _msix.msix_pba_offset = val & ~PCIM_MSIX_BIR_MASK;
 
+        debug_early_u64("msgnum=",  _msix.msix_msgnum);
         // We've found an MSI-x capability
         _have_msix = true;
 

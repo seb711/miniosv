@@ -217,7 +217,9 @@ void interrupt(exception_frame* frame)
     // must call scheduler after EOI, or it may switch contexts and miss the EOI
     current_interrupt_frame = nullptr;
     // FIXME: layering violation
+    if (vector < 35) {
     sched::preempt();
+    }
 }
 
 bool fixup_fault(exception_frame* ef)
