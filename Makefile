@@ -170,21 +170,28 @@ endif
 quiet = $(if $V, $1, @echo " $2"; $1)
 very-quiet = $(if $V, $1, @$1)
 
-# x64 boots loader[-stripped].elf directly via QEMU -kernel (multiboot/PVH);
-# there is no boot sector or compressed image, so loader.img is not built.
-# aarch64 keeps loader.img (preboot stub + uncompressed loader).
-ifeq ($(arch),x64)
-all: $(out)/loader-stripped.elf links
-endif
-ifeq ($(arch),aarch64)
+# Both architectures boot via UEFI: the kernel ELF is wrapped into an EFI
+# application (loader.efi), then a bootable GPT/ESP disk image (loader.img) is
+# built around it - the artifact the clouds ingest and that scripts/run.py and
+# the smoke test boot. Building loader.img needs mtools + gdisk (see mkuefi.sh).
 all: $(out)/loader.img links
-endif
 .PHONY: all
 
 links:
 	$(call very-quiet, ln -nsf $(notdir $(out)) $(outlink))
 	$(call very-quiet, ln -nsf $(notdir $(out)) $(outlink2))
 .PHONY: links
+
+# Boot the real bootable disk image (loader.img) as an NVMe disk under QEMU +
+# UEFI firmware (OVMF for x64, AAVMF for aarch64) and check it reaches the
+# kernel's early banner. This exercises the actual GPT/ESP image the clouds
+# ingest, at >= 2 GiB RAM (override with SMOKE_MEM) - unlike the old vvfat-at-
+# 512 MiB path, which hid the high-memory boot bugs. Override firmware with
+# OVMF_CODE/OVMF_VARS or AAVMF_CODE/AAVMF_VARS; SMOKE_TIMEOUT sets the wait
+# (default 30s). Exits non-zero if firmware/QEMU is missing or it fails.
+smoke-test: $(out)/loader.img
+	scripts/smoke-test.sh $(arch) $(out)/loader.img $(SMOKE_TIMEOUT)
+.PHONY: smoke-test
 
 # Remember that "make clean" needs the same parameters that set $(out) in
 # the first place, so to clean the output of "make mode=debug" you need to
@@ -268,10 +275,6 @@ CXX_INCLUDES = -isystem external/llvm-project/libunwind/include
 libcxx-includes = -nostdinc++ -isystem build/libcxx/$(arch)/include/c++/v1 \
                   -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE
 
-ifeq ($(arch),aarch64)
-libfdt_base = external/$(arch)/libfdt
-INCLUDES += -isystem $(libfdt_base)
-endif
 
 INCLUDES += $(boost-includes)
 # Starting in Gcc 6, the standard C++ header files (which we do not change)
@@ -420,19 +423,48 @@ tools :=
 $(out)/loader-stripped.elf: $(out)/loader.elf
 	$(call quiet, $(STRIP) $(out)/loader.elf -o $(out)/loader-stripped.elf, STRIP loader.elf -> loader-stripped.elf )
 
+# ---- UEFI boot image -------------------------------------------------------
+# Wrap the kernel ELF into a freestanding PE/COFF EFI application (boot/uefi/)
+# that the firmware loads from the EFI System Partition. This is the single
+# boot path on every architecture and the only one the public clouds support.
+# efi_target / efi_boot_name are set in the per-arch blocks below.
+EFI_CXXFLAGS = --target=$(efi_target) -std=$(conf_cxx_level) -ffreestanding \
+	-fno-stack-protector -fno-builtin -fshort-wchar -nostdinc++ \
+	-fno-exceptions -fno-rtti -Wall -Werror -Iboot/uefi -Iinclude \
+	-DOSV_KERNEL_VM_SHIFT=$(kernel_vm_shift) $(efi_arch_cxxflags)
+
+$(out)/boot/uefi/stub.o: boot/uefi/stub.cc boot/uefi/efi.hh include/osv/boot-info.hh
+	$(makedir)
+	$(call quiet, clang++ $(EFI_CXXFLAGS) -c -o $@ $<, CXX-EFI stub.cc)
+
+$(out)/boot/uefi/kernel-blob.o: boot/uefi/kernel-blob.S $(out)/loader-stripped.elf
+	$(makedir)
+	$(call quiet, clang --target=$(efi_target) -c \
+		-DKERNEL_ELF_FILE='"$(out)/loader-stripped.elf"' -o $@ $<, AS-EFI kernel-blob.S)
+
+$(out)/loader.efi: $(out)/boot/uefi/stub.o $(out)/boot/uefi/kernel-blob.o
+	$(call quiet, clang --target=$(efi_target) -fuse-ld=lld -nostdlib \
+		-Xlinker -entry:efi_main -Xlinker -subsystem:efi_application \
+		-o $@ $^, LINK loader.efi)
+
+$(out)/loader.img: $(out)/loader.efi scripts/mkuefi.sh
+	$(call quiet, scripts/mkuefi.sh $@ $(out)/loader.efi $(efi_boot_name), MKUEFI $@)
+
 ifeq ($(arch),x64)
 
-# kernel_base is where the kernel is loaded by the multiboot/PVH boot loader
-# (QEMU -kernel). There is no longer a compressed/relocated copy: the loader
-# ELF is placed directly by the boot loader, so OSV_KERNEL_BASE is the only
-# load address.
+# kernel_base is the fixed physical address the UEFI stub loads the kernel ELF
+# at (it matches the hard-coded boot page tables); kernel_vm_base is its link
+# address in virtual memory.
 kernel_base := 0x200000
 kernel_vm_base := 0x40200000
 
-# The x64 boot path is 'qemu -kernel loader[-stripped].elf' (multiboot/PVH),
-# which boots the ELF directly - no bzImage/vmlinuz wrapper is needed.
-
 kernel_vm_shift := $(shell printf "0x%X" $(shell expr $$(( $(kernel_vm_base) - $(kernel_base) )) ))
+
+# UEFI image parameters: PE target triple and the firmware removable-media
+# default filename for this architecture.
+efi_target := x86_64-unknown-windows
+efi_boot_name := BOOTX64.EFI
+efi_arch_cxxflags := -mno-red-zone
 
 endif # x64
 
@@ -440,29 +472,16 @@ ifeq ($(arch),aarch64)
 
 kernel_vm_base := 0xfc0080000 #63GB
 
-include $(libfdt_base)/Makefile.libfdt
-libfdt-source := $(patsubst %.c, $(libfdt_base)/%.c, $(LIBFDT_SRCS))
-libfdt = $(patsubst %.c, %.o, $(libfdt-source))
-# libfdt is third-party; its pointer-overflow checks (p + len < p) trip Clang's
-# -Wtautological-compare, which -Werror would otherwise make fatal.
-$(addprefix $(out)/, $(libfdt)): CFLAGS += -Wno-tautological-compare
+# Fixed physical load base and shift for the UEFI stub. The boot page tables
+# anchor the kernel window at the 63rd GiB (0xfc0000000), so the shift that
+# relates a virtual address to the physical address the stub loads it at is
+# (0xfc0000000 - kernel_base), with kernel_base 2 MiB-aligned in low RAM.
+kernel_base := 0x40200000
+kernel_vm_shift := $(shell printf "0x%X" $(shell expr $$(( 0xfc0000000 - $(kernel_base) )) ))
 
-$(out)/preboot.elf: arch/$(arch)/preboot.ld $(out)/arch/$(arch)/preboot.o
-	$(call quiet, $(LD) -o $@ -T $^, LD $@)
-
-$(out)/preboot.bin: $(out)/preboot.elf
-	$(call quiet, $(OBJCOPY) -O binary $^ $@, OBJCOPY $@)
-
-edata = $(shell $(READELF) --syms $(out)/loader.elf | grep "\.edata" | awk '{print "0x" $$2}')
-image_size = $$(( $(edata) - $(kernel_vm_base) ))
-
-
-$(out)/loader.img: $(out)/preboot.bin $(out)/loader-stripped.elf
-	$(call quiet, dd if=$(out)/preboot.bin of=$@ > /dev/null 2>&1, DD $@ preboot.bin)
-	$(call quiet, dd if=$(out)/loader-stripped.elf of=$@ conv=notrunc obs=4096 seek=16 > /dev/null 2>&1, DD $@ loader-stripped.elf)
-	$(call quiet, scripts/imgedit.py setsize_aarch64 "-f raw $@" $(image_size), IMGEDIT $@)
-	$(call quiet, scripts/imgedit.py setargs "-f raw $@" $(cmdline), IMGEDIT $@)
-
+efi_target := aarch64-unknown-windows
+efi_boot_name := BOOTAA64.EFI
+efi_arch_cxxflags :=
 
 endif # aarch64
 
@@ -495,20 +514,21 @@ drivers += drivers/msi.o
 endif
 drivers += drivers/driver.o
 
+# ACPI is the device-discovery model on both architectures under UEFI boot.
+ifeq ($(conf_drivers_acpi),1)
+drivers += drivers/acpi.o
+endif
+
 ifeq ($(arch),x64)
 drivers += drivers/isa-serial.o
 drivers += arch/$(arch)/pvclock-abi.o
 
 drivers += drivers/kvmclock.o
-ifeq ($(conf_drivers_acpi),1)
-drivers += drivers/acpi.o
-endif
 endif # x64
 
 ifeq ($(arch),aarch64)
 drivers += drivers/mmio-isa-serial.o
 drivers += drivers/pl011.o
-drivers += drivers/pl031.o
 endif # aarch64
 
 ifeq ($(conf_tracepoints),1)
@@ -570,12 +590,10 @@ objects += arch/$(arch)/arm-clock.o
 objects += arch/$(arch)/gic-common.o
 objects += arch/$(arch)/gic-v2.o
 objects += arch/$(arch)/gic-v3.o
-objects += arch/$(arch)/arch-dtb.o
 # cpuid.cc uses array designators ([HWCAP_BIT_FP] = ...) - a C99 extension in
 # C++ that Clang flags under -Werror; the initializer order is deliberate.
 $(out)/arch/aarch64/cpuid.o: CXXFLAGS += -Wno-c99-designator
 objects += arch/$(arch)/sched.o
-objects += $(libfdt)
 endif
 
 ifeq ($(arch),x64)
@@ -583,10 +601,7 @@ objects += arch/x64/dmi.o
 objects += arch/x64/ioapic.o
 objects += arch/x64/apic.o
 objects += arch/x64/apic-clock.o
-objects += arch/x64/vmlinux.o
-objects += arch/x64/vmlinux-boot64.o
-objects += arch/x64/pvh-boot.o
-objects += arch/x64/pvh-entry.o
+objects += arch/x64/hyperv-clock.o
 endif # x64
 
 objects += core/spinlock.o

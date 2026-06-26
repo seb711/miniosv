@@ -168,10 +168,17 @@ public:
     void wait_for_write_complete();
 };
 
+// Maximum number of redistributor MMIO regions the MADT may describe. GICv3
+// can publish redistributors either as a few large contiguous discovery ranges
+// (one GICR subtable, many frames - QEMU virt, AWS Graviton) or as one small
+// per-CPU region each (a gicr_base_address in every GICC entry - Azure). We
+// handle both by collecting every region and searching all of them by affinity.
+#define MAX_GICR_REGIONS 64
+
 //Redistributor interface
 class gic_v3_redist {
 public:
-    gic_v3_redist(mmu::phys b, size_t l);
+    gic_v3_redist(const mmu::phys *bases, const size_t *lens, int count);
 
     void init_cpu_base(int smp_idx);
     void init_lpis(int smp_idx, u64 prop_base, u64 pend_base);
@@ -184,9 +191,11 @@ public:
     void init_rdbase(int smp_idx, bool pta);
     inline mmu::phys rdbase(int smp_idx) { return _rdbases[smp_idx]; }
 
-    void wait_for_write_complete();
+    void wait_for_write_complete(int smp_idx);
 private:
-    mmu::phys _base;
+    mmu::phys _region_base[MAX_GICR_REGIONS];
+    size_t    _region_len[MAX_GICR_REGIONS];
+    int       _nr_regions;
     mmu::phys *_cpu_bases;
     mmu::phys *_rdbases;
 };
@@ -284,9 +293,9 @@ constexpr int max_sgi_cpus = 16;
 class gic_v3_driver : public gic_driver {
 public:
     gic_v3_driver(mmu::phys d, size_t d_len,
-                  mmu::phys r, size_t r_len,
+                  const mmu::phys *r_bases, const size_t *r_lens, int r_count,
                   mmu::phys i, size_t i_len) :
-        _gicd(d, d_len), _gicrd(r, r_len), _gits(i, i_len) {}
+        _gicd(d, d_len), _gicrd(r_bases, r_lens, r_count), _gits(i, i_len) {}
 
     virtual void init_on_primary_cpu()
     {

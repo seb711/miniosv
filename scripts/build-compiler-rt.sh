@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build LLVM compiler-rt's builtins (the soft-int / arithmetic helpers like
 # __umodti3) as a static archive for the OSv kernel - the compiler-rt
 # replacement for GNU libgcc.a (no GCC anywhere in the toolchain).

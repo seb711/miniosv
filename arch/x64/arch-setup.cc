@@ -24,7 +24,15 @@
 #include "drivers/acpi.hh"
 #endif
 
-osv_multiboot_info_type* osv_multiboot_info;
+// Physical pointer to the hand-off structure filled by the UEFI stub; stored
+// by start64 in boot.S.
+osv::boot_info* osv_boot_info;
+
+// Wall-clock time (ns since the Unix epoch) at boot, from the UEFI firmware's
+// GetTime() captured by the stub. Used as the wall-clock base by time sources
+// that have no paravirtual wall clock of their own (e.g. the Hyper-V clock);
+// 0 when the firmware did not report a time. Mirrors the aarch64 global.
+u64 osv_boot_unixtime_ns;
 
 void setup_temporary_phys_map()
 {
@@ -37,24 +45,43 @@ void setup_temporary_phys_map()
     }
 }
 
-void for_each_e820_entry(void* e820_buffer, unsigned size, void (*f)(e820ent e))
+// A copy of the UEFI memory map taken before we switch page tables. The map
+// itself lives in low RAM the UEFI stub allocated; arch_setup_free_memory walks
+// it several times, including after switch_to_runtime_page_tables() which no
+// longer maps that low memory. Snapshotting it into the (always-mapped) kernel
+// image keeps the later passes valid. (matches the old e820 alloca-copy.)
+static osv::boot_memmap_entry memmap_snapshot[512];
+static u32 memmap_snapshot_count;
+
+static void snapshot_memmap()
 {
-    auto p = static_cast<char*>(e820_buffer);
-    while (p < static_cast<char*>(e820_buffer) + size) {
-        auto ent = reinterpret_cast<e820ent*>(p);
-        if (ent->type == 1) {
-            f(*ent);
+    auto mm = reinterpret_cast<osv::boot_memmap_entry*>(osv_boot_info->memmap_addr);
+    u32 n = osv_boot_info->memmap_count;
+    if (n > 512) {
+        n = 512;
+    }
+    for (u32 i = 0; i < n; i++) {
+        memmap_snapshot[i] = mm[i];
+    }
+    memmap_snapshot_count = n;
+}
+
+// Iterate the usable physical RAM ranges (from the snapshot taken above).
+void for_each_usable_range(void (*f)(mem_range e))
+{
+    for (u32 i = 0; i < memmap_snapshot_count; i++) {
+        if (memmap_snapshot[i].type == osv::boot_mem_type::usable) {
+            f(mem_range{memmap_snapshot[i].addr, memmap_snapshot[i].size});
         }
-        p += ent->ent_size + 4;
     }
 }
 
-bool intersects(const e820ent& ent, u64 a)
+bool intersects(const mem_range& ent, u64 a)
 {
     return a > ent.addr && a < ent.addr + ent.size;
 }
 
-e820ent truncate_below(e820ent ent, u64 a)
+mem_range truncate_below(mem_range ent, u64 a)
 {
     u64 delta = a - ent.addr;
     ent.addr += delta;
@@ -62,7 +89,7 @@ e820ent truncate_below(e820ent ent, u64 a)
     return ent;
 }
 
-e820ent truncate_above(e820ent ent, u64 a)
+mem_range truncate_above(mem_range ent, u64 a)
 {
     u64 delta = ent.addr + ent.size - a;
     ent.size -= delta;
@@ -74,47 +101,20 @@ extern size_t elf_size;
 extern void* elf_start;
 extern boot_time_chart boot_time;
 
-// Because vmlinux_entry64 replaces start32 as a new entry of loader.elf we need a way
-// to place address of start32 so that the boot stub knows where to jump to. We achieve
-// it by placing address of start32 at the known offset at memory
-// as defined by section .start32_address in loader.ld
-extern "C" void start32();
-void * __attribute__((section (".start32_address"))) start32_address =
-  reinterpret_cast<void*>((long)&start32 - OSV_KERNEL_VM_SHIFT);
-
-extern "C" void start32_from_vmlinuz();
-void * __attribute__((section (".start32_from_vmlinuz_address"))) start32_from_vmlinuz_address =
-  reinterpret_cast<void*>((long)&start32_from_vmlinuz - OSV_KERNEL_VM_SHIFT);
-
 void arch_setup_free_memory()
 {
+    extern u64 kernel_vm_shift;
     static ulong edata, edata_phys;
     asm ("movl $.edata, %0" : "=rm"(edata));
-    edata_phys = edata - OSV_KERNEL_VM_SHIFT;
+    edata_phys = edata - kernel_vm_shift;
 
-    // copy to stack so we don't free it now
-    auto omb = *osv_multiboot_info;
-    auto mb = omb.mb;
-    auto e820_buffer = alloca(mb.mmap_length);
-    auto e820_size = mb.mmap_length;
-    memcpy(e820_buffer, reinterpret_cast<void*>(mb.mmap_addr), e820_size);
-    for_each_e820_entry(e820_buffer, e820_size, [] (e820ent ent) {
+    // Copy the UEFI memory map out of low RAM before we touch the page tables.
+    snapshot_memmap();
+
+    for_each_usable_range([] (mem_range ent) {
         memory::phys_mem_size += ent.size;
     });
     constexpr u64 initial_map = 1 << 30; // 1GB mapped by startup code
-
-    u64 time;
-    time = omb.tsc_init_hi;
-    time = (time << 32) | omb.tsc_init;
-    boot_time.event(0, "", time );
-
-    time = omb.tsc_disk_done_hi;
-    time = (time << 32) | omb.tsc_disk_done;
-    boot_time.event(1, "disk read (real mode)", time );
-
-    time = omb.tsc_uncompress_done_hi;
-    time = (time << 32) | omb.tsc_uncompress_done;
-    boot_time.event(2, "kernel placed by boot loader", time );
 
     auto c = processor::cpuid(0x80000000);
     if (c.a >= 0x80000008) {
@@ -131,7 +131,7 @@ void arch_setup_free_memory()
     // setup all memory up to 1GB.  We can't free any more, because no
     // page tables have been set up, so we can't reference the memory being
     // freed.
-    for_each_e820_entry(e820_buffer, e820_size, [] (e820ent ent) {
+    for_each_usable_range([] (mem_range ent) {
         // can't free anything below edata_phys, it's core code.
         // can't free anything below kernel at this moment
         if (ent.addr + ent.size <= edata_phys) {
@@ -161,14 +161,17 @@ void arch_setup_free_memory()
     // is loaded in physical memory - elf_phys_start - and
     // where it is linked to start in virtual memory - elf_start
     static mmu::phys elf_phys_start = reinterpret_cast<mmu::phys>(elf_header);
-    // There is simple invariant between elf_phys_start and elf_start
-    // as expressed by the assignment below
-    elf_start = reinterpret_cast<void*>(elf_phys_start + OSV_KERNEL_VM_SHIFT);
+    // Publish the kernel image's physical base for the phys/virt helpers in
+    // core/mmu.cc (the kernel is loaded at a firmware-chosen base, not a fixed
+    // one). There is a simple invariant between elf_phys_start and elf_start as
+    // expressed by the assignment below.
+    mmu::elf_phys_start = reinterpret_cast<void*>(elf_phys_start);
+    elf_start = reinterpret_cast<void*>(elf_phys_start + kernel_vm_shift);
     elf_size = edata_phys - elf_phys_start;
     mmu::linear_map(elf_start, elf_phys_start, elf_size, "kernel", OSV_KERNEL_BASE);
     // now that we have some free memory, we can start mapping the rest
     mmu::switch_to_runtime_page_tables();
-    for_each_e820_entry(e820_buffer, e820_size, [] (e820ent ent) {
+    for_each_usable_range([] (mem_range ent) {
         //
         // Free the memory below elf_phys_start which we could not before
         if (ent.addr < (u64)elf_phys_start) {
@@ -218,13 +221,15 @@ static inline void disable_pic()
 
 void arch_init_premain()
 {
-    auto omb = *osv_multiboot_info;
-    if (omb.disk_err)
-	debug_early_u64("Error reading disk (real mode): ", static_cast<u64>(omb.disk_err));
-
 #if CONF_drivers_acpi
-    acpi::pvh_rsdp_paddr = omb.pvh_rsdp;
+    // The UEFI stub passes the ACPI RSDP it read from the firmware config table.
+    acpi::pvh_rsdp_paddr = osv_boot_info->acpi_rsdp;
 #endif
+
+    // Publish the firmware wall-clock base before the clock constructors run
+    // (this runs in premain, ahead of the .init_array). Set it for both arches
+    // here; the Hyper-V clock uses it as its wall-clock base.
+    osv_boot_unixtime_ns = osv_boot_info->boot_unixtime_ns;
 
     disable_pic();
 }
@@ -267,20 +272,4 @@ bool arch_setup_console(std::string opt_console)
         return false;
     }
     return true;
-}
-
-void reset_bootchart(osv_multiboot_info_type* mb_info)
-{
-    auto now = processor::ticks();
-    u32 now_high = (u32)(now >> 32);
-    u32 now_low = (u32)now;
-
-    mb_info->tsc_init_hi = now_high;
-    mb_info->tsc_init = now_low;
-
-    mb_info->tsc_disk_done_hi = now_high;
-    mb_info->tsc_disk_done = now_low;
-
-    mb_info->tsc_uncompress_done_hi = now_high;
-    mb_info->tsc_uncompress_done = now_low;
 }
