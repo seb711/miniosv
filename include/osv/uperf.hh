@@ -338,7 +338,7 @@ struct PMCSelectCore : PMCSelect {
     }
     if (act_ctrs < exp_ctrs) {
       std::cout << "Expected " << exp_ctrs << " hardware counters, but only "
-                << act_ctrs << " are available.\n Assuming the fist "
+                << act_ctrs << " are available.\n Assuming the first "
                 << act_ctrs << " counters to be valid." << std::endl;
       erase_last_n_of_x(exp_ctrs - act_ctrs, CORE);
     } else if (is_midr(midr_neoverseV1)) {
