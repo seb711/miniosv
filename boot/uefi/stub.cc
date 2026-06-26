@@ -103,6 +103,28 @@ void print(const char *s)
     }
 }
 
+// Print a value as 0x-prefixed hex (debug aid for early bring-up on real
+// firmware, where only the UEFI console is known-good).
+void print_hex(uint64_t v)
+{
+    char buf[19];
+    buf[0] = '0';
+    buf[1] = 'x';
+    for (int i = 0; i < 16; i++)
+        buf[2 + i] = "0123456789abcdef"[(v >> ((15 - i) * 4)) & 0xf];
+    buf[18] = 0;
+    print(buf);
+}
+
+// SPCR fields the kernel needs to pick and configure the right console driver.
+// Interface Type (offset 36) tells PL011/SBSA (3/0x0e) apart from 16550 (0/1);
+// the GAS AddressSpaceId (offset 40) distinguishes system-memory MMIO (0) from
+// system I/O (1); the GAS Access Size (offset 43) gives the register access
+// width (1=byte, 2=word, 3=dword) - AWS Graviton's 16550 is dword (mmio32).
+unsigned char spcr_iface_type = 0xff;
+unsigned char spcr_gas_space  = 0xff;
+unsigned char spcr_access_size = 0;     // GAS AccessSize: 0=undef,1=8b,2=16b,3=32b,4=64b
+
 // Unaligned little-endian reads (ACPI table fields are not naturally aligned).
 uint32_t rd32(const void *p)
 {
@@ -140,8 +162,12 @@ uint64_t find_spcr_uart(uint64_t rsdp)
         uint64_t tbl = (entsize == 8) ? rd64(h + 36 + i * 8)
                                       : (uint64_t)rd32(h + 36 + i * 4);
         auto t = reinterpret_cast<const unsigned char *>(tbl);
-        if (t[0] == 'S' && t[1] == 'P' && t[2] == 'C' && t[3] == 'R')
+        if (t[0] == 'S' && t[1] == 'P' && t[2] == 'C' && t[3] == 'R') {
+            spcr_iface_type = t[36];  // Interface Type (0/1 = 16550, 3/0x0e = PL011/SBSA)
+            spcr_gas_space  = t[40];  // GAS AddressSpaceId (0 = MMIO, 1 = system I/O)
+            spcr_access_size = t[43]; // GAS AccessSize (3 = dword/mmio32 on Graviton)
             return rd64(t + 44);      // Base Address (GAS Address field)
+        }
     }
     return 0;
 }
@@ -372,6 +398,14 @@ extern "C" EFIAPI EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     uint64_t rsdp = find_rsdp();
     uint64_t uart_base = find_spcr_uart(rsdp);
 
+    // Diagnostic over the (known-good) UEFI console: where is the SPCR UART and
+    // what kind is it? Remove once serial bring-up on real hardware is settled.
+    print("SPCR uart_base="); print_hex(uart_base);
+    print(" iface="); print_hex(spcr_iface_type);
+    print(" gas_space="); print_hex(spcr_gas_space);
+    print(" access_size="); print_hex(spcr_access_size);
+    print("\n");
+
     // Allocate the hand-off structures as EfiLoaderData so they survive
     // ExitBootServices. Size the memmap generously - the UEFI map is bounded
     // by available RAM regions and never approaches this.
@@ -421,6 +455,11 @@ extern "C" EFIAPI EFI_STATUS efi_main(EFI_HANDLE image, EFI_SYSTEM_TABLE *st)
     bi->kernel_phys_base = kernel_phys_base;
     bi->boot_unixtime_ns = read_boot_time();
     bi->uart_base = uart_base;
+    bi->uart_type = spcr_iface_type;
+    // GAS AccessSize -> register access width in bytes (1/2/4); default to byte
+    // when the firmware leaves it undefined.
+    bi->uart_access_width = spcr_access_size == 3 ? 4 :
+                            spcr_access_size == 2 ? 2 : 1;
 
     // Fetch the UEFI memory map, normalize it, and ExitBootServices. The map
     // key can go stale between GetMemoryMap and ExitBootServices, so retry.

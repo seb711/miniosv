@@ -389,16 +389,33 @@ void arch_init_early_console()
     // by QEMU's virt machine and typical ARM firmware).
     console::mmio_isa_serial_console::_phys_mmio_address = 0;
 
-    new (&console::aarch64_console.pl011) console::PL011_Console();
-    // Prefer the console UART the firmware advertised via the ACPI SPCR table
-    // (the UEFI stub passes its base in boot_info). AWS Graviton's UART is not
-    // at the QEMU virt address, so the compiled-in default produces no output
-    // there. Fall back to that default when SPCR gave us nothing.
-    if (osv_boot_info && osv_boot_info->uart_base) {
-        console::aarch64_console.pl011.set_base_addr(osv_boot_info->uart_base);
+    // The ACPI SPCR table (parsed by the UEFI stub and passed in boot_info)
+    // describes the firmware console UART. Its Interface Type tells us which
+    // driver to use: a PL011/SBSA (type 3 or 0x0e) at the QEMU virt address, or
+    // a 16550-compatible UART (type 0/1) such as the one AWS Graviton exposes at
+    // 0x90a0000 with 32-bit registers (mmio32, reg-shift 2). Picking the wrong
+    // driver pokes meaningless register offsets - which on a 16550 garbles the
+    // output (writes land on the data register by luck) and hangs on the PL011
+    // FR/TXFF read (offset 0x18 decodes to nothing). Default to PL011 when SPCR
+    // gave us nothing (QEMU virt without an SPCR).
+    bool is_16550 = osv_boot_info && osv_boot_info->uart_base &&
+                    osv_boot_info->uart_type <= 2;
+    if (is_16550) {
+        new (&console::aarch64_console.isa_serial)
+            console::mmio_isa_serial_console();
+        int width = osv_boot_info->uart_access_width
+                        ? osv_boot_info->uart_access_width : 1;
+        console::mmio_isa_serial_console::early_init_polled(
+            osv_boot_info->uart_base, width);
+        console::arch_early_console = console::aarch64_console.isa_serial;
+    } else {
+        new (&console::aarch64_console.pl011) console::PL011_Console();
+        if (osv_boot_info && osv_boot_info->uart_base) {
+            console::aarch64_console.pl011.set_base_addr(osv_boot_info->uart_base);
+        }
+        console::arch_early_console = console::aarch64_console.pl011;
+        console::PL011_Console::active = true;
     }
-    console::arch_early_console = console::aarch64_console.pl011;
-    console::PL011_Console::active = true;
 }
 
 bool arch_setup_console(std::string opt_console)
