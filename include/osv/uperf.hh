@@ -640,8 +640,6 @@ private:
       PMC{0xC0010204, 0xC0010205, CORE}, PMC{0xC0010206, 0xC0010207, CORE},
       PMC{0xC0010208, 0xC0010209, CORE}, PMC{0xC001020A, 0xC001020B, CORE},
 #elif defined ARCH_TARGET_ARM64
-      PMC{1u << 31, 1u << 31, CYCLES},
-
       // Armv8_pmu3 usually has 6 counters (ids 0-5)
       PMC{0, 0, CORE},
       PMC{1, 1, CORE},
@@ -649,6 +647,8 @@ private:
       PMC{3, 3, CORE},
       PMC{4, 4, CORE},
       PMC{5, 5, CORE},
+
+      PMC{1u << 31, 1u << 31, CYCLES},
 #endif
   };
 };
