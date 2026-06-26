@@ -222,6 +222,11 @@ static inline void disable_pic()
 
 void arch_init_premain()
 {
+    // Enable SSE/AVX and init the FPU before premain() runs the .init_array
+    // constructors: those can execute AVX-compiled library code (see the comment
+    // on arch_init_fpu()), which would #UD -> triple-fault without it.
+    sched::arch_init_fpu();
+
 #if CONF_drivers_acpi
     // The UEFI stub passes the ACPI RSDP it read from the firmware config table.
     acpi::pvh_rsdp_paddr = osv_boot_info->acpi_rsdp;
@@ -251,7 +256,7 @@ void arch_init_drivers()
     // Initialize all drivers
     hw::driver_manager* drvman = hw::driver_manager::instance();
     printf("register nvme driver\n"); 
-    drvman->register_driver(nvme::driver::probe);
+    drvman->register_driver(nvme::nvme_driver::probe);
     boot_time.event("drivers probe");
     drvman->load_all();
     drvman->list_drivers();

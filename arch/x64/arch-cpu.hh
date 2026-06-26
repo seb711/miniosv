@@ -161,6 +161,40 @@ inline void arch_cpu::set_interrupt_stack(arch_thread* t)
     set_ist_entry(2, s, sizeof(s));
 }
 
+// Enable SSE/AVX (CR4.OSFXSR/OSXMMEXCPT/OSXSAVE + XCR0) and initialize the FPU.
+// This is the single source of truth for FPU/SIMD enablement so it can run both
+// per-CPU (init_on_cpu, below) and very early on the boot CPU - arch_init_premain()
+// calls it before premain()'s .init_array constructors run. That early call is
+// load-bearing: those constructors can execute AVX-compiled library code (e.g.
+// llvm-libc's log() pulled in by a static initializer such as runtime.cc's
+// prio_k = log(86)/20), and in an unoptimized (mode=debug) build the call is not
+// constant-folded away. Without AVX enabled here, the VEX-encoded instruction
+// faults with #UD before any handler is ready, cascading to a triple fault that
+// resets the VM (looks like a silent power-off). ORing into CR4 keeps this
+// idempotent so init_on_cpu() can re-run it harmlessly.
+inline void arch_init_fpu()
+{
+    using namespace processor;
+
+    ulong cr4 = read_cr4() | cr4_osfxsr | cr4_osxmmexcpt;
+    if (features().xsave) {
+        cr4 |= cr4_osxsave;
+    }
+    write_cr4(cr4);
+
+    if (features().xsave) {
+        auto bits = xcr0_x87 | xcr0_sse;
+        if (features().avx) {
+            bits |= xcr0_avx;
+        }
+        write_xcr(xcr0, bits);
+    }
+
+    // We can't trust the FPU and the MXCSR to be always initialized to default values.
+    // In at least one particular version of Xen it is not, leading to SIMD exceptions.
+    init_fpu();
+}
+
 inline void arch_cpu::init_on_cpu()
 {
     using namespace processor;
@@ -178,17 +212,7 @@ inline void arch_cpu::init_on_cpu()
     }
     write_cr4(cr4);
 
-    if (features().xsave) {
-        auto bits = xcr0_x87 | xcr0_sse;
-        if (features().avx) {
-            bits |= xcr0_avx;
-        }
-        write_xcr(xcr0, bits);
-    }
-
-    // We can't trust the FPU and the MXCSR to be always initialized to default values.
-    // In at least one particular version of Xen it is not, leading to SIMD exceptions.
-    processor::init_fpu();
+    arch_init_fpu();
 
     processor::wrmsr(msr::IA32_GS_BASE, reinterpret_cast<u64>(&_current_thread_kernel_tcb));
 }
