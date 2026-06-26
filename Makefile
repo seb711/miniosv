@@ -845,7 +845,7 @@ $(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(app_mode_dep) $(ll
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
 		-static --eh-frame-hdr -L$(out)/arch/$(arch) \
             $(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep),$^)) \
-	    $(linker_archives_options) $(conf_linker_extra_options), \
+	    $(linker_archives_options) $(conf_linker_extra_options) --Map=$(out)/loader.map, \
 		LINK loader.elf)
 
 
