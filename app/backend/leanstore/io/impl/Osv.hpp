@@ -4,20 +4,13 @@
 #include "drivers/nvme-queue.hh"
 #include "osv/nvme-structs.h"
 // -------------------------------------------------------------------------------------
-#include "../Raid.hpp"
-// -------------------------------------------------------------------------------------
 // The driver's completion-callback type, used by the io request dispatch table below.
 using nvme::osv_nvme_cmd_cb;
 // -------------------------------------------------------------------------------------
 #include <cassert>
 #include <cstdint>
 #include <cstring>
-#include <iomanip>
-#include <iostream>
-#include <mutex>
-#include <sstream>
 #include <stdexcept>
-#include <thread>
 #include <vector>
 // -------------------------------------------------------------------------------------
 #define checkThrow(test, message)         \
@@ -96,7 +89,7 @@ class NVMeController : public NVMeInterface
    // TODO: what is this needed for? this has only the nvme pcie device information in it -> not needed atm
    // const struct spdk_nvme_ctrlr_data *cdata;
    int maxQPairs = -1;
-   std::vector<nvme::io_user_queue_pair*> qpairs;
+   std::vector<nvme::io_queue_pair*> qpairs;
    // the poll groups aren't really used. They're needed to access pci statistics.
    // see printPciQpairStats
    // TODO: do we need the poll groups?
@@ -105,8 +98,8 @@ class NVMeController : public NVMeInterface
    NVMeController();
    ~NVMeController() override;
    // -------------------------------------------------------------------------------------
-   void setDeviceId(int id) { device_id = id; };
-   int getDeviceId() { return device_id; };
+   void setDevice(nvme::nvme_driver* nvme_driver) { driver = nvme_driver; };
+   nvme::nvme_driver* getDevice() { return driver; };
    // TODO: we should do the connection by the nvme pci id in the future
    void connect(std::string pciefile) override {};
    uint32_t nsLbaDataSize() override;
@@ -165,7 +158,7 @@ class NVMeController : public NVMeInterface
 
   private:
    // here we bind the methods from the nvme driver
-   int device_id = -1;
+   nvme::nvme_driver* driver;
 };
 // -------------------------------------------------------------------------------------
 class NVMeMultiController

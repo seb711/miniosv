@@ -1,9 +1,6 @@
 #include "OsvImpl.hpp"
-#include "leanstore/concurrency/Mean.hpp"
-#include "leanstore/io/IoChannel.hpp"
 // -------------------------------------------------------------------------------------
 #include <sys/mman.h>
-#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
@@ -116,7 +113,7 @@ DeviceInformation OsvEnv::getDeviceInfo()
 
    d.devices.resize(controller->controller.size());
    for (size_t t = 0; t < controller->controller.size(); t++) {
-      d.devices[t].id = controller->controller[t].getDeviceId();
+      d.devices[t].id = 0;
    }
 
    return d;
@@ -187,11 +184,6 @@ void OsvChannel::_push(RaidRequest<OsvIoReq>* req)
       if (ret == 0) {
          outstanding[req->base.device]++;
          break;
-      } else {
-         if (iterations++ % 32) {
-            iterations = 0;
-            _poll(32);
-         }
       }
    }
 }

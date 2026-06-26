@@ -4,10 +4,8 @@
 #include "IoChannel.hpp"
 #include "IoRequest.hpp"
 #include "RequestStack.hpp"
-#include "RequestStackLock.hpp"
-// RequestStackLockfree needs boost::lockfree which is not available in OSv kernel build.
-// For MEAN_USE_TASKING (single-threaded cooperative), the lock-based version is fine.
-#define RequestStackLockfree RequestStackLock
+#include "RequestStackLockfree.hpp"
+
 #include "Time.hpp"
 #include "Units.hpp"
 #include "leanstore/concurrency-recovery/Worker.hpp"
@@ -50,11 +48,8 @@ class Raid0Channel : public IoChannel
    // std::unique_ptr<OsvIoSubmitter<TImplRequest>> io_submitter_thread;
    // std::unique_ptr<OsvIoPoller<TImplRequest>> io_poller_thread;
 
-#if defined(MEAN_USE_JOBBING) || defined(MEAN_USE_THREADING) || defined(MEAN_USE_DEFAULT_THREADING)
-   RequestStackLock<RaidRequest<TImplRequest>> request_stack;
-#else
+
    RequestStackLockfree<RaidRequest<TImplRequest>> request_stack;
-#endif
    u64 pushTimeout = 0;
    int outstanding = 0;
    u64 pushed = 0;

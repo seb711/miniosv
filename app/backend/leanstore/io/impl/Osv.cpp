@@ -2,6 +2,9 @@
 
 #include <cstddef>
 #include <regex>
+#include "drivers/nvme.hh"
+#include "leanstore/Config.hpp"
+#include "osv/sched.hh"
 
 bool OsvEnvironment::initialized = false;
 cmd_fun OsvEnvironment::osv_req_type_fun_lookup[(int)OsvIoReqType::COUNT + 1];
@@ -10,7 +13,7 @@ int OsvEnvironment::qpair_process_completions(void* qpair, uint32_t max)
 {
    // fixme that can be done better
    assert(qpair);
-   return ((nvme::io_user_queue_pair*)qpair)->process_completions(max);
+   return ((nvme::io_queue_pair*)qpair)->process_completions(max);
 }
 void OsvEnvironment::ensureInitialized()
 {
@@ -33,11 +36,11 @@ void OsvEnvironment::init()
 
    OsvEnvironment::osv_req_type_fun_lookup[(int)OsvIoReqType::Read] =
        [](int ns, void* queue, void* payload, uint64_t addr, uint32_t len, osv_nvme_cmd_cb cb_fn, void* cb_arg, uint32_t io_flags) {
-          return ((nvme::io_user_queue_pair*)queue)->submit_request(ns, payload, addr, len, cb_fn, cb_arg, io_flags, nvme::NVME_COMMAND::READ) ^ 1;
+          return ((nvme::io_queue_pair*)queue)->submit_request(ns, payload, addr, len, cb_fn, cb_arg, io_flags, nvme::NVME_COMMAND::READ) ^ 1;
        };
    OsvEnvironment::osv_req_type_fun_lookup[(int)OsvIoReqType::Write] =
        [](int ns, void* queue, void* payload, uint64_t addr, uint32_t len, osv_nvme_cmd_cb cb_fn, void* cb_arg, uint32_t io_flags) {
-          return ((nvme::io_user_queue_pair*)queue)->submit_request(ns, payload, addr, len, cb_fn, cb_arg, io_flags, nvme::NVME_COMMAND::WRITE) ^ 1;
+          return ((nvme::io_queue_pair*)queue)->submit_request(ns, payload, addr, len, cb_fn, cb_arg, io_flags, nvme::NVME_COMMAND::WRITE) ^ 1;
        };
    OsvEnvironment::osv_req_type_fun_lookup[(int)OsvIoReqType::COUNT] = nullptr;
 
@@ -66,9 +69,9 @@ NVMeController::~NVMeController()
    //    nvme::driver::get_nvme_device(device_id)->remove_io_user_queue(qpair);
    // }
    // qpairs.clear();
-   std::cout << "shutdown controller " << device_id << std::endl;
-   if (nvme::driver* dev = nvme::driver::get_nvme_device(device_id)) {
-      dev->shutdown_controller();
+   std::cout << "shutdown controller " << driver << std::endl;
+   if (driver) {
+      driver->shutdown_controller();
    }
 }
 // -------------------------------------------------------------------------------------
@@ -120,15 +123,10 @@ void NVMeController::allocateQPairs(int number)
       number = requestMaxQPairs();
    }
 
-   for (int i = 0; i < number; i++) {
-      assert(device_id != -1);
+   for (int i = 0; i < FLAGS_worker_threads; i++) {
+      assert(driver != nullptr);
 
-      nvme::driver* dev = nvme::driver::get_nvme_device(device_id);
-#ifndef IS_INTERRUPT_NVME
-      auto* qpair = (nvme::io_user_queue_pair*)(dev ? dev->create_io_user_queue(queueDepth()) : nullptr);
-#else
-      auto* qpair = (nvme::io_user_queue_pair*)(dev ? dev->create_io_interrupt_user_queue(queueDepth()) : nullptr);
-#endif
+      auto* qpair = (nvme::io_queue_pair*)(driver->create_io_queue(queueDepth(), sched::cpus[i]));
 
       if (!qpair) {
          throw std::logic_error("ERROR: leanstore_create_io_user_queue() failed\n");
@@ -158,31 +156,23 @@ int32_t NVMeController::qpairSize()
 // -------------------------------------------------------------------------------------
 void NVMeMultiController::connect(std::string connectionString)
 {
-   // Walk the linked list of probed NVMe controllers to collect their ids.
-   std::vector<int> all_ids;
-   for (nvme::driver* d = nvme::driver::prev_nvme_driver; d != nullptr; d = d->_next_nvme_driver) {
-      all_ids.push_back(d->get_id());
-   }
-
    // When booting via UEFI (or on EC2) the small boot/ESP volume shows up
    // as just another NVMe controller; striping data over it would overflow
    // it. Only use controllers large enough to plausibly be data disks.
    // 2GiB: EBS volumes are at least 1GiB, so 256MB would not catch the
    // EC2 boot volume; data volumes must be > target_gib anyway, so > 2GiB.
    constexpr uint64_t min_data_disk_bytes = 2ull << 30;
-   std::vector<int> ids;
-   for (int id : all_ids) {
+   std::vector<nvme::nvme_driver*> ids;
+   for (nvme::nvme_driver* driver: nvme::nvme_driver::nvme_drives) {
       uint64_t bytes = 0;
-      if (nvme::driver* dev = nvme::driver::get_nvme_device(id)) {
-         auto it = dev->_ns_data.find(1);
-         if (it != dev->_ns_data.end()) {
+         auto it = driver->_ns_data.find(1);
+         if (it != driver->_ns_data.end()) {
             bytes = it->second->blockcount * it->second->blocksize;
          }
-      }
       if (bytes >= min_data_disk_bytes) {
-         ids.push_back(id);
+         ids.push_back(driver);
       } else {
-         std::cout << "skipping nvme id " << id << " (" << (bytes >> 20)
+         std::cout << "skipping nvme " << " (" << (bytes >> 20)
                    << " MiB, likely the boot disk)" << std::endl;
       }
    }
@@ -192,7 +182,7 @@ void NVMeMultiController::connect(std::string connectionString)
 
    for (unsigned int i = 0; i < ids.size(); i++) {
       std::cout << "controller idx=" << i << " with id " << ids[i] << std::endl;
-      controller[i].setDeviceId(ids[i]);
+      controller[i].setDevice(ids[i]);
    }
 }
 // -------------------------------------------------------------------------------------

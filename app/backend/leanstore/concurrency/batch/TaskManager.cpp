@@ -373,34 +373,15 @@ void TaskManager::blockingIo(IoRequestType type, char* data, s64 addr, u64 len)
           auto this_executor = reinterpret_cast<TaskExecutor*>(req->user.user_data3.val.ptr);
           // std::cout << "completion addr: " << req->addr <<  std::endl << std::flush;
           assert(this_executor->id() == req->user.user_data.val.s);  //
-          // DEBUG: this completion must correspond to exactly the one IO this task
-          // parked on. If not, a completion is firing for a task that isn't (or is no
-          // longer) waiting on it -> would resume a task whose data isn't ready.
-          if (this_task->dbg_outstanding_ios.load() != 1) {
-             printf("DBG IO-WAKE: completion for task %p but outstanding_ios=%d (expected 1) exec=%d addr=%ld\n",
-                    (void*)this_task, this_task->dbg_outstanding_ios.load(), this_executor->id(), (long)req->addr);
-             abort();
-          }
-          this_task->dbg_outstanding_ios.store(0);
           this_executor->moveReady(this_task);
           // TODO maybe push Task to top.
        },
    cb.user_data.val.s = TaskExecutor::localExec().id();
    cb.user_data3.val.ptr = &TaskExecutor::localExec();
-   Task* this_task_dbg = &TaskExecutor::localExec().currentTask();
-   cb.user_data2.val.ptr = this_task_dbg;
+   cb.user_data2.val.ptr = &TaskExecutor::localExec().currentTask();
 
    TaskExecutor::localExec().ioChannel.push(type, data, addr, len, cb);
    // TaskExecutor::localExec().ioChannel.submit();
-   // DEBUG: mark exactly one IO outstanding *after* it is queued/submitted and right
-   // before parking. The completion callback above only runs during a later poll, so
-   // this store always precedes it; a non-zero count here means re-entrancy.
-   if (this_task_dbg->dbg_outstanding_ios.load() != 0) {
-      printf("DBG IO-PARK: task %p parking on IO but outstanding_ios=%d (expected 0)\n",
-             (void*)this_task_dbg, this_task_dbg->dbg_outstanding_ios.load());
-      abort();
-   }
-   this_task_dbg->dbg_outstanding_ios.store(1);
    TaskExecutor::yieldCurrentTask(TaskState::WaitIo);
 }
 // -------------------------------------------------------------------------------------

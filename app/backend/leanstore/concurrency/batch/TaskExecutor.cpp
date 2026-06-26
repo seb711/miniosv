@@ -133,7 +133,7 @@ void TaskExecutor::cycle()
       if (cycles % everyPP  == 0) {
          pageProviderCycle();
       }
-      if (cycles % everyPoll == 0) {
+      /* if (cycles % everyPoll == 0) {
          leanstore::ThreadCounters::myCounters().exec_cycles += everyPoll;
          counters.cycles = cycles;
          ioChannel.poll();
@@ -141,11 +141,9 @@ void TaskExecutor::cycle()
             auto now = getSeconds();
             if (now - counterUpdateTime > 0.99999) {
                counterUpdateTime = now;
-               /*COUNTERS_BLOCK()*/ { ioChannel.counters.updateLeanStoreCounters(); }
-               /*COUNTERS_BLOCK()*/ { ioChannel.counters.reset(); }
-            }
+                          }
          }
-      }
+      } */
       // -------------------------------------------------------------------------------------
       // schedule next task
       const int maxTasksRun = 1;
@@ -280,21 +278,7 @@ void TaskExecutor::pushTask(TaskFunction fun)
 }
 void TaskExecutor::moveReady(Task* task)
 {
-   // DEBUG: only a parked task (WaitIo from blockingIo, or Waiting from a message)
-   // should ever be woken, and any IO it parked on must have completed first.
-   if (task->state != TaskState::WaitIo && task->state != TaskState::Waiting) {
-      printf("DBG WAKE-STATE: moveReady on task %p in non-parked state %d\n", (void*)task, (int)task->state);
-      abort();
-   }
-   if (task->dbg_outstanding_ios.load() != 0) {
-      printf("DBG WAKE-IO: moveReady on task %p with outstanding_ios=%d (IO not done)\n",
-             (void*)task, task->dbg_outstanding_ios.load());
-      abort();
-   }
    task->state = TaskState::Ready;
-#ifndef NDEBUG
-   waiting_tasks.erase(task);
-#endif
    waitingTaskCount--;
    waitIoTaskCount--;
    tasks_io_done.push_back(task);

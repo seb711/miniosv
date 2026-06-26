@@ -2,14 +2,9 @@
 #include "./Osv.hpp"
 // -------------------------------------------------------------------------------------
 #include "../IoAbstraction.hpp"
-#include "../RequestStack.hpp"
 // -------------------------------------------------------------------------------------
-#include <atomic>
-#include <condition_variable>
-#include <cstdint>
 #include <memory>
 #include <stdexcept>
-#include <unordered_map>
 #include <vector>
 // -------------------------------------------------------------------------------------
 namespace mean
@@ -47,7 +42,7 @@ class OsvChannel
    void prepare_request(RaidRequest<OsvIoReq>* req, OsvIoReqCallback spdkCb);
    // -------------------------------------------------------------------------------------
   public:
-   std::vector<nvme::io_user_queue_pair*> qpairs;
+   std::vector<nvme::io_queue_pair*> qpairs;
 
    OsvChannel(IoOptions options, NVMeMultiController& controller, int queue);
    ~OsvChannel();
@@ -56,6 +51,8 @@ class OsvChannel
    void pushBlocking(IoRequestType type, char* data, s64 addr, u64 len, bool write_back) { throw std::logic_error("not implemented"); }
    int _submit()
    {
+     return 0; 
+
       for (auto& req : write_request_stack) {  // ok but this is done until stack empty
          int ret;
          if (true || outstanding[req->base.device] < 16) {
@@ -89,6 +86,7 @@ class OsvChannel
 
    int _poll(int)
    {
+     return 0; 
       int done = 0;
 
       for (unsigned int i = 0; i < qpairs.size(); i++) {
