@@ -10,12 +10,13 @@
 //    - Neoverse V-1
 //    - Neoverse V-2
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
-#include <chrono>
 #include <string>
 #include <vector>
 
@@ -283,6 +284,30 @@ struct PMC {
 struct PMCSelect {
   PMCSelect(std::initializer_list<PMC> pmcs) : pmcs(pmcs) {}
 
+  bool erase_counter(uint32_t perfEvtSel, uint32_t perfCtr, PMClass pmClass) {
+    auto it = std::find_if(
+        this->pmcs.begin(), this->pmcs.end(), [&](const auto &pmc) {
+          return pmc.perfEvtSel == perfEvtSel && pmc.perfCtr == perfCtr &&
+                 pmc.pmClass == pmClass;
+        });
+    if (it == this->pmcs.end())
+      return false;
+    this->pmcs.erase(it);
+    return true;
+  }
+
+  bool erase_last_n_of_x(uint32_t n, PMClass x) {
+    auto it = this->pmcs.end();
+    while (n > 0 && it != this->pmcs.begin()) {
+      --it;
+      if (it->pmClass == PMClass::CORE) {
+        it = this->pmcs.erase(it);
+        --n;
+      }
+    }
+    return n == 0;
+  }
+
   PMC *acquire(PMClass pmClass, uint8_t retries = 0) {
     for (auto &pmc : pmcs) {
       bool expected = true;
@@ -292,10 +317,7 @@ struct PMCSelect {
     }
     if (retries == 6)
       return nullptr;
-    ++retries;
-    std::cout << "Couldn't acquire PMC of the requested class. Retrying ("
-              << retries << "/6)" << std::endl;
-    return acquire(pmClass, retries);
+    return acquire(pmClass, ++retries);
   }
 
   void release(PMC *pmc) { pmc->free.store(true); }
@@ -316,17 +338,16 @@ struct PMCSelectCore : PMCSelect {
     }
     if (act_ctrs < exp_ctrs) {
       std::cout << "Expected " << exp_ctrs << " hardware counters, but only "
-                << act_ctrs << " are available." << std::endl
-                << " Removing the last " << (exp_ctrs - act_ctrs)
-                << " entries..." << std::endl;
-      this->pmcs.erase(this->pmcs.begin() + act_ctrs, this->pmcs.end());
-    }
-
-    if (is_midr(midr_neoverseV1)) {
+                << act_ctrs << " are available.\n Assuming the fist "
+                << act_ctrs << " counters to be valid." << std::endl;
+      erase_last_n_of_x(exp_ctrs - act_ctrs, CORE);
+    } else if (is_midr(midr_neoverseV1)) {
+      // TODO: There is a nicer way to check this. We only want to disable on
+      // neoverse v1 + kvm
       std::cout << "Detected ARM Neoverse V1: Disabling counter 0 since it "
                    "doesn't work reliably on this CPU. You have "
                 << act_ctrs - 1 << " counters available" << std::endl;
-      this->pmcs.erase(this->pmcs.begin());
+      erase_counter(0, 0, CORE);
     }
   }
 };
@@ -481,6 +502,8 @@ struct Event {
   uint64_t before;
   uint64_t after;
 
+  bool valid = true;
+
   Event(PMCEvent pmce, PMCSelect &pmcs) : pmce(pmce), pmcs(pmcs) {}
 
   void start() {
@@ -488,6 +511,7 @@ struct Event {
     if (!pmc) {
       std::cerr << "[ERROR] All hardware counters are occupied. Event "
                 << pmce.name << " will not be measured." << std::endl;
+      valid = false;
       return;
     }
     pmc->start_with_conf(pmce.bitmap);
@@ -502,7 +526,7 @@ struct Event {
     pmcs.release(pmc);
   }
 
-  uint64_t report() { return after - before; }
+  uint64_t report() { return valid ? after - before : 0; }
 
 private:
   PMCSelect &pmcs;
@@ -606,9 +630,11 @@ struct Collection {
 
     printCounter(headerOut, dataOut, "duration", getDuration());
     for (unsigned i = 0; i < events.size(); i++) {
-      printCounter(headerOut, dataOut, events[i].pmce.name,
-                   events[i].report() /
-                       static_cast<double>(normalizationConstant));
+      if (events[i].valid) {
+        printCounter(headerOut, dataOut, events[i].pmce.name,
+                     events[i].report() /
+                         static_cast<double>(normalizationConstant));
+      }
     }
 
     printCounter(headerOut, dataOut, "scale", normalizationConstant);
