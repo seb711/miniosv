@@ -20,9 +20,9 @@
 #include <osv/commands.hh>
 
 #include "arch-mmu.hh"
-#include "arch-dtb.hh"
 #include "gic-v2.hh"
 #include "gic-v3.hh"
+#include "drivers/acpi.hh"
 
 #include "drivers/console.hh"
 #include "drivers/pl011.hh"
@@ -32,8 +32,109 @@
 #endif
 #include "drivers/mmio-isa-serial.hh"
 
+#include <osv/boot-info.hh>
+#include <osv/prio.hh>
 #include <alloca.h>
 
+// Physical pointer to the hand-off structure filled by the UEFI stub; stored
+// by uefi_entry in boot.S.
+osv::boot_info* osv_boot_info;
+
+// Kernel command line (set from the UEFI LoadOptions in uefi_memory_setup).
+char *cmdline;
+
+// Wall-clock at boot (UEFI GetTime), nanoseconds since the Unix epoch. Captured
+// early because boot_info lives in low RAM that is unmapped once the runtime
+// page tables are installed, before the clock constructor runs.
+u64 osv_boot_unixtime_ns;
+
+// Derive the physical memory layout and ELF extents from the UEFI memory map.
+// Runs as an early constructor (init_prio::dtb); elf_header, kernel_vm_shift
+// and osv_boot_info were already set by uefi_entry.
+void __attribute__((constructor(init_prio::dtb))) uefi_memory_setup()
+{
+    auto bi = osv_boot_info;
+    auto mm = reinterpret_cast<osv::boot_memmap_entry*>(bi->memmap_addr);
+    u64 kbase = bi->kernel_phys_base;
+
+    // Re-mark the boot identity map: any usable RAM below 4 GiB must be Normal
+    // cacheable, not Device. The static map in boot.S marks the low 1 GiB Device
+    // because on QEMU/AWS/GCP that range is pure MMIO and RAM starts at 1 GiB -
+    // but Azure places RAM in the low 1 GiB, and running RAM (atomics, unaligned
+    // access) through a Device mapping faults. ident_pt_l2_0_ttbr0 is the base
+    // of four contiguous 512-entry L2 tables (entry i maps physical i*2 MiB over
+    // 0-4 GiB); rewrite the blocks covered by usable RAM to Normal (attr index
+    // 4 = 0x411), leaving MMIO blocks Device. This runs before any heap/atomic
+    // use (init_prio::dtb, the first post-banner constructor) and while we are
+    // still on the boot page tables, so the tables are writable.
+    extern u64 ident_pt_l2_0_ttbr0[];
+    constexpr u64 BLOCK = 0x200000;            // 2 MiB
+    constexpr u64 NR_BLOCKS_4G = 0x100000000ull / BLOCK;  // 2048
+    for (u32 i = 0; i < bi->memmap_count; i++) {
+        if (mm[i].type != osv::boot_mem_type::usable)
+            continue;
+        u64 first = mm[i].addr / BLOCK;
+        u64 last = (mm[i].addr + mm[i].size + BLOCK - 1) / BLOCK;  // exclusive
+        if (last > NR_BLOCKS_4G)
+            last = NR_BLOCKS_4G;
+        for (u64 b = first; b < last; b++)
+            ident_pt_l2_0_ttbr0[b] = (b * BLOCK) | 0x411;  // Normal cacheable block
+    }
+    mmu::flush_tlb_all();
+
+    // mem_addr is the 2MB-aligned base the boot page tables map the kernel
+    // window onto. The UEFI stub loaded the kernel here with AllocatePages,
+    // which splits the surrounding RAM into several map entries, so we take the
+    // top of usable RAM at or above mem_addr as the end of memory (QEMU virt
+    // and cloud ARM present RAM as one contiguous block from there up).
+    mmu::mem_addr = kbase & ~((u64)0x200000 - 1);
+
+    // Grow a single contiguous run of usable memory upward from the kernel
+    // base. OSv models RAM as one [mem_addr, region_end) block, but firmware
+    // memory maps are not always contiguous: AWS Nitro presents a low RAM
+    // island separated by a reserved hole from a larger high island. Taking
+    // the highest usable end (the old behaviour) would span that hole and
+    // later free non-existent physical pages into the allocator, faulting on
+    // first touch. So extend only across adjacent/overlapping usable entries
+    // and stop at the first gap; RAM above the gap is discarded for now (this
+    // matches the old aarch64 stub, which deliberately exposed one range).
+    u64 region_end = mmu::mem_addr;
+    for (bool grew = true; grew;) {
+        grew = false;
+        for (u32 i = 0; i < bi->memmap_count; i++) {
+            if (mm[i].type != osv::boot_mem_type::usable)
+                continue;
+            u64 start = mm[i].addr, end = start + mm[i].size;
+            if (start <= region_end && end > region_end) {
+                region_end = end;
+                grew = true;
+            }
+        }
+    }
+    if (region_end <= mmu::mem_addr) {
+        abort("uefi_memory_setup: no usable memory above the kernel.\n");
+    }
+    memory::phys_mem_size = region_end - mmu::mem_addr;
+
+    // Command line and wall-clock base provided by the UEFI stub.
+    cmdline = reinterpret_cast<char*>(bi->cmdline_addr);
+    osv_boot_unixtime_ns = bi->boot_unixtime_ns;
+
+    // Compute the ELF extents (physical/virtual start and size).
+    u64 edata;
+    asm volatile ("adrp %0, .edata" : "=r"(edata));
+    extern elf::Elf64_Ehdr *elf_header;
+    extern size_t elf_size;
+    extern void *elf_start;
+    extern u64 kernel_vm_shift;
+    mmu::elf_phys_start = reinterpret_cast<void *>(elf_header);
+    elf_start = static_cast<char *>(mmu::elf_phys_start) + kernel_vm_shift;
+    elf_size = (u64)edata - (u64)elf_start;
+
+    // Account for the memory the kernel image itself occupies.
+    mmu::phys addr = (mmu::phys)mmu::elf_phys_start + elf_size;
+    memory::phys_mem_size -= addr - mmu::mem_addr;
+}
 
 void setup_temporary_phys_map()
 {
@@ -47,35 +148,29 @@ void setup_temporary_phys_map()
 }
 
 #if CONF_drivers_pci
+// Locate the PCIe ECAM config space from the ACPI MCFG table and map it. Like
+// Nanos, this is the only PCI information we take from firmware: the BARs are
+// left exactly as UEFI programmed them (arch_add_bar reads them as-is, so the
+// io/mem allocation windows are never needed), and device interrupts are
+// delivered as MSI-X through the GIC ITS, so there is no INTx routing table to
+// parse. Called from arch_init_drivers, after the ACPI tables are parsed.
 void arch_setup_pci()
 {
-    pci::set_pci_ecam(dtb_get_pci_is_ecam());
-
-    /* linear_map [TTBR0 - PCI config space] */
-    u64 pci_cfg;
-    size_t pci_cfg_len;
-    if (!dtb_get_pci_cfg(&pci_cfg, &pci_cfg_len)) {
-        return;
+    auto mcfg = reinterpret_cast<const acpi::mcfg*>(acpi::find_table(ACPI_SIG_MCFG));
+    if (!mcfg) {
+        return;   // no PCIe host bridge described - leave PCI disabled
     }
 
-    pci::set_pci_cfg(pci_cfg, pci_cfg_len);
-    pci_cfg = pci::get_pci_cfg(&pci_cfg_len);
-    mmu::linear_map((void *)pci_cfg, (mmu::phys)pci_cfg, pci_cfg_len,
-		    "pci_cfg", mmu::page_size, mmu::mattr::dev);
+    // Use the first configuration-space allocation (segment 0).
+    auto alloc = reinterpret_cast<const acpi::mcfg_alloc*>(
+        reinterpret_cast<const char*>(mcfg) + sizeof(acpi::mcfg));
+    u64 ecam_base = alloc->base_address;
+    size_t ecam_len = (static_cast<size_t>(alloc->end_bus - alloc->start_bus + 1)) << 20;
 
-    /* linear_map [TTBR0 - PCI I/O and memory ranges] */
-    u64 ranges[2]; size_t ranges_len[2];
-    if (!dtb_get_pci_ranges(ranges, ranges_len, 2)) {
-        abort("arch-setup: failed to get PCI ranges.\n");
-    }
-    pci::set_pci_io(ranges[0], ranges_len[0]);
-    pci::set_pci_mem(ranges[1], ranges_len[1]);
-    ranges[0] = pci::get_pci_io(&ranges_len[0]);
-    ranges[1] = pci::get_pci_mem(&ranges_len[1]);
-    mmu::linear_map((void *)ranges[0], (mmu::phys)ranges[0], ranges_len[0],
-                    "pci_io", mmu::page_size, mmu::mattr::dev);
-    mmu::linear_map((void *)ranges[1], (mmu::phys)ranges[1], ranges_len[1],
-                    "pci_mem", mmu::page_size, mmu::mattr::dev);
+    pci::set_pci_ecam(true);
+    pci::set_pci_cfg(ecam_base, ecam_len);
+    mmu::linear_map((void *)ecam_base, (mmu::phys)ecam_base, ecam_len,
+                    "pci_cfg", mmu::page_size, mmu::mattr::dev);
 }
 #endif
 
@@ -114,22 +209,10 @@ void arch_setup_free_memory()
                         mmu::mattr::dev);
     }
 
-    //Locate GICv2 or GICv3 information in DTB and construct corresponding GIC driver
-    u64 dist, redist, cpuif, its, v2m;
-    size_t dist_len, redist_len, cpuif_len, its_len, v2m_len;
-    if (dtb_get_gic_v3(&dist, &dist_len, &redist, &redist_len, &its, &its_len)) {
-        gic::gic = new gic::gic_v3_driver(dist, dist_len, redist, redist_len, its, its_len);
-    } else if (dtb_get_gic_v2(&dist, &dist_len, &cpuif, &cpuif_len, &v2m, &v2m_len)) {
-        gic::gic = new gic::gic_v2_driver(dist, dist_len, cpuif, cpuif_len, v2m, v2m_len);
-    } else {
-        abort("arch-setup: failed to get GICv3 nor GiCv2 information from dtb.\n");
-    }
-
-#if CONF_drivers_pci
-    if (!opt_pci_disabled) {
-        arch_setup_pci();
-    }
-#endif
+    // The GIC is discovered from the ACPI MADT and constructed in a constructor
+    // at init_prio::gic (see init_gic_acpi below), which runs after the ACPI
+    // tables are parsed (init_prio::acpi) and before the timer needs it. PCI is
+    // set up later in arch_init_drivers, once ACPI (MCFG) is available.
 
     // Strip console= options from the command line before memory is unmapped.
     // The slim kernel does not turn the cmdline into commands (the app is
@@ -166,7 +249,108 @@ void arch_setup_tls(void *tls, const elf::tls_data& info)
 
 void arch_init_premain()
 {
+#if CONF_drivers_acpi
+    // Hand the RSDP the UEFI stub found to the ACPI layer before its early_init
+    // constructor runs - exactly as x86 does in its arch_init_premain.
+    acpi::pvh_rsdp_paddr = osv_boot_info->acpi_rsdp;
+#endif
 }
+
+#if CONF_drivers_acpi
+// Discover the GIC from the ACPI MADT and construct the matching driver. This
+// walks the MADT subtables the same way arch/x64/smp.cc does, so both arches
+// share one ACPI parsing model. It runs after acpi::early_init (init_prio::acpi)
+// and before the generic timer, which needs the GIC (init_prio::gic).
+static void __attribute__((constructor(init_prio::gic))) init_gic_acpi()
+{
+    auto madt = reinterpret_cast<const acpi::madt*>(acpi::find_table(ACPI_SIG_MADT));
+    if (!madt) {
+        abort("arch-setup: no MADT table - cannot locate the GIC.\n");
+    }
+
+    u64 gicd = 0, gits = 0, gicc_cpuif = 0;
+    u8 version = 0;
+
+    // Collect redistributor regions in both forms the MADT may use: contiguous
+    // GICR discovery ranges (one subtable, many frames - QEMU/AWS) and per-CPU
+    // gicr_base_address in each GICC entry (one frame each - Azure). Keep them
+    // separate and prefer the GICR subtables; fall back to the GICC form only
+    // when no GICR subtable is present (the two are mutually exclusive in
+    // practice, and a system using GICR subtables sets gicr_base_address to 0).
+    mmu::phys gicr_base[MAX_GICR_REGIONS];
+    size_t    gicr_len[MAX_GICR_REGIONS];
+    int       nr_gicr = 0;
+    mmu::phys gicc_redist_base[MAX_GICR_REGIONS];
+    int       nr_gicc_redist = 0;
+
+    auto subtable = reinterpret_cast<const char*>(madt + 1);
+    auto madt_end = reinterpret_cast<const char*>(madt) + madt->header.length;
+    while (subtable < madt_end) {
+        auto s = reinterpret_cast<const acpi::madt_subtable*>(subtable);
+        switch (s->type) {
+        case acpi::MADT_GICD: {
+            auto d = reinterpret_cast<const acpi::madt_gicd*>(s);
+            gicd = d->physical_base_address;
+            version = d->gic_version;
+            break;
+        }
+        case acpi::MADT_GICR: {
+            auto r = reinterpret_cast<const acpi::madt_gicr*>(s);
+            if (nr_gicr < MAX_GICR_REGIONS) {
+                gicr_base[nr_gicr] = r->discovery_range_base_address;
+                gicr_len[nr_gicr] = r->discovery_range_length;
+                nr_gicr++;
+            }
+            break;
+        }
+        case acpi::MADT_GIC_ITS: {
+            auto i = reinterpret_cast<const acpi::madt_gic_its*>(s);
+            gits = i->physical_base_address;
+            break;
+        }
+        case acpi::MADT_GICC: {
+            auto c = reinterpret_cast<const acpi::madt_gicc*>(s);
+            // GICv2 takes the CPU interface base from here; GICv3 publishes a
+            // per-cpu redistributor here when there is no GICR subtable.
+            if (!gicc_cpuif) {
+                gicc_cpuif = c->physical_base_address;
+            }
+            if (c->gicr_base_address && nr_gicc_redist < MAX_GICR_REGIONS) {
+                gicc_redist_base[nr_gicc_redist++] = c->gicr_base_address;
+            }
+            break;
+        }
+        default:
+            break;
+        }
+        subtable += s->length;
+    }
+
+    // The MADT carries base addresses but not region sizes; use the
+    // architectural defaults (the GICR discovery-range length comes from the
+    // MADT; per-CPU GICC redistributors are one 0x20000 frame each).
+    constexpr size_t GICD_LEN = 0x10000;
+    constexpr size_t GITS_LEN = 0x20000;
+    constexpr size_t GICR_FRAME_LEN = 0x20000;
+
+    if (nr_gicr == 0) {
+        for (int i = 0; i < nr_gicc_redist; i++) {
+            gicr_base[i] = gicc_redist_base[i];
+            gicr_len[i] = GICR_FRAME_LEN;
+        }
+        nr_gicr = nr_gicc_redist;
+    }
+
+    if (version == 3 || nr_gicr) {
+        gic::gic = new gic::gic_v3_driver(gicd, GICD_LEN, gicr_base, gicr_len,
+                                          nr_gicr, gits, gits ? GITS_LEN : 0);
+    } else if (gicd && gicc_cpuif) {
+        gic::gic = new gic::gic_v2_driver(gicd, GICD_LEN, gicc_cpuif, 0x2000, 0, 0);
+    } else {
+        abort("arch-setup: MADT has no usable GIC description.\n");
+    }
+}
+#endif
 
 #include "drivers/driver.hh"
 
@@ -176,22 +360,11 @@ void arch_init_drivers()
 
 #if CONF_drivers_pci
     if (!opt_pci_disabled) {
-        int irqmap_count = dtb_get_pci_irqmap_count();
-        if (irqmap_count > 0) {
-            u32 mask = dtb_get_pci_irqmask();
-            u32 *bdfs = (u32 *)alloca(sizeof(u32) * irqmap_count);
-            int *irqs  = (int *)alloca(sizeof(int) * irqmap_count);
-            if (!dtb_get_pci_irqmap(bdfs, irqs, irqmap_count)) {
-                abort("arch-setup: failed to get PCI irqmap.\n");
-            }
-            pci::set_pci_irqmap(bdfs, irqs, irqmap_count, mask);
-        }
+        // Discover the ECAM config space from the ACPI MCFG (available now that
+        // the ACPI tables are parsed), then enumerate. Device interrupts are
+        // MSI-X via the GIC ITS, so there is no INTx irqmap to set up.
+        arch_setup_pci();
 
-#if CONF_logger_debug
-        pci::dump_pci_irqmap();
-#endif
-
-        // Enumerate PCI devices
         size_t pci_cfg_len;
         if (pci::get_pci_cfg(&pci_cfg_len)) {
             pci::pci_device_enumeration();
@@ -209,30 +382,40 @@ void arch_init_drivers()
 
 void arch_init_early_console()
 {
+    // Like the x86 early console (a fixed COM port), the aarch64 early console
+    // uses a compiled-in default UART. UEFI hands off no device tree, and ACPI
+    // is not parsed this early, so we rely on the PL011 driver's default base
+    // address and IRQ (the ARM PL011 at the standard platform address, as used
+    // by QEMU's virt machine and typical ARM firmware).
     console::mmio_isa_serial_console::_phys_mmio_address = 0;
 
-    int irqid;
-    u64 mmio_serial_address = dtb_get_mmio_serial_console(&irqid);
-    if (mmio_serial_address) {
-        console::mmio_isa_serial_console::early_init(mmio_serial_address);
-
-        new (&console::aarch64_console.isa_serial) console::mmio_isa_serial_console();
-        console::aarch64_console.isa_serial.set_irqid(irqid);
+    // The ACPI SPCR table (parsed by the UEFI stub and passed in boot_info)
+    // describes the firmware console UART. Its Interface Type tells us which
+    // driver to use: a PL011/SBSA (type 3 or 0x0e) at the QEMU virt address, or
+    // a 16550-compatible UART (type 0/1) such as the one AWS Graviton exposes at
+    // 0x90a0000 with 32-bit registers (mmio32, reg-shift 2). Picking the wrong
+    // driver pokes meaningless register offsets - which on a 16550 garbles the
+    // output (writes land on the data register by luck) and hangs on the PL011
+    // FR/TXFF read (offset 0x18 decodes to nothing). Default to PL011 when SPCR
+    // gave us nothing (QEMU virt without an SPCR).
+    bool is_16550 = osv_boot_info && osv_boot_info->uart_base &&
+                    osv_boot_info->uart_type <= 2;
+    if (is_16550) {
+        new (&console::aarch64_console.isa_serial)
+            console::mmio_isa_serial_console();
+        int width = osv_boot_info->uart_access_width
+                        ? osv_boot_info->uart_access_width : 1;
+        console::mmio_isa_serial_console::early_init_polled(
+            osv_boot_info->uart_base, width);
         console::arch_early_console = console::aarch64_console.isa_serial;
-        return;
+    } else {
+        new (&console::aarch64_console.pl011) console::PL011_Console();
+        if (osv_boot_info && osv_boot_info->uart_base) {
+            console::aarch64_console.pl011.set_base_addr(osv_boot_info->uart_base);
+        }
+        console::arch_early_console = console::aarch64_console.pl011;
+        console::PL011_Console::active = true;
     }
-
-    new (&console::aarch64_console.pl011) console::PL011_Console();
-    console::arch_early_console = console::aarch64_console.pl011;
-    console::PL011_Console::active = true;
-    u64 addr = dtb_get_uart(&irqid);
-    if (!addr) {
-        /* keep using default addresses */
-        return;
-    }
-
-    console::aarch64_console.pl011.set_base_addr(addr);
-    console::aarch64_console.pl011.set_irqid(irqid);
 }
 
 bool arch_setup_console(std::string opt_console)

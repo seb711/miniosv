@@ -85,9 +85,16 @@ void gic_v3_dist::enable()
     wait_for_write_complete();
 }
 
-gic_v3_redist::gic_v3_redist(mmu::phys b, size_t l) : _base(b)
+gic_v3_redist::gic_v3_redist(const mmu::phys *bases, const size_t *lens, int count)
+    : _nr_regions(count)
 {
-    mmu::linear_map((void *)_base, _base, l, "gic_redist", mmu::page_size, mmu::mattr::dev);
+    assert(count > 0 && count <= MAX_GICR_REGIONS);
+    for (int i = 0; i < count; i++) {
+        _region_base[i] = bases[i];
+        _region_len[i] = lens[i];
+        mmu::linear_map((void *)bases[i], bases[i], lens[i], "gic_redist",
+                        mmu::page_size, mmu::mattr::dev);
+    }
 }
 
 void gic_v3_redist::init_cpu_base(int smp_idx)
@@ -98,24 +105,33 @@ void gic_v3_redist::init_cpu_base(int smp_idx)
 
     uint64_t mpidr = processor::read_mpidr();
 
-    u64 offset = 0;
-    u64 typer;
-    do {
-        typer = mmio_getq(mmio_a((mmioaddr_t)_base, offset + GICR_TYPER));
+    // Find this CPU's redistributor by matching its MPIDR affinity against each
+    // redistributor frame's GICR_TYPER. Search every region: a region may hold
+    // one frame (per-CPU gicr_base_address, Azure) or many frames chained by the
+    // LAST bit (a discovery range, QEMU/AWS). Bound the walk by the region size.
+    for (int reg = 0; reg < _nr_regions; reg++) {
+        mmu::phys base = _region_base[reg];
+        u64 offset = 0;
+        u64 typer;
+        do {
+            typer = mmio_getq(mmio_a((mmioaddr_t)base, offset + GICR_TYPER));
 
-        if (((mpidr & MPIDR_AFF3_MASK) >> 32) == GICR_TYPER_AFF3(typer) &&
-            ((mpidr & MPIDR_AFF2_MASK) >> 16) == GICR_TYPER_AFF2(typer) &&
-            ((mpidr & MPIDR_AFF1_MASK) >> 8) == GICR_TYPER_AFF1(typer) &&
-             (mpidr & MPIDR_AFF0_MASK) == GICR_TYPER_AFF0(typer)) {
-            break;
-        }
-        offset += GICR_STRIDE;
-        if (typer & GICR_TYPER_VLPIS) {
+            if (((mpidr & MPIDR_AFF3_MASK) >> 32) == GICR_TYPER_AFF3(typer) &&
+                ((mpidr & MPIDR_AFF2_MASK) >> 16) == GICR_TYPER_AFF2(typer) &&
+                ((mpidr & MPIDR_AFF1_MASK) >> 8) == GICR_TYPER_AFF1(typer) &&
+                 (mpidr & MPIDR_AFF0_MASK) == GICR_TYPER_AFF0(typer)) {
+                _cpu_bases[smp_idx] = base + offset;
+                return;
+            }
             offset += GICR_STRIDE;
-        }
-    } while (!(typer & GICR_TYPER_LAST));
+            if (typer & GICR_TYPER_VLPIS) {
+                offset += GICR_STRIDE;
+            }
+        } while (!(typer & GICR_TYPER_LAST) && offset < _region_len[reg]);
+    }
 
-    _cpu_bases[smp_idx] = _base + offset;
+    abort("gic_v3_redist: no redistributor found for this CPU (mpidr=%lx)\n",
+          mpidr);
 }
 
 void gic_v3_redist::init_lpis(int smp_idx, u64 prop_base, u64 pend_base)
@@ -148,12 +164,13 @@ void gic_v3_redist::write64_at_offset(int smp_idx, u32 offset, u64 value)
     mmio_setq(mmio_a((mmioaddr_t)_cpu_bases[smp_idx], offset), value);
 }
 
-void gic_v3_redist::wait_for_write_complete()
+void gic_v3_redist::wait_for_write_complete(int smp_idx)
 {
     unsigned int val;
 
+    // Poll RWP (Register Write Pending) in this CPU's redistributor GICR_CTLR.
     do {
-        val = mmio_getl((mmioaddr_t)_base);
+        val = read_at_offset(smp_idx, GICR_CTLR);
     } while (val & GICD_CTLR_WRITE_COMPLETE);
 }
 
@@ -498,7 +515,7 @@ void gic_v3_driver::init_redist(int smp_idx)
     _gicrd.write_at_offset(smp_idx, GICR_ISENABLER0, GICD_DEF_SGI_ISENABLERn);
 
     /* Wait for completion */
-    _gicrd.wait_for_write_complete();
+    _gicrd.wait_for_write_complete(smp_idx);
 
     /* Enable system register access */
     val = READ_SYS_REG32(ICC_SRE_EL1);

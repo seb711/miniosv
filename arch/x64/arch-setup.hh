@@ -12,46 +12,15 @@
 #include <string>
 
 #include <osv/elf.hh>
+#include <osv/boot-info.hh>
 
-struct multiboot_info_type {
-    u32 flags;
-    u32 mem_lower;
-    u32 mem_upper;
-    u32 boot_device;
-    u32 cmdline;
-    u32 mods_count;
-    u32 mods_addr;
-    u32 syms[4];
-    u32 mmap_length;
-    u32 mmap_addr;
-    u32 drives_length;
-    u32 drives_addr;
-    u32 config_table;
-    u32 boot_loader_name;
-    u32 apm_table;
-    u32 vbe_control_info;
-    u32 vbe_mode_info;
-    u16 vbe_mode;
-    u16 vbe_interface_seg;
-    u16 vbe_interface_off;
-    u16 vbe_interface_len;
-} __attribute__((packed));
-
-struct osv_multiboot_info_type {
-    struct multiboot_info_type mb;
-    u32 tsc_init, tsc_init_hi;
-    u32 tsc_disk_done, tsc_disk_done_hi;
-    u32 tsc_uncompress_done, tsc_uncompress_done_hi;
-    u8 disk_err;
-    u64 pvh_rsdp;
-} __attribute__((packed));
-
-struct e820ent {
-    u32 ent_size;
+// A usable physical memory range, taken from the UEFI memory map carried in
+// osv::boot_info. Used as the working type while the free-memory setup carves
+// up RAM during early bring-up.
+struct mem_range {
     u64 addr;
     u64 size;
-    u32 type;
-} __attribute__((packed));
+};
 
 void arch_init_early_console();
 void arch_init_premain();
@@ -60,7 +29,5 @@ void arch_setup_tls(void *tls, const elf::tls_data& info);
 void arch_setup_free_memory();
 void arch_init_drivers();
 bool arch_setup_console(std::string opt_console);
-
-void reset_bootchart(osv_multiboot_info_type* mb_info);
 
 #endif /* ARCH_SETUP_HH_ */
