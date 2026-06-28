@@ -31,6 +31,7 @@ build.*.log
 
 run.log
 
+.cache
 .idea
 compile_commands.json
 downloaded_packages

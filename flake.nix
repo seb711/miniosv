@@ -94,6 +94,18 @@
             ]
             ++ default.nativeBuildInputs;
           });
+
+          cli = aws.overrideAttrs (default: {
+            nativeBuildInputs =
+              with pkgs;
+              [
+                bear
+                black
+                clang-tools
+                pyright
+              ]
+              ++ aws.nativeBuildInputs;
+          });
         };
 
       }
