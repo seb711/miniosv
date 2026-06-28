@@ -12,24 +12,18 @@ import boto3
 
 BLOCK_SIZE = 524288  # 512 KiB
 MAX_WORKERS = 64
-INSTANCE_TYPES = {
-    "t3.large": "x86_64",
-    "c5a.large": "x86_64",
-    "c6a.large": "x86_64",
-    "c7a.large": "x86_64",
-
-    "t4g.large": "arm64",
-    "c6g.large": "arm64",
-    "c7g.large": "arm64",
-    "c8g.large": "arm64",
-}
 
 def aws_login() -> None:
     if subprocess.run(
         ["aws", "sts", "get-caller-identity", "--query", "Arn", "--output", "text"],
-        stderr=subprocess.DEVNULL
+        stderr=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
     ).returncode != 0:
         subprocess.run(["aws", "login", "--remote"])
+
+def get_instance_arch(instance_type: str):
+    response = boto3.client('ec2').describe_instance_types(InstanceTypes=[instance_type])
+    return response['InstanceTypes'][0]['ProcessorInfo']['SupportedArchitectures'][0]
 
 def convert_to_raw(src: str) -> tuple[str, bool]:
     ext = src.rsplit(".", 1)[-1].lower()
@@ -73,12 +67,12 @@ def upload_block_worker(ebs_client, snapshot_id, block_index, data, counters, co
 def main():
     if len(sys.argv) != 4:
         print(f"Usage: {sys.argv[0]} <src> <region> <instance>")
-        print(f"  <instance> is one of: {', '.join(sorted(INSTANCE_TYPES))}")
         sys.exit(1)
 
     aws_login()
 
     src, region, instance = sys.argv[1], sys.argv[2], sys.argv[3]
+    instance_arch = get_instance_arch(instance)
 
     if src.endswith(".raw"):
         virtual_size = os.path.getsize(src)
@@ -168,7 +162,7 @@ def main():
     ami_response = ec2_client.register_image(
         Name=ami_name,
         Description=f"MiniOSv image created from {src}",
-        Architecture=INSTANCE_TYPES[instance],
+        Architecture=instance_arch,
         RootDeviceName="/dev/xvda",
         BlockDeviceMappings=[
             {
