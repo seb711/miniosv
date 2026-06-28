@@ -58,6 +58,8 @@ struct boot_info {
     uint64_t kernel_phys_base;      // phys address the kernel loaded at  (40)
     uint64_t boot_unixtime_ns;      // wall-clock at boot (UEFI GetTime), 0 if none (48)
     uint64_t uart_base;             // phys addr of the ACPI SPCR console UART, 0 if none (56)
+    uint8_t  uart_type;             // SPCR Interface Type: 0/1 = 16550, 3/0x0e = PL011/SBSA (64)
+    uint8_t  uart_access_width;     // SPCR GAS access width in bytes: 1, 2 or 4 (65)
 } __attribute__((packed));
 
 }

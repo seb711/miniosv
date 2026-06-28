@@ -11,13 +11,23 @@ namespace console {
 
 mmioaddr_t mmio_isa_serial_console::_addr_mmio;
 u64 mmio_isa_serial_console::_phys_mmio_address;
+int mmio_isa_serial_console::_access_width = 1;
+int mmio_isa_serial_console::_reg_shift = 0;
 
 u8 isa_serial_console_base::read_byte(int reg) {
-    return mmio_getb(mmio_a(mmio_isa_serial_console::_addr_mmio, reg));
+    auto a = mmio_a(mmio_isa_serial_console::_addr_mmio,
+                    (size_t)reg << mmio_isa_serial_console::_reg_shift);
+    return mmio_isa_serial_console::_access_width == 4 ? (u8)mmio_getl(a)
+                                                       : mmio_getb(a);
 };
 
 void isa_serial_console_base::write_byte(u8 val, int reg) {
-    mmio_setb(mmio_a(mmio_isa_serial_console::_addr_mmio, reg), val);
+    auto a = mmio_a(mmio_isa_serial_console::_addr_mmio,
+                    (size_t)reg << mmio_isa_serial_console::_reg_shift);
+    if (mmio_isa_serial_console::_access_width == 4)
+        mmio_setl(a, val);
+    else
+        mmio_setb(a, val);
 };
 
 void mmio_isa_serial_console::early_init(u64 mmio_phys_address)
@@ -26,6 +36,19 @@ void mmio_isa_serial_console::early_init(u64 mmio_phys_address)
     _addr_mmio = reinterpret_cast<char*>(mmio_phys_address);
 
     common_early_init();
+}
+
+void mmio_isa_serial_console::early_init_polled(u64 mmio_phys_address,
+                                                int access_width)
+{
+    _phys_mmio_address = mmio_phys_address;
+    _addr_mmio = reinterpret_cast<char*>(mmio_phys_address);
+    _access_width = access_width;
+    // A wider-than-byte register window implies one register per access-width
+    // slot, i.e. reg_shift = log2(width): width 4 -> shift 2 (mmio32).
+    _reg_shift = access_width == 4 ? 2 : access_width == 2 ? 1 : 0;
+    // No common_early_init(): the firmware has already set the line up and is
+    // using it as the console; we only poll LSR and write THR.
 }
 
 void mmio_isa_serial_console::memory_map()
