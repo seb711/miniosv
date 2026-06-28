@@ -58,6 +58,7 @@
           ninja
           git
           ctags
+          mtools
           gptfdisk
           (python3.withPackages (ps: [ ps.pyyaml ]))
         ];
