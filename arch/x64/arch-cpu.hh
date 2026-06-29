@@ -212,6 +212,16 @@ inline void arch_cpu::init_on_cpu()
     }
     write_cr4(cr4);
 
+    if (features().xsave) {
+        auto bits = xcr0_x87 | xcr0_sse;
+        if (features().avx) {
+            bits |= xcr0_avx;
+        }
+        if (features().avx512) {
+        //     bits |= (1 << 5) | (1 << 6) | (1 << 7);
+        }
+        write_xcr(xcr0, bits);
+    }
     arch_init_fpu();
 
     processor::wrmsr(msr::IA32_GS_BASE, reinterpret_cast<u64>(&_current_thread_kernel_tcb));

@@ -58,6 +58,28 @@ inline void wait_for_interrupt()
     processor::wait_for_interrupt();
 }
 
+// ARM always provides the WFE/exclusive-monitor mechanism, so monitoring a
+// memory address for wakeups is always available.
+inline bool monitor_supported()
+{
+    return true;
+}
+
+// Arm the exclusive monitor on the cache line containing 'addr'. Must be called
+// with interrupts disabled, followed by a re-check of the wakeup condition and
+// then wait_for_interrupt_or_signal().
+inline void monitor(const void *addr)
+{
+    processor::monitor(addr);
+}
+
+// Sleep until the monitored line is written or an interrupt arrives, then
+// re-enable interrupts (mirrors wait_for_interrupt()).
+inline void wait_for_interrupt_or_signal()
+{
+    processor::wait_for_event();
+}
+
 inline void halt_no_interrupts()
 {
     processor::halt_no_interrupts();

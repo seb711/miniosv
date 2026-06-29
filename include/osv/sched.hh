@@ -126,6 +126,11 @@ public:
     operator bool() const {
         return _mask.load(std::memory_order_relaxed);
     }
+    // Address of the underlying word, for arming a hardware monitor (mwait/wfe)
+    // on the cache line so a set()/test_all_and_set() store wakes the waiter.
+    const void* address() const {
+        return &_mask;
+    }
     class iterator {
     public:
         explicit iterator(cpu_set& set)

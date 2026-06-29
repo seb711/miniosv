@@ -64,6 +64,7 @@ typedef features_type f;
 
 cpuid_bit cpuid_bits[] = {
     { 1, 'c', 0, &f::sse3, 0, nullptr, "sse3" },
+    { 1, 'c', 3, &f::monitor, 0, nullptr, "monitor" },
     { 1, 'c', 9, &f::ssse3, 0, nullptr, "ssse3" },
     { 1, 'c', 13, &f::cmpxchg16b, 0, nullptr, "cmpxchg16b" },
     { 1, 'c', 19, &f::sse4_1, 0, nullptr, "sse4.1" },
@@ -73,6 +74,7 @@ cpuid_bit cpuid_bits[] = {
     { 1, 'c', 26, &f::xsave, 0, nullptr, "xsave" },
     { 1, 'c', 27, &f::osxsave, 0, nullptr, "osxsave" },
     { 1, 'c', 28, &f::avx, 0, nullptr, "avx" },
+    { 7, 'b', 16, &f::avx512, 0, nullptr, "avx512" },
     { 1, 'c', 30, &f::rdrand, 0, nullptr, "rdrand" },
     { 1, 'd', 19, &f::clflush, 0, nullptr, "clflush" },
     { 7, 'b', 0, &f::fsgsbase, 0, nullptr, "fgsbase" },

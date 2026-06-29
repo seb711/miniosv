@@ -57,6 +57,28 @@ inline void wait_for_interrupt()
     processor::sti_hlt();
 }
 
+// True if this CPU can sleep while monitoring a memory address (MONITOR/MWAIT).
+inline bool monitor_supported()
+{
+    return processor::features().monitor;
+}
+
+// Arm a monitor on the cache line containing 'addr'. Must be called with
+// interrupts disabled, followed by a re-check of the wakeup condition and then
+// wait_for_interrupt_or_signal().
+inline void monitor(const void *addr)
+{
+    processor::monitor(addr);
+}
+
+// Sleep until the monitored line is written or an interrupt arrives, then
+// re-enable interrupts (mirrors wait_for_interrupt()).
+inline void wait_for_interrupt_or_signal()
+{
+    processor::mwait();
+    processor::sti();
+}
+
 inline void halt_no_interrupts()
 {
     processor::cli_hlt();

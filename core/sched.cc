@@ -475,7 +475,38 @@ void cpu::do_idle()
                     return;
                 }
             }
+
+            // Deep idle via a hardware monitor (x86 mwait, ARM wfe): arm the
+            // monitor on the incoming-wakeups mask and sleep. A waker's store to
+            // the mask (test_all_and_set) then wakes us directly through cache
+            // coherency, so no wakeup IPI is needed. We stay inside idle_poll
+            // here, so send_wakeup_ipi() suppresses the IPI for exactly the
+            // window the monitor is armed -- reusing the spin-loop's protocol.
+            if (arch::monitor_supported()) {
+#if CONF_lazy_stack_invariant
+                assert(!thread::current()->is_app());
+#endif
+                std::unique_lock<irq_lock_type> guard(irq_lock);
+                handle_incoming_wakeups();
+                if (!runqueue.empty()) {
+                    return;
+                }
+                // Arm the monitor, then re-check: this closes the race against a
+                // waker that stored to the mask after the drain above. A store
+                // before the monitor is seen here; a store after it trips the
+                // monitor and wakes the mwait/wfe below.
+                arch::monitor(incoming_wakeups_mask.address());
+                if (!incoming_wakeups_mask) {
+                    guard.release();
+                    arch::wait_for_interrupt_or_signal(); // re-enables irq
+                }
+                handle_incoming_wakeups();
+                continue;
+            }
         }
+
+        // No monitor support: halt and rely on the wakeup IPI. idle_poll is now
+        // false (released above), so wakers will send us an IPI.
 #if CONF_lazy_stack_invariant
         assert(!thread::current()->is_app());
 #endif

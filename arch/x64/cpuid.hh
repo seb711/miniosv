@@ -15,6 +15,7 @@ namespace processor {
 struct features_type {
     features_type();
     bool sse3;
+    bool monitor;
     bool ssse3;
     bool cmpxchg16b;
     bool sse4_1;
@@ -24,6 +25,7 @@ struct features_type {
     bool xsave;
     bool osxsave;
     bool avx;
+    bool avx512;
     bool rdrand;
     bool clflush;
     bool fsgsbase;

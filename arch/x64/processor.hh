@@ -251,6 +251,20 @@ inline void sti_hlt() {
     asm volatile ("sti; hlt" : : : "memory");
 }
 
+// Arm the hardware address-range monitor on the cache line containing 'addr'.
+// A subsequent mwait() sleeps until that line is written (by any CPU) or an
+// interrupt arrives.
+inline void monitor(const void *addr) {
+    asm volatile ("monitor" : : "a"(addr), "c"(0), "d"(0) : "memory");
+}
+
+// Sleep until the monitored line is written or an interrupt is pending. ecx
+// bit 0 ("treat interrupts as break events") makes mwait wake on a pending
+// interrupt even while interrupts are masked, mirroring sti;hlt.
+inline void mwait() {
+    asm volatile ("mwait" : : "a"(0), "c"(1) : "memory");
+}
+
 inline u8 inb(u16 port)
 {
     u8 r;

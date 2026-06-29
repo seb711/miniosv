@@ -51,6 +51,23 @@ inline void wait_for_interrupt() {
     asm volatile( "dsb sy; wfi; isb; msr daifclr, #2; " ::: "memory");
 }
 
+// Arm the exclusive monitor on the doubleword at 'addr' with a load-exclusive.
+// When another observer stores to that location the global monitor transitions
+// out of the Exclusive state, which generates a WFE wake-up event. This is the
+// ARM equivalent of x86's MONITOR.
+inline void monitor(const void *addr) {
+    unsigned long tmp;
+    asm volatile ("ldxr %0, [%1]" : "=r"(tmp) : "r"(addr) : "memory");
+    (void)tmp;
+}
+
+// Like wait_for_interrupt() but enters 'Wait For Event': a store to the
+// previously load-exclusive'd address (or an interrupt) wakes us. This is the
+// ARM equivalent of x86's MWAIT.
+inline void wait_for_event() {
+    asm volatile( "dsb sy; wfe; isb; msr daifclr, #2; " ::: "memory");
+}
+
 inline void halt_no_interrupts() {
     irq_disable();
     while (1) {
