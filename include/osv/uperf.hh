@@ -1,10 +1,11 @@
 #pragma once
 
 // Disclaimer
-// This header targets new amd and arm chips and does not provide backward
-// compatibility Tested chips are: For x86
-//    - Zen 4
-//    - Zen 5
+// This header targets new amd, intel and arm chips and does not provide
+// backward compatibility Tested chips are: For x86
+//    - AMD Zen 4
+//    - AMD Zen 5
+//    - Intel Skylake
 // For ARM
 //    - Ampere-1a
 //    - Neoverse V-1
@@ -15,6 +16,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -31,7 +33,39 @@
 
 #ifdef ARCH_TARGET_X86_64
 
+enum class CpuVendor { AMD, INTEL, UNKNOWN };
+
+inline void cpuid(uint32_t leaf, uint32_t &eax, uint32_t &ebx, uint32_t &ecx,
+                  uint32_t &edx) {
+  asm volatile("cpuid"
+               : "=a"(eax), "=b"(ebx), "=c"(ecx), "=d"(edx)
+               : "a"(leaf), "c"(0));
+}
+
+inline CpuVendor cpu_vendor() {
+  uint32_t eax, ebx, ecx, edx;
+  cpuid(0, eax, ebx, ecx, edx);
+  char vendor[13];
+  std::memcpy(vendor + 0, &ebx, sizeof(ebx));
+  std::memcpy(vendor + 4, &edx, sizeof(edx));
+  std::memcpy(vendor + 8, &ecx, sizeof(ecx));
+  vendor[12] = '\0';
+  if (std::memcmp(vendor, "GenuineIntel", 12) == 0)
+    return CpuVendor::INTEL;
+  if (std::memcmp(vendor, "AuthenticAMD", 12) == 0)
+    return CpuVendor::AMD;
+  return CpuVendor::UNKNOWN;
+}
+
+inline bool is_intel() { return cpu_vendor() == CpuVendor::INTEL; }
+inline bool is_amd() { return cpu_vendor() == CpuVendor::AMD; }
+
 inline uint32_t pmu_num_counters() {
+  if (is_intel()) {
+    uint32_t eax, ebx, ecx, edx;
+    cpuid(0x0A, eax, ebx, ecx, edx);
+    return (eax >> 8) & 0xFF;
+  }
   // TODO: This is currently a stub / best guess for amd processors
   return 6;
 }
@@ -45,7 +79,15 @@ inline void msr_write(uint32_t msr, uint64_t value) {
 // Stub this until we need it (currently only required for ARM)
 inline bool is_midr(uint32_t to_check) { return false; };
 
+inline constexpr uint32_t intel_msr_perf_global_ctrl = 0x38Fu;
 inline void enable_pmu() {
+  if (pmu_num_counters() > 0)
+    if (is_intel()) {
+      uint32_t n = pmu_num_counters();
+      uint64_t mask = (n >= 32) ? 0xFFFFFFFFull : ((1ull << n) - 1);
+      msr_write(intel_msr_perf_global_ctrl, mask);
+      return;
+    }
   // TODO: This is currently a noop as the pmu is usually enabled by default
 }
 
@@ -283,7 +325,7 @@ struct PMC {
 };
 
 struct PMCSelect {
-  PMCSelect(std::initializer_list<PMC> pmcs) : pmcs(pmcs) {}
+  explicit PMCSelect(std::vector<PMC> pmcs) : pmcs(std::move(pmcs)) {}
 
   bool erase_counter(uint32_t perfEvtSel, uint32_t perfCtr, PMClass pmClass) {
     auto it = std::find_if(
@@ -301,7 +343,7 @@ struct PMCSelect {
     auto it = this->pmcs.end();
     while (n > 0 && it != this->pmcs.begin()) {
       --it;
-      if (it->pmClass == PMClass::CORE) {
+      if (it->pmClass == x) {
         it = this->pmcs.erase(it);
         --n;
       }
@@ -323,6 +365,17 @@ struct PMCSelect {
 
   void release(PMC *pmc) { pmc->free.store(true); }
 
+  uint32_t size() { return pmcs.size(); }
+
+  uint32_t size_of_x(PMClass x) {
+    uint32_t size{0};
+    for (auto &pmc : pmcs) {
+      if (pmc.pmClass == x)
+        ++size;
+    }
+    return size;
+  }
+
 protected:
   std::vector<PMC> pmcs;
 };
@@ -331,7 +384,7 @@ protected:
 // This adjust the number of available counters at runtime,
 // since AWS slices the number of counters per VM.
 struct PMCSelectCore : PMCSelect {
-  PMCSelectCore(std::initializer_list<PMC> pmcs) : PMCSelect(pmcs) {
+  explicit PMCSelectCore(std::vector<PMC> pmcs) : PMCSelect(std::move(pmcs)) {
     uint32_t act_ctrs = pmu_num_counters();
     uint32_t exp_ctrs{0};
     for (auto &c : this->pmcs) {
@@ -351,7 +404,42 @@ struct PMCSelectCore : PMCSelect {
       erase_counter(0, 0, CORE);
     }
   }
+
+  PMCSelectCore(std::initializer_list<PMC> pmcs)
+      : PMCSelectCore(std::vector<PMC>(pmcs)) {}
 };
+
+// Builds the default core-local counter list for this platform: the MSR
+// addresses and PMC count are AMD- or Intel-specific on x86 (resolved at
+// runtime via CPUID), and fixed for ARM (resolved from pmcr_el0 by
+// PMCSelectCore itself).
+inline std::vector<PMC> make_default_core_pmcs() {
+  std::vector<PMC> pmcs;
+#ifdef ARCH_TARGET_X86_64
+  if (is_intel()) {
+    uint32_t n = pmu_num_counters();
+    for (uint32_t i = 0; i < n; ++i) {
+      pmcs.emplace_back(0x186u + i, 0xC1u + i, CORE);
+    }
+  } else {
+    // AMD "extended" core PMC range (Zen and later): 6 general-purpose
+    // counters at MSRC001_0200h + 2n / MSRC001_0201h + 2n.
+    for (uint32_t i = 0; i < 6; ++i) {
+      pmcs.emplace_back(0xC0010200u + 2 * i, 0xC0010201u + 2 * i, CORE);
+    }
+  }
+#elif defined ARCH_TARGET_ARM64
+  // Armv8_pmu3 usually has 6 counters (ids 0-5)
+  pmcs.emplace_back(0, 0, CORE);
+  pmcs.emplace_back(1, 1, CORE);
+  pmcs.emplace_back(2, 2, CORE);
+  pmcs.emplace_back(3, 3, CORE);
+  pmcs.emplace_back(4, 4, CORE);
+  pmcs.emplace_back(5, 5, CORE);
+  pmcs.emplace_back(1u << 31, 1u << 31, CYCLES);
+#endif
+  return pmcs;
+}
 
 struct PMCEvent {
   uint64_t bitmap;
@@ -361,22 +449,40 @@ struct PMCEvent {
 
 namespace PERF_COUNT_HW {
 #ifdef ARCH_TARGET_X86_64
-// Cycle
-constexpr PMCEvent CPU_CYCLES = {0x430076, CORE, "cpu-cycles"};
-// Cycle where no operation is issued because of the frontend
-constexpr PMCEvent STALL_FRONTEND = {0x4300A9, CORE, "stall-frontend"};
-// Instruction architecturally executed
-constexpr PMCEvent INSTRUCTIONS = {0x4300C0, CORE, "instructions"};
-// Predictable branch speculatively executed
-constexpr PMCEvent BRANCH_PREDICTION = {0x4300C2, CORE, "branch-predictions"};
-// Mispredicted or not predicted branch speculatively executed
-constexpr PMCEvent BRANCH_MISS = {0x4300C3, CORE, "branch-misses"};
-// Cache miss on last on chip cache (often: L2)
-constexpr PMCEvent L2_CACHE_MISS = {0x430964, CORE, "l2-cache-misses"};
-// Cache access on last on chip cache (often: L2)
-constexpr PMCEvent L2_CACHE = {0x430729, CORE, "l2-cache-accesses"};
-// Number of TLB flushes
-constexpr PMCEvent TLB_FLUSHES = {0x43FF78, CORE, "tlb-flushes"};
+
+namespace detail {
+// PerfEvtSel-style encoding shared by both vendors:
+// bit22=EN, bit17=OS, bit16=USR, bits8-15=UMask, bits0-7=Event Select.
+constexpr uint64_t encode(uint8_t event, uint8_t umask) {
+  return 0x430000ull | (static_cast<uint64_t>(umask) << 8) | event;
+}
+
+// clang-format off
+constexpr PMCEvent AMD_CPU_CYCLES = {encode(0x76, 0x00), CORE, "cpu-cycles"};
+constexpr PMCEvent AMD_STALL_FRONTEND = {encode(0xA9, 0x00), CORE, "stall-frontend"};
+constexpr PMCEvent AMD_INSTRUCTIONS = {encode(0xC0, 0x00), CORE, "instructions"};
+constexpr PMCEvent AMD_BRANCH_PREDICTION = {encode(0xC2, 0x00), CORE, "branch-predictions"};
+constexpr PMCEvent AMD_BRANCH_MISS = {encode(0xC3, 0x00), CORE, "branch-misses"};
+constexpr PMCEvent AMD_LLC_CACHE_MISS = {encode(0x64, 0x09), CORE, "llc-cache-misses"};
+constexpr PMCEvent AMD_LLC_CACHE = {encode(0x29, 0x07), CORE, "llc-cache-accesses"};
+constexpr PMCEvent AMD_TLB_FLUSHES = {encode(0x78, 0xFF), CORE, "tlb-flushes"};
+constexpr PMCEvent INTEL_CPU_CYCLES = {encode(0x3C, 0x00), CORE, "cpu-cycles"};
+constexpr PMCEvent INTEL_INSTRUCTIONS = {encode(0xC0, 0x00), CORE, "instructions"};
+constexpr PMCEvent INTEL_BRANCH_PREDICTION = {encode(0xC4, 0x00), CORE, "branch-predictions"};
+constexpr PMCEvent INTEL_BRANCH_MISS = {encode(0xC5, 0x00), CORE, "branch-misses"};
+constexpr PMCEvent INTEL_LLC_CACHE = {encode(0x2E, 0x4F), CORE, "llc-cache-accesses"};
+constexpr PMCEvent INTEL_LLC_CACHE_MISS = {encode(0x2E, 0x41), CORE, "llc-cache-misses"};
+constexpr PMCEvent INTEL_STALL_FRONTEND = {encode(0x9C, 0x01), CORE, "stall-frontend"};
+} // namespace detail
+inline const PMCEvent CPU_CYCLES = is_intel() ? detail::INTEL_CPU_CYCLES : detail::AMD_CPU_CYCLES;
+inline const PMCEvent INSTRUCTIONS = is_intel() ? detail::INTEL_INSTRUCTIONS : detail::AMD_INSTRUCTIONS;
+inline const PMCEvent BRANCH_PREDICTION = is_intel() ? detail::INTEL_BRANCH_PREDICTION : detail::AMD_BRANCH_PREDICTION;
+inline const PMCEvent BRANCH_MISS = is_intel() ? detail::INTEL_BRANCH_MISS : detail::AMD_BRANCH_MISS;
+inline const PMCEvent L2_CACHE_MISS = is_intel() ? detail::INTEL_LLC_CACHE_MISS : detail::AMD_LLC_CACHE_MISS;
+inline const PMCEvent L2_CACHE = is_intel() ? detail::INTEL_LLC_CACHE : detail::AMD_LLC_CACHE;
+inline const PMCEvent STALL_FRONTEND = is_intel() ? detail::INTEL_STALL_FRONTEND : detail::AMD_STALL_FRONTEND;
+// clang-format on
+
 #elif defined ARCH_TARGET_ARM64
 // Instruction architecturally executed, condition code check pass, software
 // increment
@@ -510,8 +616,10 @@ struct Event {
   void start() {
     pmc = pmcs.acquire(pmce.pmClass);
     if (!pmc) {
-      std::cerr << "[ERROR] All hardware counters are occupied. Event "
-                << pmce.name << " will not be measured." << std::endl;
+      std::cerr << "[ERROR] All hardware counters are occupied ("
+                << pmcs.size_of_x(pmce.pmClass) << "/"
+                << pmcs.size_of_x(pmce.pmClass) << "). Event " << pmce.name
+                << " will not be measured." << std::endl;
       valid = false;
       return;
     }
@@ -543,23 +651,8 @@ private:
   // By default, each collection operates on known core-local counters,
   // but selections can also be shared between cores to measure uncore counters
   // (e.g. L3 cache counters)
-  PMCSelectCore default_pmcs{
-#ifdef ARCH_TARGET_X86_64
-      PMC{0xC0010200, 0xC0010201, CORE}, PMC{0xC0010202, 0xC0010203, CORE},
-      PMC{0xC0010204, 0xC0010205, CORE}, PMC{0xC0010206, 0xC0010207, CORE},
-      PMC{0xC0010208, 0xC0010209, CORE}, PMC{0xC001020A, 0xC001020B, CORE},
-#elif defined ARCH_TARGET_ARM64
-      // Armv8_pmu3 usually has 6 counters (ids 0-5)
-      PMC{0, 0, CORE},
-      PMC{1, 1, CORE},
-      PMC{2, 2, CORE},
-      PMC{3, 3, CORE},
-      PMC{4, 4, CORE},
-      PMC{5, 5, CORE},
+  PMCSelectCore default_pmcs{make_default_core_pmcs()};
 
-      PMC{1u << 31, 1u << 31, CYCLES},
-#endif
-  };
 public:
   // The selection of hardware counters available to this collection.
   uperf::PMCSelect &pmcs = default_pmcs;
@@ -571,7 +664,7 @@ public:
   std::chrono::time_point<std::chrono::steady_clock> stopTime;
 
   // Constructor to use with default set of counters.
-  // Common use case: On-core measurements
+  // Common use case: On-core measurements, single Collection per core.
   PerfEvent(bool set_default_counters = true) {
     enable_pmu();
 
