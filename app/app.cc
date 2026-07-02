@@ -9,20 +9,20 @@
 // the machine off so a run exits cleanly. The conformance and stress suites
 // that used to live here now build with `make app=tests` (see test/).
 
-#include <cstdio>
+#include <cstdint>
 #include <osv/power.hh>
 #include <osv/uperf.hh>
 
-extern "C" void osv_app_main()
-{
-    // Threads need to be pinned to core
-    uperf::Collection bench;
-    bench.startCounters();
+constexpr uint64_t n = 1ul << 20;
 
-    printf("Hello, world from OSv!\n");
+extern "C" void osv_app_main() {
+  PerfEvent e;
+  e.startCounters();
 
-    bench.stopCounters();
-    bench.printReport(std::cout);
+  for (uint64_t i{0}; i < n; ++i)
+    asm volatile("" ::: "memory");
 
-    osv::poweroff();
+  e.stopCounters();
+  e.printReport(std::cout, n);
+  osv::poweroff();
 }

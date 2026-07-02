@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -358,7 +359,7 @@ struct PMCEvent {
   const char *name;
 };
 
-namespace Events {
+namespace PERF_COUNT_HW {
 #ifdef ARCH_TARGET_X86_64
 // Cycle
 constexpr PMCEvent CPU_CYCLES = {0x430076, CORE, "cpu-cycles"};
@@ -490,7 +491,7 @@ constexpr PMCEvent STALL_OP = {0x3F, CORE, ""};
 constexpr PMCEvent L2_CACHE_MISS = {0x4009, CORE, "l2-cache-misses"};
 
 #endif
-} // namespace Events
+} // namespace PERF_COUNT_HW
 
 // ---------------------------------------
 // High level measurement logic
@@ -533,129 +534,11 @@ private:
   PMC *pmc;
 };
 
-// The uperf interface to the application:
-// A number of counters that are started and stopped simultaneously.
-// The default constructor sets popular counters and assumes no other
-// performance measurements on the same core.
-//
-// To select different counters:
-struct Collection {
-  // The selection of hardware counters available to this collection.
-  PMCSelect &pmcs = default_pmcs;
+}; // namespace uperf
 
-  // A vector of registered events. Must not be larger than the number of
-  // available hardware counters.
-  std::vector<Event> events;
-
-  std::chrono::time_point<std::chrono::steady_clock> startTime;
-  std::chrono::time_point<std::chrono::steady_clock> stopTime;
-
-  // Constructor to use with default set of counters.
-  // Common use case: On-core measurements, single Collection per core.
-  Collection(bool set_default_counters = true) {
-    enable_pmu();
-
-    if (set_default_counters) {
-      registerCounter(Events::CPU_CYCLES);
-      registerCounter(Events::INSTRUCTIONS);
-      registerCounter(Events::L2_CACHE_MISS);
-      registerCounter(Events::BRANCH_MISS);
-    }
-  }
-
-  // Constructor to use with custom set of counters.
-  // Common use case: Share counters between multiple collections
-  Collection(PMCSelect &pmcSelect) : pmcs(pmcSelect) { enable_pmu(); }
-
-  void registerCounter(PMCEvent pmce) { events.push_back(Event(pmce, pmcs)); }
-  void registerCounter(PMCEvent pmce, const char *name) {
-    pmce.name = name;
-    registerCounter(pmce);
-  }
-  void registerCounter(uint64_t bitmap, PMClass pmClass, const char *name) {
-    registerCounter({bitmap, pmClass, name});
-  }
-
-  double getCounter(const char *name) {
-    for (auto &event : events) {
-      if (event.pmce.name == name)
-        return event.report();
-    }
-    return -1;
-  }
-
-  double getDuration() {
-    return std::chrono::duration<double>(stopTime - startTime).count();
-  }
-
-  // IPC is calculated from the instructions and cycle counter.
-  // If one of them is not counted, this function returns NaN.
-  double getIPC() {
-    double res = getCounter(Events::INSTRUCTIONS.name) /
-                 getCounter(Events::CPU_CYCLES.name);
-    return res > 0 ? res : NAN;
-  }
-
-  static void printCounter(std::ostream &headerOut, std::ostream &dataOut,
-                           std::string name, std::string counterValue,
-                           bool addComma = true) {
-    auto width = std::max(name.length(), counterValue.length());
-    headerOut << std::setw(static_cast<int>(width)) << name
-              << (addComma ? "," : "") << " ";
-    dataOut << std::setw(static_cast<int>(width)) << counterValue
-            << (addComma ? "," : "") << " ";
-  }
-
-  template <typename T>
-  static void printCounter(std::ostream &headerOut, std::ostream &dataOut,
-                           std::string name, T counterValue,
-                           bool addComma = true) {
-    std::stringstream stream;
-    stream << std::fixed << std::setprecision(2) << counterValue;
-    printCounter(headerOut, dataOut, name, stream.str(), addComma);
-  }
-
-  void printReport(std::ostream &out, uint64_t normalizationConstant = 1) {
-    std::stringstream header;
-    std::stringstream data;
-    printReport(header, data, normalizationConstant);
-    out << header.str() << std::endl;
-    out << data.str() << std::endl;
-  }
-
-  void printReport(std::ostream &headerOut, std::ostream &dataOut,
-                   uint64_t normalizationConstant) {
-    if (!events.size())
-      return;
-
-    printCounter(headerOut, dataOut, "duration", getDuration());
-    for (unsigned i = 0; i < events.size(); i++) {
-      if (events[i].valid) {
-        printCounter(headerOut, dataOut, events[i].pmce.name,
-                     events[i].report() /
-                         static_cast<double>(normalizationConstant));
-      }
-    }
-
-    printCounter(headerOut, dataOut, "scale", normalizationConstant);
-
-    printCounter(headerOut, dataOut, "IPC", getIPC());
-  }
-
-  void startCounters() {
-    for (auto &event : events) {
-      event.start();
-    }
-    startTime = std::chrono::steady_clock::now();
-  }
-
-  void stopCounters() {
-    stopTime = std::chrono::steady_clock::now();
-    for (auto &event : events) {
-      event.stop();
-    }
-  }
-
+// Shim layer to match https://github.com/viktorleis/perfevent
+using namespace uperf;
+struct PerfEvent {
 private:
   // By default, each collection operates on known core-local counters,
   // but selections can also be shared between cores to measure uncore counters
@@ -677,5 +560,251 @@ private:
       PMC{1u << 31, 1u << 31, CYCLES},
 #endif
   };
+public:
+  // The selection of hardware counters available to this collection.
+  uperf::PMCSelect &pmcs = default_pmcs;
+  // A vector of registered events. Must not be larger than the number of
+  // available hardware counters.
+  std::vector<uperf::Event> events;
+
+  std::chrono::time_point<std::chrono::steady_clock> startTime;
+  std::chrono::time_point<std::chrono::steady_clock> stopTime;
+
+  // Constructor to use with default set of counters.
+  // Common use case: On-core measurements
+  PerfEvent(bool set_default_counters = true) {
+    enable_pmu();
+
+    if (set_default_counters) {
+      registerCounter(PERF_COUNT_HW::CPU_CYCLES);
+      registerCounter(PERF_COUNT_HW::INSTRUCTIONS);
+      registerCounter(PERF_COUNT_HW::L2_CACHE_MISS);
+      registerCounter(PERF_COUNT_HW::BRANCH_MISS);
+    }
+  }
+
+  // Constructor to use with custom set of counters.
+  // Common use case: Share counters between multiple collections
+  PerfEvent(PMCSelect &pmcSelect) : pmcs(pmcSelect) { enable_pmu(); }
+
+  void registerCounter(PMCEvent pmce) { events.push_back(Event(pmce, pmcs)); }
+
+  void registerCounter(PMCEvent pmce, const char *name) {
+    pmce.name = name;
+    registerCounter(pmce);
+  }
+
+  void registerCounter(uint64_t bitmap, PMClass pmClass, const char *name) {
+    registerCounter({bitmap, pmClass, name});
+  }
+
+  void startCounters() {
+    for (auto &event : events) {
+      event.start();
+    }
+    startTime = std::chrono::steady_clock::now();
+  }
+
+  void stopCounters() {
+    stopTime = std::chrono::steady_clock::now();
+    for (auto &event : events) {
+      event.stop();
+    }
+  }
+
+  double getDuration() {
+    return std::chrono::duration<double>(stopTime - startTime).count();
+  }
+
+  size_t getDurationUs() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(stopTime -
+                                                                 startTime)
+        .count();
+  }
+  //
+  // IPC is calculated from the instructions and cycle counter.
+  // If one of them is not counted, this function returns NaN.
+  double getIPC() {
+    double res = getCounter(PERF_COUNT_HW::INSTRUCTIONS.name) /
+                 getCounter(PERF_COUNT_HW::CPU_CYCLES.name);
+    return res > 0 ? res : NAN;
+  }
+
+  double getCounter(const char *name) {
+    for (auto &event : events) {
+      if (event.pmce.name == name)
+        return event.report();
+    }
+    return -1;
+  }
+
+  static void printCounter(std::ostream &headerOut, std::ostream &dataOut,
+                           std::string name, std::string counterValue,
+                           bool addComma = true) {
+    auto width = std::max(name.length(), counterValue.length());
+    headerOut << std::setw(static_cast<int>(width)) << name
+              << (addComma ? "," : "") << " ";
+    dataOut << std::setw(static_cast<int>(width)) << counterValue
+            << (addComma ? "," : "") << " ";
+  }
+
+  template <typename T>
+  static void printCounter(std::ostream &headerOut, std::ostream &dataOut,
+                           std::string name, T counterValue,
+                           bool addComma = true) {
+    std::stringstream stream;
+    stream << std::fixed << std::setprecision(2) << counterValue;
+    PerfEvent::printCounter(headerOut, dataOut, name, stream.str(), addComma);
+  }
+
+  void printReport(std::ostream &out, uint64_t normalizationConstant) {
+    std::stringstream header;
+    std::stringstream data;
+    printReport(header, data, normalizationConstant);
+    out << header.str() << std::endl;
+    out << data.str() << std::endl;
+  }
+
+  void printReport(std::ostream &headerOut, std::ostream &dataOut,
+                   uint64_t normalizationConstant) {
+    if (!events.size())
+      return;
+
+    printCounter(headerOut, dataOut, "duration", getDuration());
+    for (unsigned i = 0; i < events.size(); i++) {
+      printCounter(headerOut, dataOut, events[i].pmce.name,
+                   events[i].report() /
+                       static_cast<double>(normalizationConstant));
+    }
+
+    printCounter(headerOut, dataOut, "scale", normalizationConstant);
+
+    // derived metrics
+    printCounter(headerOut, dataOut, "IPC", getIPC());
+  }
+
+  template <typename T>
+  static void printCounterVertical(std::ostream &infoOut, std::string name,
+                                   T counterValue, int eNameWidth) {
+    std::stringstream stream;
+    stream << std::fixed << std::setprecision(2) << counterValue;
+    infoOut << std::setw(eNameWidth) << std::left << name << " : "
+            << stream.str() << std::endl;
+  }
+
+  void printReportVertical(std::ostream &out, uint64_t normalizationConstant) {
+    std::stringstream info;
+    printReportVerticalUtil(info, normalizationConstant);
+    out << info.str() << std::endl;
+  }
+
+  void printReportVerticalUtil(std::ostream &infoOut,
+                               uint64_t normalizationConstant) {
+    if (!events.size())
+      return;
+
+    // get width of the widest event name. Minimum width is the one of 'scale'
+    int eNameWidth = 5;
+    for (unsigned i = 0; i < events.size(); i++) {
+      eNameWidth = std::max(
+          static_cast<int>(std::char_traits<char>::length(events[i].pmce.name)),
+          eNameWidth);
+    }
+
+    printCounterVertical(infoOut, "duration", getDuration(), eNameWidth);
+    // print all metrics
+    for (unsigned i = 0; i < events.size(); i++) {
+      printCounterVertical(infoOut, events[i].pmce.name,
+                           events[i].report() /
+                               static_cast<double>(normalizationConstant),
+                           eNameWidth);
+    }
+
+    printCounterVertical(infoOut, "scale", normalizationConstant, eNameWidth);
+
+    // derived metrics
+    printCounterVertical(infoOut, "IPC", getIPC(), eNameWidth);
+  }
 };
-} // namespace uperf
+
+struct BenchmarkParameters {
+
+  void setParam(const std::string &name, const std::string &value) {
+    params[name] = value;
+  }
+
+  void setParam(const std::string &name, const char *value) {
+    params[name] = value;
+  }
+
+  template <typename T> void setParam(const std::string &name, T value) {
+    setParam(name, std::to_string(value));
+  }
+
+  void printParams(std::ostream &header, std::ostream &data) {
+    for (auto &p : params) {
+      PerfEvent::printCounter(header, data, p.first, p.second);
+    }
+  }
+
+  BenchmarkParameters(std::string name = "") {
+    if (name.length())
+      setParam("name", name);
+  }
+
+private:
+  std::map<std::string, std::string> params;
+};
+
+struct PerfRef {
+  union {
+    PerfEvent instance;
+    PerfEvent *pointer;
+  };
+  bool has_instance;
+
+  PerfRef() : instance(), has_instance(true) {}
+  PerfRef(PerfEvent *ptr) : pointer(ptr), has_instance(false) {}
+  PerfRef(const PerfRef &) = delete;
+
+  ~PerfRef() {
+    if (has_instance)
+      instance.~PerfEvent();
+  }
+
+  PerfEvent *operator->() { return has_instance ? &instance : pointer; }
+};
+
+struct PerfEventBlock {
+  PerfRef e;
+  uint64_t scale;
+  BenchmarkParameters parameters;
+  bool printHeader;
+
+  PerfEventBlock(uint64_t scale = 1, BenchmarkParameters params = {},
+                 bool printHeader = true)
+      : scale(scale), parameters(params), printHeader(printHeader) {
+    e->startCounters();
+  }
+
+  PerfEventBlock(PerfEvent &perf, uint64_t scale = 1,
+                 BenchmarkParameters params = {}, bool printHeader = true)
+      : e(&perf), scale(scale), parameters(params), printHeader(printHeader) {
+    e->startCounters();
+  }
+
+  ~PerfEventBlock() {
+    e->stopCounters();
+    std::stringstream header;
+    std::stringstream data;
+    parameters.printParams(header, data);
+    PerfEvent::printCounter(header, data, "time sec", e->getDuration());
+    PerfEvent::printCounter(header, data, "micros", e->getDurationUs());
+    PerfEvent::printCounter(header, data, "millis",
+                            static_cast<double>(e->getDurationUs()) / 1000);
+    e->printReport(header, data, scale);
+    if (printHeader)
+      std::cout << header.str() << std::endl;
+    std::cout << data.str() << std::endl;
+  }
+};
