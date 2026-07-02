@@ -64,8 +64,7 @@ inline uint32_t pmu_num_counters() {
   if (is_intel()) {
     uint32_t eax, ebx, ecx, edx;
     cpuid(0x0A, eax, ebx, ecx, edx);
-    uint32_t n = (eax >> 8) & 0xFF;
-    return n > 0 ? n : 4;
+    return (eax >> 8) & 0xFF;
   }
   // TODO: This is currently a stub / best guess for amd processors
   return 6;
@@ -82,12 +81,13 @@ inline bool is_midr(uint32_t to_check) { return false; };
 
 inline constexpr uint32_t intel_msr_perf_global_ctrl = 0x38Fu;
 inline void enable_pmu() {
-  if (is_intel()) {
-    uint32_t n = pmu_num_counters();
-    uint64_t mask = (n >= 32) ? 0xFFFFFFFFull : ((1ull << n) - 1);
-    msr_write(intel_msr_perf_global_ctrl, mask);
-    return;
-  }
+  if (pmu_num_counters() > 0)
+    if (is_intel()) {
+      uint32_t n = pmu_num_counters();
+      uint64_t mask = (n >= 32) ? 0xFFFFFFFFull : ((1ull << n) - 1);
+      msr_write(intel_msr_perf_global_ctrl, mask);
+      return;
+    }
   // TODO: This is currently a noop as the pmu is usually enabled by default
 }
 
@@ -343,7 +343,7 @@ struct PMCSelect {
     auto it = this->pmcs.end();
     while (n > 0 && it != this->pmcs.begin()) {
       --it;
-      if (it->pmClass == PMClass::CORE) {
+      if (it->pmClass == x) {
         it = this->pmcs.erase(it);
         --n;
       }
@@ -364,6 +364,17 @@ struct PMCSelect {
   }
 
   void release(PMC *pmc) { pmc->free.store(true); }
+
+  uint32_t size() { return pmcs.size(); }
+
+  uint32_t size_of_x(PMClass x) {
+    uint32_t size{0};
+    for (auto &pmc : pmcs) {
+      if (pmc.pmClass == x)
+        ++size;
+    }
+    return size;
+  }
 
 protected:
   std::vector<PMC> pmcs;
@@ -605,8 +616,10 @@ struct Event {
   void start() {
     pmc = pmcs.acquire(pmce.pmClass);
     if (!pmc) {
-      std::cerr << "[ERROR] All hardware counters are occupied. Event "
-                << pmce.name << " will not be measured." << std::endl;
+      std::cerr << "[ERROR] All hardware counters are occupied ("
+                << pmcs.size_of_x(pmce.pmClass) << "/"
+                << pmcs.size_of_x(pmce.pmClass) << "). Event " << pmce.name
+                << " will not be measured." << std::endl;
       valid = false;
       return;
     }
