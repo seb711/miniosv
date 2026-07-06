@@ -17,8 +17,9 @@ SECTIONS
 	 * We can't export the ELF header base as a symbol, because ld
 	 * insists on moving stuff around if we do.
 	 *
-	 * We add 0x10000 (64 KB) below to create space for our copy of DTB tree
-	 * (see dtb_setup() in arch-dtb.cc)
+	 * The 0x10000 (64 KB) offset is kept so text_start lands at
+	 * OSV_KERNEL_VM_BASE + 0x20000, the address the boot code's virt-offset
+	 * computation (calculate_virt_offset in boot.S) assumes.
 	 */
     . = OSV_KERNEL_VM_BASE + 0x10000 + 0x1000;
 
@@ -161,4 +162,6 @@ PHDRS {
 	eh_frame PT_GNU_EH_FRAME;
 	note PT_NOTE;
 }
-ENTRY(start_elf);
+/* The ELF entry point is the kernel's UEFI entry. The UEFI stub reads this
+ * (virtual) address and translates it to the physical entry it jumps to. */
+ENTRY(uefi_entry);

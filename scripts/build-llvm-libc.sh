@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build LLVM libc as a no-syscall static archive for the OSv kernel.
 #
 # Phase 1 of LLVM_LIBC_PLAN.md. Produces, for the requested arch,

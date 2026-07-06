@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Count kernel C/C++ line counts in a folder (no git required).
 #
 #   scripts/loc.sh [path]

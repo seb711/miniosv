@@ -11,7 +11,6 @@
 #include <osv/pci.hh>
 #include <osv/kernel_config.h>
 #include "drivers/pci-function.hh"
-#include "arch-dtb.hh"
 
 namespace pci {
 
@@ -32,11 +31,6 @@ static bool ecam;
  */
 static u64 pci_io_next = 0x1000;
 static u64 pci_mem_next = 0;
-
-/* this maps PCI addresses as returned by build_config_address
- * to platform IRQ numbers. */
-static std::multimap<u32, int> pci_irqmap;
-static u32 pci_irqmask;
 
 void set_pci_ecam(bool is_ecam)
 {
@@ -85,42 +79,6 @@ u64 get_pci_mem(size_t *len)
     return (u64)pci_mem_base;
 }
 
-void set_pci_irqmap(u32 *bdfs, int *irq_ids, int count, u32 mask)
-{
-    pci_irqmask = mask;
-    for (int i = 0; i < count; i++) {
-        pci_irqmap.insert(std::make_pair(bdfs[i], irq_ids[i]));
-    }
-}
-
-void dump_pci_irqmap()
-{
-    debug("PCI irqmap\n");
-    for (auto it = pci_irqmap.begin(); it != pci_irqmap.end(); ++it) {
-        debugf("Bus,Device,Function 0x%08x -> SPI irq 0x%04x\n",
-              (*it).first, (*it).second);
-        debugf("B,D,F irqmap-mask   0x%08x\n", pci_irqmask);
-    }
-}
-
-static int get_pci_irq_from_bdfp(u32 bdfp)
-{
-    int irq_id = -1;
-    bdfp &= pci_irqmask;
-
-    auto rng = pci_irqmap.equal_range(bdfp);
-
-    for (auto it = rng.first; it != rng.second; it++) {
-        if (irq_id < 0) {
-            irq_id = (*it).second;
-        } else {
-            /* we do not support multiple irqs per slot (yet?) */
-            abort();
-        }
-    }
-    return irq_id;
-}
-
 u32 pci::function::arch_add_bar(u32 val, u32 pos, bool is_mmio, bool is_64, u64 addr_size)
 {
     //Read pre-allocated address if any
@@ -162,26 +120,6 @@ u32 pci::function::arch_add_bar(u32 val, u32 pos, bool is_mmio, bool is_64, u64 
     pci_d("arch_add_bar(): pos:%d, val:%x, mmio:%d, addr_64:%lx, addr_size:%lx",
         pos, val, is_mmio, addr_64, addr_size);
     return val;
-}
-
-unsigned get_pci_irq_line(pci::device &dev)
-{
-    u32 bdfp;
-    u8 b, d, f, p; /* BEWARE, bdf written by get_bdf using references */
-    dev.get_bdf(b, d, f);  /* arguments written to (not good.) */
-
-    p = dev.get_interrupt_pin();
-    bdfp = b << DTB_PHYSHI_B_SH | d << DTB_PHYSHI_D_SH | f << DTB_PHYSHI_F_SH;
-    bdfp |= p & DTB_PIN_MASK;
-
-    int irq_id = pci::get_pci_irq_from_bdfp(bdfp);
-    assert(irq_id > 0);
-    /* add the SPI base number 32 to the irq id */
-    irq_id += 32;
-#if CONF_logger_debug
-    debugf("get_pci_irq_line: bdfp  = %u, irqid = %d\n", bdfp, irq_id);
-#endif
-    return irq_id;
 }
 
 static inline

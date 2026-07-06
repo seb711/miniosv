@@ -25,6 +25,12 @@ enum {
     UARTICR   = 0x044
 };
 
+enum {
+    UARTFR_BUSY = (1 << 3), /* UART busy transmitting */
+    UARTFR_TXFF = (1 << 5)  /* transmit FIFO full */
+};
+
+
 bool PL011_Console::active = false;
 
 void PL011_Console::set_base_addr(u64 addr)
@@ -48,7 +54,16 @@ void PL011_Console::flush() {
 
 void PL011_Console::write(const char *str, size_t len) {
     while (len > 0) {
-        uart[UARTDR] = *str++;
+        /* PL011 registers must be accessed with 32-bit MMIO reads/writes.
+         * The SBSA UART exposed by AWS Graviton only decodes word accesses;
+         * byte accesses (which QEMU's model tolerates, so it works locally)
+         * transmit nothing on real hardware. This matches Linux's amba-pl011
+         * (vendor_sbsa.access_32b -> UPIO_MEM32 -> writel/readl) and Nanos.
+         *
+         * Wait for room in the transmit FIFO (TXFF), then write one byte. */
+        while (*(volatile u32 *)(uart + UARTFR) & UARTFR_TXFF)
+            ;
+        *(volatile u32 *)(uart + UARTDR) = (u8)*str++;
         len--;
     }
 }

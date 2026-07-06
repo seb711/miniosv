@@ -79,14 +79,8 @@ void premain()
 
     arch_init_premain();
 
-#ifdef __x86_64__
-    auto elf_header_virt_address = (char*)elf_header + OSV_KERNEL_VM_SHIFT;
-#endif
-
-#ifdef __aarch64__
     extern u64 kernel_vm_shift;
     auto elf_header_virt_address = (char*)elf_header + kernel_vm_shift;
-#endif
 
     // Publish the kernel ELF header address for the dynamic-linker
     // introspection used by the C++ exception unwinder (see libc/dlfcn.cc).

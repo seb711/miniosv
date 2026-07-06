@@ -10,6 +10,7 @@
 
 namespace mmu {
 extern uint8_t phys_bits, virt_bits;
+extern void *elf_phys_start; /* set by arch_setup_free_memory() */
 constexpr uint8_t rsvd_bits_used = 1;
 constexpr uint8_t max_phys_bits = 52 - rsvd_bits_used;
 

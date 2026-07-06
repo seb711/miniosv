@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Build LLVM's C++ runtime (libc++ + libc++abi + libunwind) as static archives
 # for the OSv kernel, replacing the host GNU libstdc++.a.
 #
