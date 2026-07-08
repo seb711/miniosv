@@ -13,16 +13,14 @@
 #include <osv/power.hh>
 #include <osv/perf.hh>
 
-constexpr uint64_t n = 1ul << 20;
-
-extern "C" void osv_app_main() {
-  perf::PerfEvent e;
-  e.startCounters();
-
-  for (uint64_t i{0}; i < n; ++i)
-    asm volatile("" ::: "memory");
-
-  e.stopCounters();
-  e.printReport(std::cout, n);
-  osv::poweroff();
+extern "C" void osv_app_main()
+{
+    printf("Hello, world from OSv!\n");
+    // Do not power off: keep the machine running so the boot output stays
+    // visible on the (cloud) serial console instead of the instance stopping
+    // the moment it finishes booting. The empty asm keeps the compiler from
+    // optimizing this infinite loop away.
+    while (true) {
+        asm volatile("" ::: "memory");
+    }
 }

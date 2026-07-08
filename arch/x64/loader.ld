@@ -15,20 +15,6 @@ SECTIONS
 	 * We can't export the ELF header base as a symbol, because ld
 	 * insists on moving stuff around if we do.
 	 */
-    . = OSV_KERNEL_VM_BASE + 0x800;
-	/*
-	 * Place address of start32 routine at predefined offset in memory
-	 */
-    .start32_address : AT(ADDR(.start32_address) - OSV_KERNEL_VM_SHIFT) {
-        *(.start32_address)
-    KEEP(*(.start32_address)) }
-    . = OSV_KERNEL_VM_BASE + 0x900;
-	/*
-	 * Place address of start32_from_vmlinuz routine at predefined offset in memory
-	 */
-    .start32_from_vmlinuz_address : AT(ADDR(.start32_from_vmlinuz_address) - OSV_KERNEL_VM_SHIFT) {
-        *(.start32_from_vmlinuz_address)
-    KEEP(*(.start32_from_vmlinuz_address)) }
     . = OSV_KERNEL_VM_BASE + 0x1000;
     .text : AT(ADDR(.text) - OSV_KERNEL_VM_SHIFT) {
         HIDDEN(text_start = .);
@@ -38,11 +24,6 @@ SECTIONS
         *(.text.startup .text.startup.*)
         *(.text .text.*)
         HIDDEN(text_end = .);
-        /* Unconditional (not PROVIDE_HIDDEN): ld.lld does not treat the ENTRY()
-         * reference below as a use that triggers a PROVIDE, so the entry symbol
-         * would never be defined and the start address would default to 0. A
-         * plain HIDDEN assignment defines it for both ld.bfd and ld.lld. */
-        HIDDEN(low_vmlinux_entry64 = vmlinux_entry64 - OSV_KERNEL_VM_SHIFT);
     } :text
     . = ALIGN(8);
     .fixup : AT(ADDR(.fixup) - OSV_KERNEL_VM_SHIFT) {
@@ -151,4 +132,6 @@ PHDRS {
 	eh_frame PT_GNU_EH_FRAME;
 	note PT_NOTE;
 }
-ENTRY(low_vmlinux_entry64);
+/* The ELF entry point is the kernel's UEFI entry. The UEFI stub reads this
+ * (virtual) address and translates it to the physical entry it jumps to. */
+ENTRY(uefi_entry);

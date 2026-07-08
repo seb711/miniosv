@@ -6,7 +6,6 @@
  */
 
 #include "drivers/clock.hh"
-#include "drivers/pl031.hh"
 #include "arm-clock.hh"
 #include <osv/interrupt.hh>
 #include "exceptions.hh"
@@ -16,7 +15,7 @@
 #include <osv/sched.hh>
 #include <osv/kernel_config.h>
 
-#include "arch-dtb.hh"
+#include "drivers/acpi.hh"
 
 using namespace processor;
 
@@ -44,22 +43,18 @@ arm_clock::arm_clock() {
     u64 freq;
     asm volatile ("mrs %0, cntfrq_el0; isb; " : "=r"(freq) :: "memory");
     freq_hz = freq;
-    /* spec documents a typical range of 1-50 MHZ,
-     * the ampere-1a however, runs on 1Ghz, so allow up to that frequency */
-    if (freq_hz < 1 * MHZ || freq_hz > 1000 * MHZ) {
-        debug_early_u64("arm_clock(): read invalid frequency ", freq_hz);
-        abort();
-    }
+    // The generic-timer frequency is whatever firmware programmed into
+    // CNTFRQ_EL0; it varies widely across platforms (QEMU virt 62.5 MHz, Ampere
+    // 1 GHz, AWS Graviton higher still), so we trust it rather than range-check
+    // it - a sanity bound here only risks rejecting valid hardware.
 #if CONF_logger_debug
     debug_early_u64("arm_clock(): frequency read as ", freq_hz);
 #endif
-    u64 rtc_address = dtb_get_rtc();
-    if (rtc_address) {
-        pl031 rtc(rtc_address);
-	_boot_time_in_ns = rtc.wallclock_ns();
-    } else {
-	_boot_time_in_ns = 0;
-    }
+    // Wall-clock base from the UEFI firmware (GetTime), captured by the UEFI
+    // stub - the PL031 RTC has no flat ACPI table (AML only). time() then
+    // advances this base by the monotonic generic counter (uptime()).
+    extern u64 osv_boot_unixtime_ns;
+    _boot_time_in_ns = osv_boot_unixtime_ns;
 }
 
 static __attribute__((constructor(init_prio::clock))) void setup_arm_clock()
@@ -119,7 +114,9 @@ public:
 
 int get_timer_irq_id()
 {
-    auto _irq_id = dtb_get_timer_irq();
+    // The EL1 virtual timer interrupt (GSIV) comes from the ACPI GTDT.
+    auto gtdt = reinterpret_cast<const acpi::gtdt*>(acpi::find_table(ACPI_SIG_GTDT));
+    int _irq_id = gtdt ? gtdt->virtual_el1_timer_gsiv : 0;
     if (!_irq_id) {
         _irq_id = DEFAULT_TIMER_IRQ_ID;
     }

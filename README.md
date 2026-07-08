@@ -14,20 +14,27 @@ not Linux compatibility.
 ## What's left
 
 - **Single binary** — the app is compiled into the kernel and entered via `osv_app_main()`; no ELF loader.
-- **Diskless boot** — static `EXEC`, no `.dynamic`. x86-64 boots directly via QEMU `-kernel` (PVH); aarch64 via a small preboot stub.
+- **UEFI boot** — static `EXEC`, no `.dynamic`. Both arches boot only via UEFI: the kernel ELF is wrapped as an EFI application and loaded from a GPT/ESP disk image by the firmware (OVMF/AAVMF), the same path AWS, GCP and Azure take. No `-kernel`/PVH/multiboot.
 - **No syscall ABI** — the app calls libc/kernel functions directly (zero syscall instructions).
 - **Pure-LLVM toolchain** — clang + `ld.lld` + llvm-libc + libc++ + libunwind + compiler-rt, plus a small OSv-owned libc core. No GNU toolchain (no binutils, no libgcc); aarch64 cross-compiles by target triple with no GNU cross sysroot.
-- Builds and boots on both **x86-64** and **aarch64**.
+- Builds and boots on both **x86-64** and **aarch64**, under QEMU and on AWS, GCP and Azure.
 
 ## Build & run
 
 ```bash
-make                               # build x86-64 kernel (app/app.cc)
-./scripts/run.py                   # boot under QEMU/KVM
+make                               # build the x86-64 boot image -> build/release.x64/loader.img
+./scripts/run.py                   # boot it under QEMU + UEFI (uses KVM when available)
 
-make arch=aarch64
-QEMU_PATH=/usr/bin/qemu-system-aarch64 ./scripts/run.py --arch aarch64
+make arch=aarch64                  # build the aarch64 image -> build/release.aarch64/loader.img
+./scripts/run.py --arch aarch64    # boot it under QEMU + UEFI (TCG on an x86 host)
 ```
+
+`make` produces a bootable GPT/ESP disk image (`loader.img`); `run.py` boots it as an NVMe disk
+and puts the guest serial console on your terminal (Ctrl-A C for the QEMU monitor, Ctrl-A X to
+quit). Requirements: QEMU, the UEFI firmware (`ovmf` for x86-64, `qemu-efi-aarch64` for aarch64),
+and `mtools` + `gdisk` to build the disk image. Override the firmware with the `OVMF_CODE`/
+`OVMF_VARS` or `AAVMF_CODE`/`AAVMF_VARS` env vars. `make smoke-test` boots the image headless and
+checks it reaches the kernel.
 
 The default app (`app/app.cc`) is a conformance gate that prints a `PASS`/`FAIL` line per check.
 Build the larger test suite with `make app=tests`.

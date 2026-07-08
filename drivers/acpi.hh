@@ -71,14 +71,112 @@ struct madt_local_x2apic {
     uint32_t uid;
 };
 
+// aarch64 MADT subtables describing the Generic Interrupt Controller. They are
+// parsed exactly like the x86 entries above (acpi::find_table(ACPI_SIG_MADT)
+// then walk the subtables), so there is a single ACPI model across both arches.
+enum madt_gic_subtable_type {
+    MADT_GICC     = 0x0b,   // GIC CPU interface (one per cpu)
+    MADT_GICD     = 0x0c,   // GIC distributor
+    MADT_GIC_MSI  = 0x0d,   // GIC MSI frame
+    MADT_GICR     = 0x0e,   // GIC redistributor
+    MADT_GIC_ITS  = 0x0f,   // GIC interrupt translation service
+};
+
+struct madt_gicc {
+    madt_subtable header;
+    uint16_t reserved;
+    uint32_t cpu_interface_number;
+    uint32_t acpi_processor_uid;
+    uint32_t flags;
+    uint32_t parking_protocol_version;
+    uint32_t performance_interrupt_gsiv;
+    uint64_t parked_address;
+    uint64_t physical_base_address;   // GICv2 CPU interface base
+    uint64_t gicv;
+    uint64_t gich;
+    uint32_t vgic_maintenance_interrupt;
+    uint64_t gicr_base_address;       // per-cpu GICv3 redistributor
+    uint64_t mpidr;
+};
+
+struct madt_gicd {
+    madt_subtable header;
+    uint16_t reserved;
+    uint32_t gic_id;
+    uint64_t physical_base_address;   // distributor base
+    uint32_t system_vector_base;
+    uint8_t  gic_version;             // 2 or 3
+    uint8_t  reserved2[3];
+};
+
+struct madt_gicr {
+    madt_subtable header;
+    uint16_t reserved;
+    uint64_t discovery_range_base_address;
+    uint32_t discovery_range_length;
+};
+
+struct madt_gic_its {
+    madt_subtable header;
+    uint16_t reserved;
+    uint32_t its_id;
+    uint64_t physical_base_address;
+    uint32_t reserved2;
+};
+
+// PCI Express memory-mapped configuration ("MCFG"). Like Nanos, we read only
+// this flat table for the ECAM config base; the firmware-programmed BARs are
+// used as-is (no AML/_CRS), and device interrupts use MSI-X via the GIC ITS.
+struct mcfg {
+    table_header header;
+    uint64_t     reserved;
+    // followed by one or more mcfg_alloc entries
+};
+
+struct mcfg_alloc {
+    uint64_t base_address;    // ECAM base for this segment
+    uint16_t pci_segment;
+    uint8_t  start_bus;
+    uint8_t  end_bus;
+    uint32_t reserved;
+};
+
+// Generic Timer Description Table ("GTDT"). Provides the per-cpu ARM generic
+// timer interrupt numbers (GSIVs); aarch64 uses the EL1 virtual timer.
+struct gtdt {
+    table_header header;
+    uint64_t counter_block_address;
+    uint32_t reserved;
+    uint32_t secure_el1_timer_gsiv;
+    uint32_t secure_el1_timer_flags;
+    uint32_t non_secure_el1_timer_gsiv;
+    uint32_t non_secure_el1_timer_flags;
+    uint32_t virtual_el1_timer_gsiv;
+    uint32_t virtual_el1_timer_flags;
+    uint32_t el2_timer_gsiv;
+    uint32_t el2_timer_flags;
+};
+
+// FADT ("FACP") ARM Boot Architecture Flags (offset 0x70), describing the PSCI
+// conduit.
+static constexpr uint16_t FADT_ARM_PSCI_COMPLIANT = 1 << 0;
+static constexpr uint16_t FADT_ARM_PSCI_USE_HVC   = 1 << 1;
+
 #pragma pack(pop)
 
 // 4-character table signatures.
 #define ACPI_SIG_MADT "APIC"
+#define ACPI_SIG_MCFG "MCFG"
+#define ACPI_SIG_GTDT "GTDT"
+#define ACPI_SIG_FADT "FACP"
 
 // Return a pointer to the (already mapped) ACPI table with the given 4-byte
 // signature, or nullptr if no such table is present.
 const table_header *find_table(const char *signature);
+
+// FADT ARM Boot Architecture Flags (aarch64), or 0 if there is no FADT. Used to
+// pick the PSCI conduit (HVC vs SMC).
+uint16_t arm_boot_flags();
 
 // Attempt to power the machine off via the ACPI S5 ("soft off") state. Returns
 // false if the firmware did not give us enough information to do so (in which

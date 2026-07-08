@@ -8,51 +8,48 @@
 #include <osv/drivers_config.h>
 .text
 .align 16
-.globl start_elf
-.hidden start_elf
-.type start_elf , "function"
-start_elf:
-        /* elf program start address */
-        /* input: x3=elf header x4=cmdline x5=dtb */
+.globl uefi_entry
+.hidden uefi_entry
+.type uefi_entry , "function"
+uefi_entry:
+        /* Kernel entry from the UEFI stub (boot/uefi/stub.cc).
+         * x0 = physical address of osv::boot_info. We arrive at EL1 with the
+         * MMU enabled under the firmware's identity map (UEFI hands off that
+         * way), so first disable the MMU to match the rest of the boot code,
+         * which builds and enables OSv's own translation tables. Because the
+         * firmware map is identity, the PC stays valid across the switch. */
+        mov     x19, x0                    // preserve boot_info pointer
+        ldr     x20, [x0, #40]             // boot_info->kernel_phys_base (offset per boot-info.hh)
+
+        mrs     x0, sctlr_el1
+        bic     x0, x0, #1                 // clear M (MMU enable)
+        msr     sctlr_el1, x0
+        isb
+
         bl      calculate_virt_offset
-        /* x6 contains virt-phys offset */
         adrp    x0, exception_vectors
-        add     x0, x0, x6    // apply virt-phys offset to make it virtual address
+        add     x0, x0, x6                 // apply virt-phys offset
         msr     vbar_el1, x0
         isb
 
-        bl      validate_el   // check that we are at EL1 or die
+        bl      validate_el
         bl      init_stack
-        bl      zero_bss      // initialize bss contents to 0
+        bl      zero_bss
         bl      init_cpu
-        bl      fixup_boot_pt // apply virt-phys offset to the boot mapping tables
-        bl      init_boot_pt  // set mapping table registers
-        /* at this point the virtual memory is not yet enabled but we are ready to enable it */
-        bl      init_mmu
+        bl      fixup_boot_pt
+        bl      init_boot_pt
+        bl      init_mmu                   // returns operating in virtual memory
 
-        /* after we returned from init_mmu we are operating in the virtual memory space */
         adrp    x0, kernel_vm_shift
-        str     x6, [x0]      // save the kernel VM shift under kernel_vm_shift
+        str     x6, [x0]
+        adrp    x1, elf_header             // kernel ELF physical base
+        str     x20, [x1, #:lo12:elf_header]
+        adrp    x1, osv_boot_info          // boot_info pointer (arch-setup.cc)
+        str     x19, [x1, #:lo12:osv_boot_info]
 
-        adrp    x1, elf_header              // store elf header address
-        str     x3, [x1, #:lo12:elf_header]
-        adrp    x1, cmdline                 // store cmdline (arch-setup.cc)
-        str     x4, [x1, #:lo12:cmdline]
-        adrp    x1, dtb                     // store dtb (arch-setup.cc)
-        str     x5, [x1, #:lo12:dtb]
-
-#if CONF_drivers_xen
-        mov     x29, xzr
-        bl      init_xen
-#endif
         mov     x29, xzr
         bl      premain
-
-        // The slim kernel's main() takes no arguments - the application is
-        // statically linked in (osv_app_main) and there is no kernel cmdline
-        // to turn into argc/argv (see x64 boot.S, which also just calls main).
         bl      main
-
         bl      halt
 
 calculate_virt_offset:
@@ -262,7 +259,7 @@ start_secondary_cpu:
         isb
 
         bl      init_cpu
-        bl      init_boot_pt  // use the boot mapping tables fixed by start_elf on primary CPU
+        bl      init_boot_pt  // use the boot mapping tables fixed by uefi_entry on primary CPU
         bl      init_mmu
         /* after we returned from init_mmu we are operating in the virtual memory space */
         /* but on secondary CPU we can subsequently switch to the runtime mapping tables */
@@ -297,18 +294,39 @@ ident_pt_l3_ttbr0:
         .quad ident_pt_l2_1_ttbr0 + 0x3 // Map 1GB-2GB one-to-one
         .quad ident_pt_l2_2_ttbr0 + 0x3 // Map 2GB-3GB one-to-one
         .quad ident_pt_l2_3_ttbr0 + 0x3 // Map 3GB-4GB one-to-one
+        // Map 4GB-63GB one-to-one with 1GB block descriptors (valid at this
+        // level). The 0-4GB range above keeps 2MB granularity for early device
+        // access; the rest only needs to make physical RAM reachable during
+        // early boot, before arch_setup_free_memory builds the linear map -
+        // guests with more than 4GB RAM place stacks/allocations up here and
+        // would otherwise fault on first touch.
+        index = 4
         .rept 59
-        .quad 0
+        .quad (index << 30) + 0x411
+        index = index + 1
         .endr
         .quad kernel_pt_l2_63_ttbr0 + 0x3 // Map 63GB-64GB -> 1GB-2GB
         .rept 448
         .quad 0
         .endr
+// ident_pt_l2_0_ttbr0 .. ident_pt_l2_3_ttbr0 are four contiguous 512-entry L2
+// tables covering physical 0-4 GiB in 2 MiB blocks (entry i maps i*2MiB). Made
+// global so the early C++ (uefi_memory_setup) can re-mark the blocks that are
+// actually RAM as Normal cacheable - the static map below assumes the low 1 GiB
+// is pure MMIO (true on QEMU/AWS/GCP), which is wrong on Azure where RAM lives
+// in the low 1 GiB.
+.globl ident_pt_l2_0_ttbr0
+.hidden ident_pt_l2_0_ttbr0
 ident_pt_l2_0_ttbr0:
+        // The low 1GB is platform MMIO (GIC, UART, PCIe ECAM, ...) - RAM starts
+        // at 1GB on QEMU virt and AWS Graviton alike. Map it as Device memory
+        // (attr index 0 -> 0x401) rather than Normal cacheable (0x411): the
+        // early console writes the UART through this mapping, and cacheable
+        // MMIO drops/reorders those writes on real hardware (garbled output).
         index = 0
         offset = 0x00000000
         .rept 512
-        .quad offset + (index << 21) + 0x411
+        .quad offset + (index << 21) + 0x401
         index = index + 1
         .endr
 ident_pt_l2_1_ttbr0:
