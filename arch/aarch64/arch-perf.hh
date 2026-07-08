@@ -18,17 +18,15 @@ inline uint32_t pmu_num_counters() {
   return (pmcr >> 11) & 0x1F;
 }
 
-// Whether we are running on a specific CPU implementation (matched via
-// MIDR_EL1).
+// Match against MIDR_EL1 (implementer/arch/part bits).
 inline bool is_midr(uint32_t to_check) {
   uint64_t midr;
   asm volatile("mrs %0, midr_el1" : "=r"(midr));
   return (static_cast<uint32_t>(midr) & midr_fixed_mask) == to_check;
 }
 
-// Whether OSv is running as a KVM guest. Queries SMCCC Vendor Hypervisor UID
-// (function ID 0x8600FF01); KVM's UUID is defined in the Linux kernel at
-// arch/arm64/kvm/hypercalls.c (ARM_SMCCC_VENDOR_HYP_UID_KVM_REG_{0..3}).
+// SMCCC vendor hypervisor UID (function 0x8600FF01); KVM's UUID comes from
+// Linux arch/arm64/kvm/hypercalls.c.
 inline bool is_kvm_guest() {
   register uint64_t x0 asm("x0") = 0x8600FF01ull;
   register uint64_t x1 asm("x1");
@@ -40,32 +38,28 @@ inline bool is_kvm_guest() {
 }
 
 // Whether the requested event is supported on this CPU (per PMCEID{0,1}_EL0).
+// Events 0x00..0x3F and 0x4000..0x403F have a validation bit; higher IDs would
+// need PMCEID3, which is not available in 64-bit mode, so we warn and accept.
 inline bool is_event_supported(uint64_t value) {
   uint64_t pmceid;
   uint64_t cmp;
   if (value < 0x20) {
-    // Supported if pmceid0[value] = 1 (lower 32 bits of PMCEID0_EL0).
     cmp = value;
     asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
   } else if (value < 0x40) {
-    // Supported if pmceid1[value-0x20] = 1 (lower 32 bits of PMCEID1_EL0).
     cmp = value - 0x20;
     asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
   } else if (value < 0x4000) {
-    // No PMCEID3 in 64-bit mode to validate these events against.
     std::cout << "Warning: Requested event 0x" << std::hex << value
               << " could not be checked for compatibility" << std::endl;
     return true;
   } else if (value < 0x4020) {
-    // Supported if pmceid0[value-0x4000] = 1 (upper 32 bits of PMCEID0_EL0).
     cmp = value - 0x4000;
     asm volatile("mrs %0, pmceid0_el0" : "=r"(pmceid));
   } else if (value < 0x4040) {
-    // Supported if pmceid1[value-0x4020] = 1 (upper 32 bits of PMCEID1_EL0).
     cmp = value - 0x4020;
     asm volatile("mrs %0, pmceid1_el0" : "=r"(pmceid));
   } else {
-    // No PMCEID3 in 64-bit mode to validate these events against.
     std::cout << "Warning: Requested event 0x" << std::hex << value
               << " could not be checked for compatibility" << std::endl;
     return true;
@@ -86,8 +80,8 @@ inline void enable_pmu() {
   asm volatile("msr pmcntenclr_el0, %0\n\t"
                "isb" ::"r"((uint64_t)0xFFFFFFFF)
                : "memory");
-  // PMCR_EL0: set E (enable), P (reset event counters), C (reset cycle
-  // counter); clear D (cycle counter divider).
+  // PMCR_EL0: set E|P|C (enable, reset event counters, reset cycle counter);
+  // clear D (cycle counter divider).
   asm volatile("mrs %0, pmcr_el0\n\t"
                "orr %0, %0, #0b111\n\t"
                "and %0, %0, #~0b1000\n\t"
@@ -122,7 +116,7 @@ inline void pmc_start_with_conf(uint32_t counter, uint32_t evt_sel,
   if (!is_event_supported(value))
     return;
 
-  // Write event configuration into corresponding pmevtyperN_el0.
+  // Write event config into the counter's pmevtyperN_el0.
   switch (evt_sel) {
     // clang-format off
   case 0: asm volatile("msr pmevtyper0_el0, %0" : : "r"(value)); break;
@@ -138,12 +132,8 @@ inline void pmc_start_with_conf(uint32_t counter, uint32_t evt_sel,
                  : "memory");
     return;
   }
-  // Synchronise pipeline before enabling the counter.
   asm volatile("isb" ::: "memory");
-
   asm volatile("msr pmcntenset_el0, %0" : : "r"(1ull << counter));
-
-  // Synchronise pipeline before counting starts.
   asm volatile("isb" ::: "memory");
 }
 

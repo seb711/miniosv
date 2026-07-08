@@ -50,22 +50,18 @@ inline uint32_t pmu_num_counters() {
   return (r.c & (1u << 23)) ? 6 : 4;
 }
 
-// x86 has no MIDR register; the shim keeps architecture-neutral callers free
-// of ifdefs.
+// x86 has no MIDR register — shim for arch-neutral callers.
 inline bool is_midr(uint32_t) { return false; }
 
-// KVM-guest probing is ARM-only in the front-end (used to work around a
-// Neoverse V1 + KVM PMU quirk). Returning false on x86 keeps the callsite
-// arch-neutral.
+// KVM-guest probing is only used by the ARM Neoverse V1 workaround.
 inline bool is_kvm_guest() { return false; }
 
 inline constexpr uint32_t intel_msr_perf_global_ctrl = 0x38Fu;
 
 inline void enable_pmu() {
-  if (!is_intel()) {
-    // AMD: PMU is enabled by default.
+  // AMD PMU is enabled by default; nothing to do.
+  if (!is_intel())
     return;
-  }
   uint32_t n = pmu_num_counters();
   if (n == 0)
     return;
@@ -87,49 +83,76 @@ inline void pmc_start_with_conf(uint32_t /*ctr*/, uint32_t evt_sel,
 inline uint64_t pmc_read(uint32_t ctr) { return processor::rdmsr(ctr); }
 
 namespace PERF_COUNT_HW {
-namespace detail {
-// PerfEvtSel-style encoding shared by both vendors:
-// bit22=EN, bit17=OS, bit16=USR, bits8-15=UMask, bits0-7=Event Select.
+// PerfEvtSel encoding: bit22=EN, bit17=OS, bit16=USR, bits8-15=UMask,
+// bits0-7=Event Select. Both vendors share this layout.
 constexpr uint64_t encode(uint8_t event, uint8_t umask) {
   return 0x430000ull | (static_cast<uint64_t>(umask) << 8) | event;
 }
 
 using enum PMClass;
 
+// Vendor-specific event catalogues. Codes and UMasks are taken from:
+//   - AMD Family 19h (Zen 3/4) Processor Programming Reference, PMCx event
+//     table.
+//   - Intel SDM Vol 3B, chapters 19-20 (architectural + Skylake/Ice Lake
+//     table). Events picked here work on Skylake and later.
 // clang-format off
-constexpr PMCEvent AMD_CPU_CYCLES         = {encode(0x76, 0x00), CORE, "cpu-cycles"};
-constexpr PMCEvent AMD_STALL_FRONTEND     = {encode(0xA9, 0x00), CORE, "stall-frontend"};
-constexpr PMCEvent AMD_INSTRUCTIONS       = {encode(0xC0, 0x00), CORE, "instructions"};
-constexpr PMCEvent AMD_BRANCH_PREDICTION  = {encode(0xC2, 0x00), CORE, "branch-predictions"};
-constexpr PMCEvent AMD_BRANCH_MISS        = {encode(0xC3, 0x00), CORE, "branch-misses"};
-constexpr PMCEvent AMD_LLC_CACHE_MISS     = {encode(0x64, 0x09), CORE, "llc-cache-misses"};
-constexpr PMCEvent AMD_LLC_CACHE          = {encode(0x29, 0x07), CORE, "llc-cache-accesses"};
-constexpr PMCEvent AMD_TLB_FLUSHES        = {encode(0x78, 0xFF), CORE, "tlb-flushes"};
-constexpr PMCEvent INTEL_CPU_CYCLES        = {encode(0x3C, 0x00), CORE, "cpu-cycles"};
-constexpr PMCEvent INTEL_INSTRUCTIONS      = {encode(0xC0, 0x00), CORE, "instructions"};
-constexpr PMCEvent INTEL_BRANCH_PREDICTION = {encode(0xC4, 0x00), CORE, "branch-predictions"};
-constexpr PMCEvent INTEL_BRANCH_MISS       = {encode(0xC5, 0x00), CORE, "branch-misses"};
-constexpr PMCEvent INTEL_LLC_CACHE         = {encode(0x2E, 0x4F), CORE, "llc-cache-accesses"};
-constexpr PMCEvent INTEL_LLC_CACHE_MISS    = {encode(0x2E, 0x41), CORE, "llc-cache-misses"};
-constexpr PMCEvent INTEL_STALL_FRONTEND    = {encode(0x9C, 0x01), CORE, "stall-frontend"};
-// clang-format on
-} // namespace detail
+namespace AMD {
+constexpr PMCEvent CPU_CYCLES        = {encode(0x76, 0x00), CORE, "cpu-cycles"};
+constexpr PMCEvent INSTRUCTIONS      = {encode(0xC0, 0x00), CORE, "instructions"};
+constexpr PMCEvent UOPS_RETIRED      = {encode(0xC1, 0x00), CORE, "uops-retired"};
+constexpr PMCEvent BRANCH_PREDICTION = {encode(0xC2, 0x00), CORE, "branch-predictions"};
+constexpr PMCEvent BRANCH_MISS       = {encode(0xC3, 0x00), CORE, "branch-misses"};
+constexpr PMCEvent BRANCH_TAKEN      = {encode(0xC4, 0x00), CORE, "branch-taken"};
+constexpr PMCEvent STALL_FRONTEND    = {encode(0xA9, 0x00), CORE, "stall-frontend"};
+// PMCx029 (LsDispatch): loads+stores+load-stores dispatched to the LS unit —
+// i.e. all L1 data cache accesses.
+constexpr PMCEvent L1D_ACCESSES      = {encode(0x29, 0x07), CORE, "l1d-accesses"};
+// PMCx045 (LsL1DTlbMiss). UMask 0xFF = any L1 DTLB miss;
+// UMask 0xF0 = L1+L2 DTLB miss, i.e. a full page walk was required
+// (parallel to Intel's *_WALK_COMPLETED).
+constexpr PMCEvent DTLB_L1_MISS      = {encode(0x45, 0xFF), CORE, "dtlb-l1-miss"};
+constexpr PMCEvent DTLB_WALK         = {encode(0x45, 0xF0), CORE, "dtlb-walk"};
+constexpr PMCEvent TLB_FLUSHES       = {encode(0x78, 0xFF), CORE, "tlb-flushes"};
+// PMCx064 (L2CacheReqStat) UMask 0x09 = LsRdBlkC + LsRdBlkX — L2 requests
+// for cacheable read blocks. Retained for compat; not a true "LLC miss".
+constexpr PMCEvent LLC_CACHE_MISS    = {encode(0x64, 0x09), CORE, "llc-cache-misses"};
+} // namespace AMD
 
-inline const PMCEvent CPU_CYCLES =
-    is_intel() ? detail::INTEL_CPU_CYCLES : detail::AMD_CPU_CYCLES;
-inline const PMCEvent INSTRUCTIONS =
-    is_intel() ? detail::INTEL_INSTRUCTIONS : detail::AMD_INSTRUCTIONS;
-inline const PMCEvent BRANCH_PREDICTION = is_intel()
-                                              ? detail::INTEL_BRANCH_PREDICTION
-                                              : detail::AMD_BRANCH_PREDICTION;
-inline const PMCEvent BRANCH_MISS =
-    is_intel() ? detail::INTEL_BRANCH_MISS : detail::AMD_BRANCH_MISS;
-inline const PMCEvent L2_CACHE_MISS =
-    is_intel() ? detail::INTEL_LLC_CACHE_MISS : detail::AMD_LLC_CACHE_MISS;
-inline const PMCEvent L2_CACHE =
-    is_intel() ? detail::INTEL_LLC_CACHE : detail::AMD_LLC_CACHE;
-inline const PMCEvent STALL_FRONTEND =
-    is_intel() ? detail::INTEL_STALL_FRONTEND : detail::AMD_STALL_FRONTEND;
+namespace INTEL {
+constexpr PMCEvent CPU_CYCLES        = {encode(0x3C, 0x00), CORE, "cpu-cycles"};
+constexpr PMCEvent INSTRUCTIONS      = {encode(0xC0, 0x00), CORE, "instructions"};
+constexpr PMCEvent UOPS_RETIRED      = {encode(0xC2, 0x02), CORE, "uops-retired"};
+constexpr PMCEvent BRANCH_PREDICTION = {encode(0xC4, 0x00), CORE, "branch-predictions"};
+constexpr PMCEvent BRANCH_MISS       = {encode(0xC5, 0x00), CORE, "branch-misses"};
+constexpr PMCEvent STALL_FRONTEND    = {encode(0x9C, 0x01), CORE, "stall-frontend"};
+// MEM_LOAD_RETIRED.L1_MISS.
+constexpr PMCEvent L1D_CACHE_MISS    = {encode(0xD1, 0x08), CORE, "l1d-cache-misses"};
+// MEM_INST_RETIRED.ALL_LOADS / ALL_STORES.
+constexpr PMCEvent LOADS_RETIRED     = {encode(0xD0, 0x81), CORE, "loads-retired"};
+constexpr PMCEvent STORES_RETIRED    = {encode(0xD0, 0x82), CORE, "stores-retired"};
+// DTLB_LOAD_MISSES.WALK_COMPLETED / ITLB_MISSES.WALK_COMPLETED — count of
+// fully-completed page walks (any page size).
+constexpr PMCEvent DTLB_LOAD_WALK    = {encode(0x08, 0x0E), CORE, "dtlb-load-walk"};
+constexpr PMCEvent ITLB_WALK         = {encode(0x85, 0x0E), CORE, "itlb-walk"};
+// LONGEST_LAT_CACHE.REFERENCE / .MISS.
+constexpr PMCEvent LLC_CACHE         = {encode(0x2E, 0x4F), CORE, "llc-cache-accesses"};
+constexpr PMCEvent LLC_CACHE_MISS    = {encode(0x2E, 0x41), CORE, "llc-cache-misses"};
+} // namespace INTEL
+// clang-format on
+
+// Vendor-neutral aliases picked at runtime. Events without a good match on
+// both vendors are exposed only under AMD::/INTEL:: above.
+inline const PMCEvent CPU_CYCLES        = is_intel() ? INTEL::CPU_CYCLES        : AMD::CPU_CYCLES;
+inline const PMCEvent INSTRUCTIONS      = is_intel() ? INTEL::INSTRUCTIONS      : AMD::INSTRUCTIONS;
+inline const PMCEvent UOPS_RETIRED      = is_intel() ? INTEL::UOPS_RETIRED      : AMD::UOPS_RETIRED;
+inline const PMCEvent BRANCH_PREDICTION = is_intel() ? INTEL::BRANCH_PREDICTION : AMD::BRANCH_PREDICTION;
+inline const PMCEvent BRANCH_MISS       = is_intel() ? INTEL::BRANCH_MISS       : AMD::BRANCH_MISS;
+inline const PMCEvent STALL_FRONTEND    = is_intel() ? INTEL::STALL_FRONTEND    : AMD::STALL_FRONTEND;
+inline const PMCEvent L2_CACHE_MISS     = is_intel() ? INTEL::LLC_CACHE_MISS    : AMD::LLC_CACHE_MISS;
+// AMD does not expose a direct L2/LLC access counter through the core PMCs; on
+// AMD this alias reports L1D accesses instead (matches pre-existing behaviour).
+inline const PMCEvent L2_CACHE          = is_intel() ? INTEL::LLC_CACHE         : AMD::L1D_ACCESSES;
 } // namespace PERF_COUNT_HW
 
 } // namespace perf

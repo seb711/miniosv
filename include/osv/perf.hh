@@ -1,18 +1,8 @@
 #pragma once
 
-// Disclaimer
-// This header targets new AMD, Intel and ARM chips and does not provide
-// backward compatibility. Tested chips are: For x86
-//    - AMD Zen 4
-//    - AMD Zen 5
-//    - Intel Skylake
-// For ARM
-//    - Ampere-1a
-//    - Neoverse V-1
-//    - Neoverse V-2
-//
-// Architecture-specific PMU access (MSR reads/writes, mrs/msr helpers,
-// event catalogue, CPU detection) lives in arch/$(arch)/arch-perf.hh.
+// Perf-counter front-end. Targets recent chips only; no backward compat.
+// Tested: x86 = AMD Zen 4/5, Intel Skylake; ARM = Ampere-1a, Neoverse V1/V2.
+// Arch-specific PMU access lives in arch/$(arch)/arch-perf.hh.
 
 #include <algorithm>
 #include <atomic>
@@ -29,22 +19,18 @@
 
 namespace perf {
 
-// Some architectures distinguish between different classes of PMC. On ARM the
-// cycle counter is a dedicated register; on x86 the enum only carries CORE.
+// Class of PMC. ARM has a dedicated cycle counter register; x86 only has CORE.
 enum class PMClass { CORE, CYCLES };
 
-// A Performance Measurement Counter event: bitmap gets programmed into the
-// event-select register of a counter of class `pmClass`.
+// Event descriptor: bitmap goes into the counter's event-select register.
 struct PMCEvent {
   uint64_t bitmap;
   PMClass pmClass;
   const char *name;
 };
 
-// ARM MIDR (Main ID Register) value used by PMCSelectCore to work around
-// counter 0 misbehaving on Neoverse V1 + KVM. Implementer=0x41 (ARM),
-// Arch=0xF, Part=0xD40. Defined here (not in the ARM back-end) because the
-// architecture-neutral front-end uses it via is_midr().
+// Neoverse V1 MIDR (Implementer=0x41, Arch=0xF, Part=0xD40). Front-end owns
+// this because it's used by the arch-neutral PMCSelectCore workaround.
 inline constexpr uint32_t midr_neoverse_v1 = 0x410F'D400u;
 
 } // namespace perf
@@ -58,20 +44,14 @@ inline constexpr uint32_t midr_neoverse_v1 = 0x410F'D400u;
 
 namespace perf {
 
-// A Performance Measurement Counter (PMC) represents a physical counter and
-// its corresponding configuration register.
+// Physical counter + its config register.
 struct PMC {
-  // Register that specifies which event is counted and controls counter
-  // operation (on ARM this doubles as the counter index for the pmevtyperN_el0
-  // selector).
+  // Event-select register; on ARM also indexes pmevtyperN_el0.
   uint32_t perfEvtSel;
-
-  // Register used to read the counter value.
+  // Counter-value register.
   uint32_t perfCtr;
-
   PMClass pmClass;
-
-  // Whether or not this PMC is currently counting.
+  // True when the counter is available for reservation.
   mutable std::atomic<bool> free{true};
 
   PMC(uint32_t perfEvtSel, uint32_t perfCtr, PMClass pmClass)
@@ -157,9 +137,8 @@ protected:
   std::vector<PMC> pmcs;
 };
 
-// Specification for core-local counters.
-// Adjusts the number of available counters at runtime, since AWS slices the
-// number of counters per VM.
+// Core-local counter selection. Adjusts the counter count at runtime because
+// AWS slices the number of counters per VM.
 struct PMCSelectCore : PMCSelect {
   explicit PMCSelectCore(std::vector<PMC> pmcs) : PMCSelect(std::move(pmcs)) {
     uint32_t act_ctrs = pmu_num_counters();
@@ -186,10 +165,8 @@ struct PMCSelectCore : PMCSelect {
       : PMCSelectCore(std::vector<PMC>(pmcs)) {}
 };
 
-// Builds the default core-local counter list for this platform: the MSR
-// addresses and PMC count are AMD- or Intel-specific on x86 (resolved at
-// runtime via CPUID), and fixed for ARM (resolved from pmcr_el0 by
-// PMCSelectCore itself).
+// Default core-local counter list. Counter MSRs are vendor-specific on x86
+// (resolved at runtime via CPUID); ARM uses fixed indices.
 inline std::vector<PMC> make_default_core_pmcs() {
   std::vector<PMC> pmcs;
 #if defined(__x86_64__)
@@ -213,9 +190,7 @@ inline std::vector<PMC> make_default_core_pmcs() {
   return pmcs;
 }
 
-// ---------------------------------------
-// High level measurement logic
-// ---------------------------------------
+// ---------------- High-level measurement API ----------------
 
 struct Event {
   PMCEvent pmce;
@@ -259,23 +234,19 @@ private:
 // Shim layer to match https://github.com/viktorleis/perfevent.
 struct PerfEvent {
 private:
-  // By default, each collection operates on known core-local counters, but
-  // selections can also be shared between cores to measure uncore counters
-  // (e.g. L3 cache counters).
+  // Owned when no external selection is supplied. Sharing a PMCSelect between
+  // PerfEvents lets multiple collections coordinate uncore counters.
   PMCSelectCore default_pmcs{make_default_core_pmcs()};
 
 public:
-  // The selection of hardware counters available to this collection.
   PMCSelect &pmcs = default_pmcs;
-  // A vector of registered events. Must not be larger than the number of
-  // available hardware counters.
+  // Must not exceed the number of hardware counters in `pmcs`.
   std::vector<Event> events;
 
   std::chrono::time_point<std::chrono::steady_clock> startTime;
   std::chrono::time_point<std::chrono::steady_clock> stopTime;
 
-  // Constructor to use with default set of counters.
-  // Common use case: on-core measurements, single collection per core.
+  // Uses this instance's own core-local counter set.
   PerfEvent(bool set_default_counters = true) {
     enable_pmu();
 
@@ -287,8 +258,7 @@ public:
     }
   }
 
-  // Constructor to use with custom set of counters.
-  // Common use case: share counters between multiple collections.
+  // Shares a counter selection with other PerfEvents.
   PerfEvent(PMCSelect &pmcSelect) : pmcs(pmcSelect) { enable_pmu(); }
 
   void registerCounter(PMCEvent pmce) { events.emplace_back(pmce, pmcs); }
@@ -324,8 +294,7 @@ public:
         .count();
   }
 
-  // IPC is calculated from the instructions and cycle counter.
-  // If one of them is not counted, this function returns NaN.
+  // Returns NaN if either instructions or cycles isn't being counted.
   double getIPC() const {
     double res = getCounter(PERF_COUNT_HW::INSTRUCTIONS.name) /
                  getCounter(PERF_COUNT_HW::CPU_CYCLES.name);
