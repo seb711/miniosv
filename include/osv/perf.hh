@@ -253,7 +253,7 @@ public:
     if (set_default_counters) {
       registerCounter(PERF_COUNT_HW::CPU_CYCLES);
       registerCounter(PERF_COUNT_HW::INSTRUCTIONS);
-      registerCounter(PERF_COUNT_HW::L2_CACHE_MISS);
+      registerCounter(PERF_COUNT_HW::LLC_CACHE_MISS);
       registerCounter(PERF_COUNT_HW::BRANCH_MISS);
     }
   }

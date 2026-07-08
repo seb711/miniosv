@@ -149,10 +149,10 @@ inline const PMCEvent UOPS_RETIRED      = is_intel() ? INTEL::UOPS_RETIRED      
 inline const PMCEvent BRANCH_PREDICTION = is_intel() ? INTEL::BRANCH_PREDICTION : AMD::BRANCH_PREDICTION;
 inline const PMCEvent BRANCH_MISS       = is_intel() ? INTEL::BRANCH_MISS       : AMD::BRANCH_MISS;
 inline const PMCEvent STALL_FRONTEND    = is_intel() ? INTEL::STALL_FRONTEND    : AMD::STALL_FRONTEND;
-inline const PMCEvent L2_CACHE_MISS     = is_intel() ? INTEL::LLC_CACHE_MISS    : AMD::LLC_CACHE_MISS;
+inline const PMCEvent LLC_CACHE_MISS     = is_intel() ? INTEL::LLC_CACHE_MISS    : AMD::LLC_CACHE_MISS;
 // AMD does not expose a direct L2/LLC access counter through the core PMCs; on
 // AMD this alias reports L1D accesses instead (matches pre-existing behaviour).
-inline const PMCEvent L2_CACHE          = is_intel() ? INTEL::LLC_CACHE         : AMD::L1D_ACCESSES;
+inline const PMCEvent LLC_CACHE          = is_intel() ? INTEL::LLC_CACHE         : AMD::L1D_ACCESSES;
 } // namespace PERF_COUNT_HW
 
 } // namespace perf
