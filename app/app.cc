@@ -9,8 +9,9 @@
 // the machine off so a run exits cleanly. The conformance and stress suites
 // that used to live here now build with `make app=tests` (see test/).
 
-#include <cstdio>
+#include <cstdint>
 #include <osv/power.hh>
+#include <osv/perf.hh>
 
 extern "C" void osv_app_main()
 {
