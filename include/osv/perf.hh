@@ -31,6 +31,8 @@
 #error Unsuported target architecture
 #endif
 
+namespace perf {
+
 #ifdef ARCH_TARGET_X86_64
 
 enum class CpuVendor { AMD, INTEL, UNKNOWN };
@@ -263,8 +265,6 @@ inline uint64_t msr_read(uint32_t counter) {
 
 // Implementer=0x41, Arch=0xF, Part=0xD46
 inline constexpr uint32_t midr_neoverseV1 = 0x410F'D400u;
-
-namespace uperf {
 
 // ---------------------------------------
 // Declaration of required data structures
@@ -642,10 +642,7 @@ private:
   PMC *pmc;
 };
 
-}; // namespace uperf
-
 // Shim layer to match https://github.com/viktorleis/perfevent
-using namespace uperf;
 struct PerfEvent {
 private:
   // By default, each collection operates on known core-local counters,
@@ -655,10 +652,10 @@ private:
 
 public:
   // The selection of hardware counters available to this collection.
-  uperf::PMCSelect &pmcs = default_pmcs;
+  PMCSelect &pmcs = default_pmcs;
   // A vector of registered events. Must not be larger than the number of
   // available hardware counters.
-  std::vector<uperf::Event> events;
+  std::vector<Event> events;
 
   std::chrono::time_point<std::chrono::steady_clock> startTime;
   std::chrono::time_point<std::chrono::steady_clock> stopTime;
@@ -901,3 +898,5 @@ struct PerfEventBlock {
     std::cout << data.str() << std::endl;
   }
 };
+
+}; // namespace perf

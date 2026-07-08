@@ -11,12 +11,12 @@
 
 #include <cstdint>
 #include <osv/power.hh>
-#include <osv/uperf.hh>
+#include <osv/perf.hh>
 
 constexpr uint64_t n = 1ul << 20;
 
 extern "C" void osv_app_main() {
-  PerfEvent e;
+  perf::PerfEvent e;
   e.startCounters();
 
   for (uint64_t i{0}; i < n; ++i)
