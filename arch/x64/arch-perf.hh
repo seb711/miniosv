@@ -114,9 +114,9 @@ constexpr PMCEvent L1D_ACCESSES      = {encode(0x29, 0x07), CORE, "l1d-accesses"
 constexpr PMCEvent DTLB_L1_MISS      = {encode(0x45, 0xFF), CORE, "dtlb-l1-miss"};
 constexpr PMCEvent DTLB_WALK         = {encode(0x45, 0xF0), CORE, "dtlb-walk"};
 constexpr PMCEvent TLB_FLUSHES       = {encode(0x78, 0xFF), CORE, "tlb-flushes"};
-// PMCx064 (L2CacheReqStat) UMask 0x09 = LsRdBlkC + LsRdBlkX — L2 requests
-// for cacheable read blocks. Retained for compat; not a true "LLC miss".
-constexpr PMCEvent LL_CACHE_MISS    = {encode(0x64, 0x09), CORE, "ll-cache-misses"};
+// PMCx064 (L2CacheReqStat) UMask 0x09 = cacheable read blocks, i.e. L2 read
+// misses. AMD has no true L3-miss core PMC, so this backs LL_CACHE_MISS too.
+constexpr PMCEvent L2D_CACHE_MISS   = {encode(0x64, 0x09), CORE, "l2d-cache-misses"};
 } // namespace AMD
 
 namespace INTEL {
@@ -128,6 +128,8 @@ constexpr PMCEvent BRANCH_MISS       = {encode(0xC5, 0x00), CORE, "branch-misses
 constexpr PMCEvent STALL_FRONTEND    = {encode(0x9C, 0x01), CORE, "stall-frontend"};
 // MEM_LOAD_RETIRED.L1_MISS.
 constexpr PMCEvent L1D_CACHE_MISS    = {encode(0xD1, 0x08), CORE, "l1d-cache-misses"};
+// MEM_LOAD_RETIRED.L2_MISS.
+constexpr PMCEvent L2D_CACHE_MISS    = {encode(0xD1, 0x10), CORE, "l2d-cache-misses"};
 // MEM_INST_RETIRED.ALL_LOADS / ALL_STORES.
 constexpr PMCEvent LOADS_RETIRED     = {encode(0xD0, 0x81), CORE, "loads-retired"};
 constexpr PMCEvent STORES_RETIRED    = {encode(0xD0, 0x82), CORE, "stores-retired"};
@@ -149,7 +151,9 @@ inline const PMCEvent UOPS_RETIRED      = is_intel() ? INTEL::UOPS_RETIRED      
 inline const PMCEvent BRANCH_PREDICTION = is_intel() ? INTEL::BRANCH_PREDICTION : AMD::BRANCH_PREDICTION;
 inline const PMCEvent BRANCH_MISS       = is_intel() ? INTEL::BRANCH_MISS       : AMD::BRANCH_MISS;
 inline const PMCEvent STALL_FRONTEND    = is_intel() ? INTEL::STALL_FRONTEND    : AMD::STALL_FRONTEND;
-inline const PMCEvent LL_CACHE_MISS     = is_intel() ? INTEL::LL_CACHE_MISS    : AMD::LL_CACHE_MISS;
+inline const PMCEvent L2D_CACHE_MISS    = is_intel() ? INTEL::L2D_CACHE_MISS   : AMD::L2D_CACHE_MISS;
+// AMD has no true L3-miss core PMC; the LLC alias falls back to L2 there.
+inline const PMCEvent LL_CACHE_MISS     = is_intel() ? INTEL::LL_CACHE_MISS    : AMD::L2D_CACHE_MISS;
 // AMD does not expose a direct L2/LL access counter through the core PMCs; on
 // AMD this alias reports L1D accesses instead (matches pre-existing behaviour).
 inline const PMCEvent LL_CACHE          = is_intel() ? INTEL::LL_CACHE         : AMD::L1D_ACCESSES;

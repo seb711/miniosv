@@ -265,8 +265,9 @@ constexpr PMCEvent STALL_OP_BACKEND = {0x3D, CORE, ""};
 constexpr PMCEvent STALL_OP_FRONTEND = {0x3E, CORE, ""};
 // No operation sent for execution on a slot
 constexpr PMCEvent STALL_OP = {0x3F, CORE, ""};
-// Last level cache read miss
-constexpr PMCEvent LL_CACHE_MISS = {0x4009, CORE, "ll-cache-misses"};
+
+// Level 2 data cache long-latency read miss (Armv8.4/Armv9 0x40xx range).
+constexpr PMCEvent L2D_CACHE_MISS = {0x4009, CORE, "l2d-cache-misses"};
 } // namespace PERF_COUNT_HW
 
 } // namespace perf
