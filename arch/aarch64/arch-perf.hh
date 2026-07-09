@@ -248,9 +248,9 @@ constexpr PMCEvent L3D_CACHE = {0x2B, CORE, "l3d-cache-accesses"};
 // Attributable Level 3 data cache access write-back
 constexpr PMCEvent L3D_CACHE_WB = {0x2C, CORE, "l3d-cache-writebacks"};
 // Last level data cache read
-constexpr PMCEvent LL_CACHE = {0x36, CORE, "llc-cache-accesses"};
+constexpr PMCEvent LL_CACHE = {0x36, CORE, "ll-cache-accesses"};
 // Last level data cache read miss
-constexpr PMCEvent LL_CACHE_MISS = {0x37, CORE, "llc-cache-misses"};
+constexpr PMCEvent LL_CACHE_MISS = {0x37, CORE, "ll-cache-misses"};
 // Level 1 data cache read miss
 constexpr PMCEvent L1D_CACHE_MISS = {0x39, CORE, "l1d-cache-misses"};
 // Operation retired
@@ -265,8 +265,8 @@ constexpr PMCEvent STALL_OP_BACKEND = {0x3D, CORE, ""};
 constexpr PMCEvent STALL_OP_FRONTEND = {0x3E, CORE, ""};
 // No operation sent for execution on a slot
 constexpr PMCEvent STALL_OP = {0x3F, CORE, ""};
-// LLC cache read miss
-constexpr PMCEvent LLC_CACHE_MISS = {0x4009, CORE, "llc-cache-misses"};
+// Last level cache read miss
+constexpr PMCEvent LL_CACHE_MISS = {0x4009, CORE, "ll-cache-misses"};
 } // namespace PERF_COUNT_HW
 
 } // namespace perf
