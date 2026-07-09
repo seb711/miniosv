@@ -160,9 +160,6 @@ struct PMCSelectCore : PMCSelect {
       erase_counter(0, 0, PMClass::CORE);
     }
   }
-
-  PMCSelectCore(std::initializer_list<PMC> pmcs)
-      : PMCSelectCore(std::vector<PMC>(pmcs)) {}
 };
 
 // Default core-local counter list. Counter MSRs are vendor-specific on x86
@@ -231,7 +228,6 @@ private:
   PMC *pmc = nullptr;
 };
 
-// Shim layer to match https://github.com/viktorleis/perfevent.
 struct PerfEvent {
 private:
   // Owned when no external selection is supplied. Sharing a PMCSelect between
