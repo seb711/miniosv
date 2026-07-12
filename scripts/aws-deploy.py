@@ -4,11 +4,13 @@ import os
 import json
 import hashlib
 import base64
+import signal
 import subprocess
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 import argparse
 
 BLOCK_SIZE = 524288  # 512 KiB
@@ -64,6 +66,116 @@ def upload_block_worker(ebs_client, snapshot_id, block_index, data, counters, co
         if current_processed % 50 == 0 or current_processed == total_blocks:
             pct = current_processed / total_blocks * 100
             print(f"  {current_processed}/{total_blocks} blocks ({pct:.1f}%), {current_changed} uploaded")
+
+def _next_console_chunk(prev: str, current: str) -> str:
+    """Return the portion of `current` that comes after `prev` ended.
+
+    Handles the case where AWS truncates the front of the 64 KB console
+    buffer once boot output grows past it — a naive line-count offset would
+    silently skip content.
+    """
+    if not prev:
+        return current
+    if current.startswith(prev):
+        return current[len(prev):]
+    # Front-truncated: search for a shrinking suffix of prev inside current.
+    # Start with a decent chunk to avoid spurious partial-line matches, but
+    # scale the floor to `prev`'s actual length so short prevs still match.
+    max_suffix = min(len(prev), 4096)
+    min_suffix = min(16, max_suffix)
+    step = max(1, (max_suffix - min_suffix) // 32) or 1
+    for suffix_len in range(max_suffix, min_suffix - 1, -step):
+        suffix = prev[-suffix_len:]
+        idx = current.rfind(suffix)
+        if idx != -1:
+            return current[idx + suffix_len:]
+    # No overlap at all: log rotated past everything we had. Show all of
+    # current with a marker so the user can tell where they lost context.
+    return "\n[--- console buffer rotated past last seen output ---]\n" + current
+
+
+def cleanup_aws_resources(ec2_client, instance_id=None, ami_id=None,
+                          snapshot_id=None):
+    """Best-effort teardown of anything that would keep costing money.
+
+    Each step is guarded so a failure in one still lets the others run.
+    Called from both KeyboardInterrupt and SIGTERM paths.
+    """
+    if instance_id:
+        try:
+            print(f"\nTerminating instance {instance_id}...", flush=True)
+            ec2_client.terminate_instances(InstanceIds=[instance_id])
+            # AWS billing stops as soon as the instance reaches
+            # `shutting-down`; the full `terminated` state can take another
+            # 1-2 minutes and blocks the caller for no operational benefit.
+            for _ in range(30):
+                try:
+                    desc = ec2_client.describe_instances(
+                        InstanceIds=[instance_id])
+                    state = desc["Reservations"][0]["Instances"][0]["State"][
+                        "Name"]
+                except (BotoCoreError, ClientError):
+                    state = None
+                if state in ("shutting-down", "terminated", "stopped"):
+                    print(f"Instance {instance_id} is {state}.", flush=True)
+                    break
+                time.sleep(2)
+        except (BotoCoreError, ClientError) as e:
+            print(f"WARN: terminate {instance_id} failed: {e}",
+                  file=sys.stderr, flush=True)
+
+    if ami_id:
+        try:
+            print(f"Deregistering AMI {ami_id}...", flush=True)
+            ec2_client.deregister_image(ImageId=ami_id)
+        except (BotoCoreError, ClientError) as e:
+            print(f"WARN: deregister {ami_id} failed: {e}",
+                  file=sys.stderr, flush=True)
+
+    if snapshot_id:
+        try:
+            print(f"Deleting snapshot {snapshot_id}...", flush=True)
+            ec2_client.delete_snapshot(SnapshotId=snapshot_id)
+        except (BotoCoreError, ClientError) as e:
+            print(f"WARN: delete snapshot {snapshot_id} failed: {e}",
+                  file=sys.stderr, flush=True)
+
+
+def stream_console(ec2_client, instance_id, poll_interval=5):
+    """Tail the serial console until KeyboardInterrupt.
+
+    Uses full-string overlap detection so that once the console buffer
+    (~64 KB) rolls, we keep printing new content instead of silently
+    freezing on a stale line offset.
+    """
+    print("Waiting for console output (usually 30-120s after launch)...",
+          flush=True)
+    printed = ""
+    saw_any = False
+    while True:
+        try:
+            resp = ec2_client.get_console_output(
+                InstanceId=instance_id, Latest=True)
+        except (BotoCoreError, ClientError) as e:
+            print(f"[console poll error, retrying: {e}]",
+                  file=sys.stderr, flush=True)
+            time.sleep(poll_interval)
+            continue
+
+        output = resp.get("Output", "") or ""
+        if output and output != printed:
+            if not saw_any:
+                saw_any = True
+            new_chunk = _next_console_chunk(printed, output)
+            if new_chunk:
+                sys.stdout.write(new_chunk)
+                if not new_chunk.endswith("\n"):
+                    sys.stdout.write("\n")
+                sys.stdout.flush()
+            printed = output
+
+        time.sleep(poll_interval)
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -227,26 +339,24 @@ def main():
     print(f"  Public IP:  {public_ip}")
 
     if args.attach:
-        print("\nStreaming system log (Ctrl+C to stop and terminate instance)...")
-        seen_lines = 0
+        print("\nStreaming system log "
+              "(Ctrl+C to terminate instance and delete AMI/snapshot)...")
 
-        def terminate_and_exit():
-            print(f"\nTerminating instance {instance_id}...")
-            ec2_client.terminate_instances(InstanceIds=[instance_id])
-            print(f"Termination request sent to instance {instance_id}.")
+        # Route SIGTERM to the same teardown path as SIGINT so `kill <pid>`
+        # from another shell also cleans up.
+        def _sigterm_handler(signum, frame):
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGTERM, _sigterm_handler)
 
         try:
-            while True:
-                log_response = ec2_client.get_console_output(InstanceId=instance_id, Latest=True)
-                output = log_response.get("Output", "")
-                if output:
-                    lines = output.splitlines()
-                    if len(lines) > seen_lines:
-                        print("\n".join(lines[seen_lines:]), flush=True)
-                        seen_lines = len(lines)
-                time.sleep(5)
+            stream_console(ec2_client, instance_id)
         except KeyboardInterrupt:
-            terminate_and_exit()
+            cleanup_aws_resources(
+                ec2_client,
+                instance_id=instance_id,
+                ami_id=ami_id,
+                snapshot_id=snapshot_id,
+            )
 
 if __name__ == "__main__":
     main()
