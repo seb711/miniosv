@@ -10,21 +10,12 @@
 // that used to live here now build with `make app=tests` (see test/).
 
 #include <cstdint>
-#include <iostream>
 #include <osv/power.hh>
 #include <osv/perf.hh>
 
 extern "C" void osv_app_main()
 {
     printf("Hello, world from OSv!\n");
-
-    // Small perf demo: measure a busy loop with the default hardware counters.
-    perf::PerfEvent perf;
-    perf.startCounters();
-    for (volatile int i = 0; i < 1'000'000; i = i + 1);
-    perf.stopCounters();
-    perf.printReport(std::cout, 1);
-
     // Do not power off: keep the machine running so the boot output stays
     // visible on the (cloud) serial console instead of the instance stopping
     // the moment it finishes booting. The empty asm keeps the compiler from
