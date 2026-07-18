@@ -10,6 +10,31 @@ let
   llvmPkgs = pkgs.llvmPackages_20;
   inherit (nixpkgs) lib;
 
+  # A source is the cwd sentinel if it still carries the marker file. In
+  # that case we swap in a derivation that fails to build with usage
+  # instructions, so eval (nix flake check) stays clean but any `nix build`
+  # against it prints the message.
+  checkAppSrc =
+    appName: appSrc:
+    if builtins.pathExists (appSrc + "/CWD_SENTINEL") then
+      pkgs.runCommandNoCC "miniosv-${appName}-needs-override" { } ''
+        cat >&2 <<'EOF'
+        The `${appName}` flake input has not been overridden. Point it at
+        your app tree, e.g.:
+
+            nix build --override-input ${appName} "path:$PWD" \
+                github:seb711/miniosv#${appName}-x86_64
+
+        Or, from a downstream flake:
+
+            inputs.miniosv.inputs.${appName}.url = "path:./my-app";
+        EOF
+        exit 1
+      ''
+    else
+      appSrc;
+  checkedApps = lib.mapAttrs checkAppSrc apps;
+
   # Per-arch metadata. Add a new target arch by adding a row here.
   arches = {
     x64 = {
@@ -125,7 +150,11 @@ let
 
   # Cross-product: apps × arches → { "<app>-<linuxName>" = variant; ... }.
   variants = lib.concatMapAttrs (
-    appName: appSrc:
+    appName: _appSrc:
+    # Force the sentinel check by taking appSrc from checkedApps; an
+    # unoverridden `cwd` throws with a helpful message when this attr is
+    # forced (e.g. by nix build .#cwd-x86_64).
+    let appSrc = checkedApps.${appName}; in
     lib.mapAttrs' (
       targetArch: arch:
       lib.nameValuePair "${appName}-${arch.linuxName}" (buildVariant {

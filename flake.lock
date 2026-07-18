@@ -1,5 +1,17 @@
 {
   "nodes": {
+    "cwd": {
+      "flake": false,
+      "locked": {
+        "path": "./nix/cwd-sentinel",
+        "type": "path"
+      },
+      "original": {
+        "path": "./nix/cwd-sentinel",
+        "type": "path"
+      },
+      "parent": []
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -53,6 +65,7 @@
     },
     "root": {
       "inputs": {
+        "cwd": "cwd",
         "flake-utils": "flake-utils",
         "miniduckdb": "miniduckdb",
         "nixpkgs": "nixpkgs"
