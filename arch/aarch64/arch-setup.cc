@@ -245,15 +245,27 @@ void arch_setup_free_memory()
     // Step 2: install the real linear mappings for every usable range in each
     // identity-mapped area (page tables come from the low RAM freed above). The
     // kernel-occupied pages are mapped here too (as on x86_64); the kernel also
-    // keeps its separate OSV_KERNEL_VM_BASE window mapped below. Each range is
-    // mapped on its own, so a gap between ranges is never spanned.
+    // keeps its separate OSV_KERNEL_VM_BASE window mapped below.
+    //
+    // Round each range out to 2 MiB (huge-page) boundaries so the mapping is all
+    // aligned 2 MiB blocks. A range that ends mid-2 MiB-page (firmware splits RAM
+    // at 4 KiB boundaries) would otherwise back that page with a 4 KiB L3 table;
+    // ACPI's map_phys() later linear_map()s the same page (a table in the reserved
+    // hole just past the range) as a 2 MiB block, and on aarch64 that table->block
+    // swap without break-before-make is a TLB conflict that hangs the boot. With
+    // everything block-aligned, map_phys() only ever rewrites an identical block.
+    // The extra reserved bytes pulled in by rounding are never freed (steps 1/3
+    // free the exact ranges only).
     for (auto&& area : mmu::identity_mapped_areas) {
         auto base = reinterpret_cast<char*>(get_mem_area_base(area));
         const char *name = area == mmu::mem_area::main ? "main" :
                            area == mmu::mem_area::page ? "page" : "mempool";
         for (unsigned i = 0; i < usable_range_count; i++) {
-            mmu::linear_map(base + usable_ranges[i].addr, usable_ranges[i].addr,
-                            usable_ranges[i].size, name);
+            u64 rstart = usable_ranges[i].addr;
+            u64 rend = rstart + usable_ranges[i].size;
+            u64 mstart = rstart & ~(mmu::huge_page_size - 1);
+            u64 mend = (rend + mmu::huge_page_size - 1) & ~(mmu::huge_page_size - 1);
+            mmu::linear_map(base + mstart, mstart, mend - mstart, name);
         }
     }
 
