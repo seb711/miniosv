@@ -18,6 +18,23 @@
         "type": "github"
       }
     },
+    "miniduckdb": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784368965,
+        "narHash": "sha256-xVUPiGe9cEFYcMTLm31hS5ic3tWFptdwza6g76kLQgA=",
+        "owner": "Martin-Lndbl",
+        "repo": "miniduckdb",
+        "rev": "da84133efc13f6e011ca5e98471676077b6145c9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Martin-Lndbl",
+        "ref": "miniosv-trunk",
+        "repo": "miniduckdb",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1781216227,
@@ -37,6 +54,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "miniduckdb": "miniduckdb",
         "nixpkgs": "nixpkgs"
       }
     },

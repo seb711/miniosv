@@ -1,4 +1,10 @@
-{ stdenv, toolchain, llvmSource, targetArch, self, system ? null }:
+{
+  stdenv,
+  toolchain,
+  llvmSource,
+  targetArch,
+  src,
+}:
 
 # Build LLVM libc as a no-syscall static archive for the target arch, via
 # scripts/build-llvm-libc.sh. We pre-stage the llvm-project sparse checkout so
@@ -9,7 +15,7 @@ stdenv.mkDerivation {
   pname = "miniosv-llvm-libc";
   version = "22.1.7-${targetArch}";
 
-  src = self;
+  inherit src;
 
   nativeBuildInputs = toolchain.buildInputs;
 

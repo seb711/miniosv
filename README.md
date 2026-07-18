@@ -21,13 +21,46 @@ not Linux compatibility.
 
 ## Build & run
 
-```bash
-make                               # build the x86-64 boot image -> build/release.x64/loader.img
-./scripts/run.py                   # boot it under QEMU + UEFI (uses KVM when available)
+The kernel links a single user application statically into the image, taken from `app/`. That
+directory is gitignored — every app lives outside the tree and gets copied in. A reference
+hello-world sits under [`native-example/`](native-example); the Nix flake also packages
+[miniduckdb](https://github.com/Martin-Lndbl/miniduckdb).
 
-make arch=aarch64                  # build the aarch64 image -> build/release.aarch64/loader.img
-./scripts/run.py --arch aarch64    # boot it under QEMU + UEFI (TCG on an x86 host)
+Whatever ends up in `app/` must be **miniOSv-compliant**: a top-level `Makefile` that the kernel
+build includes via `include app/Makefile`, declaring `app-objects = ...` (paths relative to the
+repo root, e.g. `app/foo.o`), and a C/C++ entry point `extern "C" void osv_app_main()`. The
+sources are compiled with the kernel's own flags (no separate userspace toolchain, no libc
+dependencies beyond what the kernel exposes). See [`native-example/`](native-example) for the
+minimum viable shape.
+
+For non-Nix builds, stage the app once before invoking `make`:
+
+```bash
+cp -r native-example app            # or clone any miniOSv-compliant app repo into app/
 ```
+
+Then:
+
+```bash
+make                                # build the x86-64 boot image -> build/release.x64/loader.img
+./scripts/run.py                    # boot it under QEMU + UEFI (uses KVM when available)
+
+make arch=aarch64                   # build the aarch64 image -> build/release.aarch64/loader.img
+./scripts/run.py --arch aarch64     # boot it under QEMU + UEFI (TCG on an x86 host)
+```
+
+Nix users don't need the copy step. Every target names both an app and an arch:
+
+```bash
+nix build .#miniosv-native-example-x86_64        # build the image
+nix run   .#run-native-example-x86_64            # build + boot under QEMU
+nix run   .#aws-deploy-native-example-x86_64 -- eu-north-1 c5.large --attach
+```
+
+`packages.miniosv-<app>-<arch>` is the image (build only); `apps.run-<app>-<arch>` and
+`apps.aws-deploy-<app>-<arch>` are the runnable wrappers. There is no bare `nix build` /
+`nix run` default and no host-arch alias — targets that appear in `apps` are the ones you
+can actually run.
 
 `make` produces a bootable GPT/ESP disk image (`loader.img`); `run.py` boots it as an NVMe disk
 and puts the guest serial console on your terminal (Ctrl-A C for the QEMU monitor, Ctrl-A X to
@@ -36,8 +69,8 @@ and `mtools` + `gdisk` to build the disk image. Override the firmware with the `
 `OVMF_VARS` or `AAVMF_CODE`/`AAVMF_VARS` env vars. `make smoke-test` boots the image headless and
 checks it reaches the kernel.
 
-The default app (`app/app.cc`) is a conformance gate that prints a `PASS`/`FAIL` line per check.
-Build the larger test suite with `make app=tests`.
+Build the larger test suite with `make app=tests` (no `app/` staging needed — that mode reads
+sources from `test/`).
 
 ## License
 

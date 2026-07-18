@@ -1,22 +1,22 @@
-{ stdenv, lib, toolchain, llvmSource, compilerRt, llvmLibc, libcxx
-, targetArch, self, system ? null }:
-
-# Build the miniosv unikernel image (loader.img) for the given target arch.
-# Cross-compilation is driven by `arch=<targetArch>` on the make command line;
-# the Makefile derives CROSS_PREFIX (and clang's --target=<triple>) from the
-# host_arch/target_arch mismatch — pure-LLVM, no GNU cross toolchain.
-#
-# The three C/C++ runtime archives (compiler-rt, llvm-libc, libcxx) come from
-# their own derivations and are pre-staged at the paths make expects, with
-# matching stamp files so the in-tree build scripts stay unused.
+{
+  stdenv,
+  lib,
+  toolchain,
+  llvmSource,
+  compilerRt,
+  llvmLibc,
+  libcxx,
+  targetArch,
+  self,
+  appName,
+  appSrc,
+}:
 
 let
-  # nixpkgs stdenv defaults CC/CXX/LD to its wrappers; we drive clang ourselves
-  # (with our resource-dir wrapper) via the toolchain input, so unset them.
   archName = targetArch;
 in
 stdenv.mkDerivation {
-  pname = "miniosv";
+  pname = "miniosv-${appName}";
   version = archName;
 
   src = self;
@@ -27,9 +27,7 @@ stdenv.mkDerivation {
   dontFixup = true;
   enableParallelBuilding = true;
 
-  # nixpkgs' stdenv exports CC=gcc / LD=ld wrappers that would poison the
-  # kernel's pure-LLVM link. The Makefile pins CC/CXX/LD itself; strip the
-  # env vars so nothing leaks in through the shell.
+  # Prevent stdenv's gcc/ld wrappers from leaking into the pure-LLVM link.
   CC = "";
   CXX = "";
   LD = "";
@@ -44,16 +42,15 @@ stdenv.mkDerivation {
   buildPhase = ''
     runHook preBuild
 
-    # ---- Stage the pinned llvm-project source (kernel -isystem needs
-    #      libunwind/include, and the Makefile's llvm_project_stamp guards
-    #      the whole toolchain sub-build).
+    mkdir -p app
+    cp -r ${appSrc}/. app/
+    chmod -R u+w app
+
     mkdir -p external
     cp -r ${llvmSource} external/llvm-project
     chmod -R u+w external/llvm-project
     touch external/llvm-project/.sparse-ready
 
-    # ---- Stage the three pre-built runtime archives at the paths make
-    #      expects, plus their stamp files under $(out).
     mkdir -p build/compiler-rt/${archName}/lib
     cp ${compilerRt}/lib/libclang_rt.builtins.a \
        build/compiler-rt/${archName}/lib/
@@ -70,8 +67,6 @@ stdenv.mkDerivation {
 
     outDir=build/release.${archName}
     mkdir -p "$outDir"
-    # Stamps first, archives already exist and are older — touch archives
-    # again so they win the mtime race and no rule fires.
     touch "$outDir/.compiler-rt-built"
     touch "$outDir/.llvm-libc-built"
     touch "$outDir/.libcxx-built"
@@ -81,10 +76,6 @@ stdenv.mkDerivation {
 
     patchShebangs scripts
 
-    # Nail down the strip / objcopy / readelf the Makefile picks. The lookup
-    # is `which llvm-strip || which llvm-strip-20 || echo strip`; the fallback
-    # (GNU binutils) works for a native x86_64 build but can't recognise
-    # aarch64 ELF on an x86_64 host. Force llvm-* directly.
     make -j"$NIX_BUILD_CORES" arch=${archName} \
         STRIP=llvm-strip OBJCOPY=llvm-objcopy READELF=llvm-readelf
 
@@ -102,7 +93,10 @@ stdenv.mkDerivation {
   '';
 
   meta = with lib; {
-    description = "miniosv unikernel image (${archName})";
-    platforms = [ "x86_64-linux" "aarch64-linux" ];
+    description = "miniosv unikernel image with ${appName} app (${archName})";
+    platforms = [
+      "x86_64-linux"
+      "aarch64-linux"
+    ];
   };
 }

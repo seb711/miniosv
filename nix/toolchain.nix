@@ -1,4 +1,8 @@
-{ pkgs, llvmPkgs, system }:
+{
+  pkgs,
+  llvmPkgs,
+  system,
+}:
 
 # A single pure-LLVM toolchain (clang/clang++, lld, llvm binutils) that can
 # cross-compile to either x86_64 or aarch64 baremetal from either host arch,

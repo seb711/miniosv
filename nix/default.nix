@@ -1,50 +1,138 @@
-{ nixpkgs, system, self }:
-
-# Per-system entry point: turns the flake inputs into the packages / apps /
-# devShells outputs. flake.nix just calls into here via flake-utils.
-#
-# Both host arches (x86_64-linux, aarch64-linux) can build either target arch
-# (x64, aarch64) because the pure-LLVM toolchain cross-compiles by
-# --target=<triple>. So for each host we expose:
-#   packages.miniosv           - image for the host arch (default)
-#   packages.miniosv-x86_64    - image for x86_64
-#   packages.miniosv-aarch64   - image for aarch64
-#   apps.default               - run the host-arch image under qemu
-#   apps.run-x86_64            - run the x86_64 image under qemu
-#   apps.run-aarch64           - run the aarch64 image under qemu
+{
+  nixpkgs,
+  system,
+  self,
+  apps,
+}:
 
 let
   pkgs = nixpkgs.legacyPackages.${system};
   llvmPkgs = pkgs.llvmPackages_20;
+  inherit (nixpkgs) lib;
+
+  # Per-arch metadata. Add a new target arch by adding a row here.
+  arches = {
+    x64 = {
+      linuxName = "x86_64";
+      qemuName = "x86_64";
+      firmwarePrefix = "OVMF";
+      crossPkgs = pkgs.pkgsCross.gnu64;
+    };
+    aarch64 = {
+      linuxName = "aarch64";
+      qemuName = "aarch64";
+      firmwarePrefix = "AAVMF";
+      crossPkgs = pkgs.pkgsCross.aarch64-multiplatform;
+    };
+  };
 
   hostArch = if system == "x86_64-linux" then "x64" else "aarch64";
 
   llvmSource = pkgs.callPackage ./llvm-source.nix { };
   toolchain = import ./toolchain.nix { inherit pkgs llvmPkgs system; };
 
-  # One factory per target arch, so cross- and native builds are structured
-  # identically.
-  forArch = targetArch:
+  # Narrowed source for compiler-rt / llvm-libc / libcxx: only the files their
+  # scripts actually read. Keeps toolchain drv hashes invariant to unrelated
+  # changes in the flake tree.
+  toolchainSrc =
     let
-      commonArgs = { inherit toolchain llvmSource targetArch self system; };
-      compilerRt = pkgs.callPackage ./compiler-rt.nix commonArgs;
-      llvmLibc   = pkgs.callPackage ./llvm-libc.nix   commonArgs;
-      libcxx     = pkgs.callPackage ./libcxx.nix      commonArgs;
-      miniosv    = pkgs.callPackage ./miniosv.nix (commonArgs // {
-        inherit compilerRt llvmLibc libcxx;
-      });
-      run = import ./run.nix {
-        inherit pkgs lib miniosv targetArch self system;
-      };
-      awsDeploy = import ./aws-deploy.nix {
-        inherit pkgs lib miniosv targetArch self;
-      };
-    in { inherit compilerRt llvmLibc libcxx miniosv run awsDeploy; };
+      root = toString self;
+      keep = [
+        "scripts"
+        "external/llvm-libc-config"
+        "include/api"
+      ];
+      keepAncestor = [
+        "external"
+        "include"
+      ];
+    in
+    builtins.path {
+      path = self;
+      name = "miniosv-toolchain-src";
+      filter =
+        path: _:
+        let
+          rel = lib.removePrefix (root + "/") (toString path);
+        in
+        builtins.any (p: rel == p || lib.hasPrefix (p + "/") rel) keep || builtins.elem rel keepAncestor;
+    };
 
-  inherit (nixpkgs) lib;
-  x64Build = forArch "x64";
-  aarch64Build = forArch "aarch64";
-  hostBuild = if hostArch == "x64" then x64Build else aarch64Build;
+  # Per-arch toolchain sub-builds (independent of the selected app).
+  toolchainFor =
+    targetArch:
+    let
+      args = {
+        inherit toolchain llvmSource targetArch;
+        src = toolchainSrc;
+      };
+    in
+    {
+      compilerRt = pkgs.callPackage ./compiler-rt.nix (args // { isCross = targetArch != hostArch; });
+      llvmLibc = pkgs.callPackage ./llvm-libc.nix args;
+      libcxx = pkgs.callPackage ./libcxx.nix args;
+    };
+
+  archToolchains = lib.mapAttrs (a: _: toolchainFor a) arches;
+
+  # (targetArch, app) -> { miniosv, run, awsDeploy } derivations.
+  buildVariant =
+    {
+      targetArch,
+      appName,
+      appSrc,
+    }:
+    let
+      arch = arches.${targetArch};
+      isNative = targetArch == hostArch;
+      ovmfPkg = if isNative then pkgs.OVMF else arch.crossPkgs.OVMF;
+    in
+    rec {
+      miniosv = pkgs.callPackage ./miniosv.nix (
+        {
+          inherit
+            toolchain
+            llvmSource
+            targetArch
+            self
+            appName
+            appSrc
+            ;
+        }
+        // archToolchains.${targetArch}
+      );
+
+      run = import ./run.nix {
+        inherit
+          pkgs
+          lib
+          miniosv
+          self
+          ;
+        inherit (arch) qemuName firmwarePrefix;
+        ovmfFdDir = "${ovmfPkg.fd}/FV";
+      };
+
+      awsDeploy = import ./aws-deploy.nix {
+        inherit
+          pkgs
+          lib
+          miniosv
+          self
+          ;
+      };
+    };
+
+  # Cross-product: apps × arches → { "<app>-<linuxName>" = variant; ... }.
+  variants = lib.concatMapAttrs (
+    appName: appSrc:
+    lib.mapAttrs' (
+      targetArch: arch:
+      lib.nameValuePair "${appName}-${arch.linuxName}" (buildVariant {
+        inherit targetArch appName appSrc;
+      })
+    ) arches
+  ) apps;
 
   mkApp = binName: pkg: {
     type = "app";
@@ -52,28 +140,13 @@ let
   };
 in
 {
-  packages = {
-    default = hostBuild.miniosv;
-    miniosv = hostBuild.miniosv;
-    miniosv-x86_64 = x64Build.miniosv;
-    miniosv-aarch64 = aarch64Build.miniosv;
+  packages = lib.mapAttrs (_: v: v.miniosv) variants;
 
-    # Toolchain sub-builds exposed for debugging / caching.
-    compiler-rt-x86_64 = x64Build.compilerRt;
-    compiler-rt-aarch64 = aarch64Build.compilerRt;
-    llvm-libc-x86_64 = x64Build.llvmLibc;
-    llvm-libc-aarch64 = aarch64Build.llvmLibc;
-    libcxx-x86_64 = x64Build.libcxx;
-    libcxx-aarch64 = aarch64Build.libcxx;
-  };
-
-  apps = {
-    default = mkApp "miniosv-run" hostBuild.run;
-    run-x86_64 = mkApp "miniosv-run" x64Build.run;
-    run-aarch64 = mkApp "miniosv-run" aarch64Build.run;
-    aws-deploy-x86_64  = mkApp "miniosv-aws-deploy" x64Build.awsDeploy;
-    aws-deploy-aarch64 = mkApp "miniosv-aws-deploy" aarch64Build.awsDeploy;
-  };
+  apps =
+    lib.mapAttrs (_: v: mkApp "miniosv-run" v.run) variants
+    // lib.mapAttrs' (
+      name: v: lib.nameValuePair "aws-deploy-${name}" (mkApp "miniosv-aws-deploy" v.awsDeploy)
+    ) variants;
 
   devShells = import ./devshells.nix { inherit pkgs toolchain system; };
 }

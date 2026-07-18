@@ -1,8 +1,8 @@
-{ pkgs, toolchain, system }:
-
-# Same three developer shells the old flake shipped, moved verbatim so
-# `nix develop`, `nix develop .#aws`, `nix develop .#cli` keep working. Nothing
-# here is used by the packages / apps outputs.
+{
+  pkgs,
+  toolchain,
+  system,
+}:
 
 let
   ovmf_prefix = if system == "x86_64-linux" then "OVMF" else "AAVMF";
@@ -14,7 +14,6 @@ rec {
       pkgs.gdb
     ];
 
-    # UEFI boot requires OVMF installation
     "${ovmf_prefix}_CODE" = "${pkgs.OVMF.fd}/FV/${ovmf_prefix}_CODE.fd";
     "${ovmf_prefix}_VARS" = "${pkgs.OVMF.fd}/FV/${ovmf_prefix}_VARS.fd";
   };
@@ -27,8 +26,6 @@ rec {
           awscrt
           boto3
           botocore
-          # We need to redeclare every python
-          # dependency from the default shell
           pyyaml
         ]
       ))
