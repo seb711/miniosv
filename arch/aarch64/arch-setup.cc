@@ -48,6 +48,51 @@ char *cmdline;
 // page tables are installed, before the clock constructor runs.
 u64 osv_boot_unixtime_ns;
 
+// Snapshot of the usable RAM ranges from the UEFI memory map, taken in the
+// early uefi_memory_setup() constructor and consumed later by
+// arch_setup_free_memory(). This mirrors the x86_64 port
+// (arch/x64/arch-setup.cc): the boot_info memory map lives in low RAM that is
+// unmapped once the runtime page tables are installed, so we copy the ranges
+// we need into the kernel image up front.
+namespace {
+struct usable_range { u64 addr; u64 size; };
+constexpr unsigned max_usable_ranges = 512;
+usable_range usable_ranges[max_usable_ranges];
+unsigned usable_range_count;
+
+void snapshot_usable_ranges(osv::boot_info* bi)
+{
+    auto mm = reinterpret_cast<osv::boot_memmap_entry*>(bi->memmap_addr);
+    usable_range_count = 0;
+    for (u32 i = 0; i < bi->memmap_count && usable_range_count < max_usable_ranges; i++) {
+        if (mm[i].type == osv::boot_mem_type::usable) {
+            usable_ranges[usable_range_count++] = { mm[i].addr, mm[i].size };
+        }
+    }
+}
+
+// Free the part of [rstart, rend) that lies within [lo, hi) and outside the
+// kernel image [kstart, kend), handing it to the page allocator.
+void free_usable(u64 rstart, u64 rend, u64 lo, u64 hi, u64 kstart, u64 kend)
+{
+    u64 s = rstart < lo ? lo : rstart;
+    u64 e = rend > hi ? hi : rend;
+    if (s >= e) {
+        return;
+    }
+    if (e <= kstart || s >= kend) {          // entirely outside the kernel
+        mmu::free_initial_memory_range(s, e - s);
+        return;
+    }
+    if (s < kstart) {                        // part below the kernel
+        mmu::free_initial_memory_range(s, kstart - s);
+    }
+    if (e > kend) {                          // part above the kernel
+        mmu::free_initial_memory_range(kend, e - kend);
+    }
+}
+}
+
 // Derive the physical memory layout and ELF extents from the UEFI memory map.
 // Runs as an early constructor (init_prio::dtb); elf_header, kernel_vm_shift
 // and osv_boot_info were already set by uefi_entry.
@@ -83,38 +128,27 @@ void __attribute__((constructor(init_prio::dtb))) uefi_memory_setup()
     mmu::flush_tlb_all();
 
     // mem_addr is the 2MB-aligned base the boot page tables map the kernel
-    // window onto. The UEFI stub loaded the kernel here with AllocatePages,
-    // which splits the surrounding RAM into several map entries, so we take the
-    // top of usable RAM at or above mem_addr as the end of memory (QEMU virt
-    // and cloud ARM present RAM as one contiguous block from there up).
+    // window onto. The UEFI stub loaded the kernel here with AllocatePages.
     mmu::mem_addr = kbase & ~((u64)0x200000 - 1);
 
-    // Grow a single contiguous run of usable memory upward from the kernel
-    // base. OSv models RAM as one [mem_addr, region_end) block, but firmware
-    // memory maps are not always contiguous: AWS Nitro presents a low RAM
-    // island separated by a reserved hole from a larger high island. Taking
-    // the highest usable end (the old behaviour) would span that hole and
-    // later free non-existent physical pages into the allocator, faulting on
-    // first touch. So extend only across adjacent/overlapping usable entries
-    // and stop at the first gap; RAM above the gap is discarded for now (this
-    // matches the old aarch64 stub, which deliberately exposed one range).
-    u64 region_end = mmu::mem_addr;
-    for (bool grew = true; grew;) {
-        grew = false;
-        for (u32 i = 0; i < bi->memmap_count; i++) {
-            if (mm[i].type != osv::boot_mem_type::usable)
-                continue;
-            u64 start = mm[i].addr, end = start + mm[i].size;
-            if (start <= region_end && end > region_end) {
-                region_end = end;
-                grew = true;
-            }
-        }
+    // Record every usable RAM range the firmware reports and total them up.
+    // The old code grew a single contiguous run upward from the kernel base and
+    // stopped at the first gap in the memory map, discarding all RAM above it.
+    // On a large guest that throws away most of memory: e.g. a 192 GiB QEMU
+    // virt guest, whose usable RAM has a small reserved gap ~62 GiB up, exposed
+    // only ~62 GiB. We instead expose every usable range; arch_setup_free_memory()
+    // frees each one individually, so a gap between ranges (e.g. that reserved
+    // hole, or the AWS Nitro low/high RAM split) is never spanned - it just
+    // separates two ranges we free independently, which was the concern that
+    // motivated the single-range approach.
+    snapshot_usable_ranges(bi);
+    if (usable_range_count == 0) {
+        abort("uefi_memory_setup: firmware reported no usable memory.\n");
     }
-    if (region_end <= mmu::mem_addr) {
-        abort("uefi_memory_setup: no usable memory above the kernel.\n");
+    memory::phys_mem_size = 0;
+    for (unsigned i = 0; i < usable_range_count; i++) {
+        memory::phys_mem_size += usable_ranges[i].size;
     }
-    memory::phys_mem_size = region_end - mmu::mem_addr;
 
     // Command line and wall-clock base provided by the UEFI stub.
     cmdline = reinterpret_cast<char*>(bi->cmdline_addr);
@@ -130,10 +164,9 @@ void __attribute__((constructor(init_prio::dtb))) uefi_memory_setup()
     mmu::elf_phys_start = reinterpret_cast<void *>(elf_header);
     elf_start = static_cast<char *>(mmu::elf_phys_start) + kernel_vm_shift;
     elf_size = (u64)edata - (u64)elf_start;
-
-    // Account for the memory the kernel image itself occupies.
-    mmu::phys addr = (mmu::phys)mmu::elf_phys_start + elf_size;
-    memory::phys_mem_size -= addr - mmu::mem_addr;
+    // phys_mem_size is the true total of usable RAM (reported via
+    // sysconf(_SC_PHYS_PAGES)); the kernel image's pages are simply not handed
+    // to the allocator in arch_setup_free_memory(), rather than subtracted here.
 }
 
 void setup_temporary_phys_map()
@@ -183,15 +216,45 @@ void arch_setup_free_memory()
     extern size_t elf_size;
     extern elf::Elf64_Ehdr* elf_header;
 
+    // The kernel image (boot trampoline + DTB copy + ELF) occupies
+    // [mem_addr, addr); everything else in the usable ranges is free RAM.
     mmu::phys addr = (mmu::phys)elf_header + elf_size;
-    mmu::free_initial_memory_range(addr, memory::phys_mem_size);
+    const u64 kernel_start = mmu::mem_addr;
+    const u64 kernel_end = addr;
+
+    // linear_map() allocates its own page-table pages from the page allocator
+    // and writes them through the linear-map window. Before the real mappings
+    // below exist, that window is backed only by the boot page tables (the low
+    // 4 GiB identity map that setup_temporary_phys_map() cloned) - so we must
+    // seed the allocator with already-mapped low RAM first, map everything, and
+    // only then free the high RAM. Freeing all of it up front (the obvious
+    // order) lets linear_map() grab a page-table page from still-unmapped high
+    // RAM and fault on the write. This mirrors the x86_64 port's use of its
+    // 1 GiB initial_map.
+    constexpr u64 initial_map = 4ull << 30;   // low 4 GiB mapped by boot.S
+
+    // Step 1: free usable RAM below initial_map (already mapped) to bootstrap
+    // the page-table allocator.
+    for (unsigned i = 0; i < usable_range_count; i++) {
+        u64 rstart = usable_ranges[i].addr;
+        free_usable(rstart, rstart + usable_ranges[i].size,
+                    0, initial_map, kernel_start, kernel_end);
+    }
 
     /* linear_map [TTBR1] */
+    // Step 2: install the real linear mappings for every usable range in each
+    // identity-mapped area (page tables come from the low RAM freed above). The
+    // kernel-occupied pages are mapped here too (as on x86_64); the kernel also
+    // keeps its separate OSV_KERNEL_VM_BASE window mapped below. Each range is
+    // mapped on its own, so a gap between ranges is never spanned.
     for (auto&& area : mmu::identity_mapped_areas) {
         auto base = reinterpret_cast<char*>(get_mem_area_base(area));
-        mmu::linear_map(base + addr, addr, memory::phys_mem_size,
-            area == mmu::mem_area::main ? "main" :
-            area == mmu::mem_area::page ? "page" : "mempool");
+        const char *name = area == mmu::mem_area::main ? "main" :
+                           area == mmu::mem_area::page ? "page" : "mempool";
+        for (unsigned i = 0; i < usable_range_count; i++) {
+            mmu::linear_map(base + usable_ranges[i].addr, usable_ranges[i].addr,
+                            usable_ranges[i].size, name);
+        }
     }
 
     /* linear_map [TTBR0 - boot, DTB and ELF] */
@@ -220,6 +283,20 @@ void arch_setup_free_memory()
     console::mmio_isa_serial_console::clean_cmdline(cmdline);
 
     mmu::switch_to_runtime_page_tables();
+
+    // Step 3: hand the high RAM (>= initial_map) to the allocator. This must run
+    // AFTER the switch: the per-range linear maps built above live in the
+    // runtime page tables (get_root_pt writes page_table_root[], not the boot
+    // tables), and the page allocator writes bookkeeping - the page_range header
+    // and a trailing back-pointer - at the START and END of each freed range
+    // through the linear-map window. Those addresses only resolve once the
+    // runtime tables are active; the boot temporary map only covers the low
+    // contiguous region freed in step 1.
+    for (unsigned i = 0; i < usable_range_count; i++) {
+        u64 rstart = usable_ranges[i].addr;
+        free_usable(rstart, rstart + usable_ranges[i].size,
+                    initial_map, ~0ull, kernel_start, kernel_end);
+    }
 
     console::mmio_isa_serial_console::memory_map();
 }
