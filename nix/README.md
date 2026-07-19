@@ -33,7 +33,7 @@ devShells.{default,aws,cli}
 ```
 
 Where `<app>` is any key from the `apps` attrset in `flake.nix`
-(`native-example`, `miniduckdb`, `cwd`, …) and `<arch>` is `x86_64` or
+(`hello`, `miniduckdb`, `cwd`, …) and `<arch>` is `x86_64` or
 `aarch64`.
 
 There is no `packages.default` / `apps.default` / host-arch alias. Every
@@ -44,15 +44,15 @@ runnable via `nix run`.
 
 ```bash
 # Build an image (no run):
-nix build .#native-example-x86_64
+nix build .#hello-x86_64
 nix build .#miniduckdb-aarch64        # cross-compiled on any host
 
 # Boot under QEMU (KVM when target == host, else TCG):
-nix run .#native-example-x86_64
+nix run .#hello-x86_64
 nix run .#miniduckdb-aarch64          # TCG on x86 host: pass -cpu cortex-a72 -c 1 for a sane boot
 
 # Deploy on AWS (see scripts/aws-deploy.py --help):
-nix run .#aws-deploy-native-example-x86_64 -- eu-north-1 c5.large --attach
+nix run .#aws-deploy-hello-x86_64 -- eu-north-1 c5.large --attach
 nix run .#aws-deploy-miniduckdb-aarch64    -- eu-north-1 c7g.large --attach
 
 # Enter a dev shell (all toolchain + qemu on $PATH):
@@ -80,7 +80,7 @@ inputs.my-app = {
 
 # in outputs:
 apps = {
-  native-example = ./native-example;
+  hello = ./examples/hello;
   inherit miniduckdb;
   my-app = my-app;                   # <-- new
   cwd = cwd;
@@ -90,7 +90,7 @@ apps = {
 Each app source must be miniOSv-compliant: it needs a top-level `Makefile`
 that the kernel build includes via `include app/Makefile` (declaring
 `app-objects = ...`) and a C/C++ entry point `extern "C" void
-osv_app_main()`. See `../native-example/` for the minimum viable shape.
+osv_app_main()`. See `../examples/hello/` for the minimum viable shape.
 
 Rebuilding: after `nix flake lock --update-input my-app`, the full matrix
 of `packages.my-app-{x86_64,aarch64}` and the two matching `apps.*` entries
@@ -143,7 +143,7 @@ derivations by store hash — so switching apps or editing app sources
 never rebuilds them. Confirm with:
 
 ```bash
-for app in native-example miniduckdb; do
+for app in hello miniduckdb; do
   echo "=== $app ==="
   nix derivation show .#$app-x86_64 | \
     jq -r '.[].inputs.drvs | keys[]' | \
@@ -164,6 +164,6 @@ whitelisted path trigger a rebuild.
 ```bash
 nix flake show                          # all outputs
 nix flake check --no-build              # eval only
-nix path-info .#native-example-x86_64   # store path of the image
-nix derivation show .#native-example-x86_64 | jq '.[].inputs.drvs | keys'
+nix path-info .#hello-x86_64   # store path of the image
+nix derivation show .#hello-x86_64 | jq '.[].inputs.drvs | keys'
 ```

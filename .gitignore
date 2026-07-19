@@ -39,7 +39,4 @@ downloaded_packages
 external/llvm-project/
 aws
 
-# The application lives outside this repo. app/ is populated by cloning the
-# miniduckdb fork (https://github.com/Martin-Lndbl/miniduckdb) into it — see
-# that repo's README for setup. Nothing under app/ is tracked here.
 /app/

@@ -1,4 +1,4 @@
-// Native hello-world reference app.
+// Hello-world reference app.
 //
 // Staged into app/ by the Nix build so the kernel's Makefile picks it up via
 // `include app/Makefile`. osv_app_main() is entered once on a dedicated

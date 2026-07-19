@@ -53,7 +53,7 @@
       import ./nix {
         inherit nixpkgs system self;
         apps = {
-          native-example = ./native-example;
+          hello = ./examples/hello;
           inherit miniduckdb;
           cwd = cwd;
         };
