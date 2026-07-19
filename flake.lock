@@ -1,5 +1,17 @@
 {
   "nodes": {
+    "cwd": {
+      "flake": false,
+      "locked": {
+        "path": "./nix/cwd-sentinel",
+        "type": "path"
+      },
+      "original": {
+        "path": "./nix/cwd-sentinel",
+        "type": "path"
+      },
+      "parent": []
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -15,6 +27,23 @@
       "original": {
         "owner": "numtide",
         "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "miniduckdb": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1784368965,
+        "narHash": "sha256-xVUPiGe9cEFYcMTLm31hS5ic3tWFptdwza6g76kLQgA=",
+        "owner": "Martin-Lndbl",
+        "repo": "miniduckdb",
+        "rev": "da84133efc13f6e011ca5e98471676077b6145c9",
+        "type": "github"
+      },
+      "original": {
+        "owner": "Martin-Lndbl",
+        "ref": "miniosv-trunk",
+        "repo": "miniduckdb",
         "type": "github"
       }
     },
@@ -36,7 +65,9 @@
     },
     "root": {
       "inputs": {
+        "cwd": "cwd",
         "flake-utils": "flake-utils",
+        "miniduckdb": "miniduckdb",
         "nixpkgs": "nixpkgs"
       }
     },
