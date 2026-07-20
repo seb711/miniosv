@@ -122,7 +122,7 @@ OSV_HEADERS="-isystem $OSV_ROOT/include/api -isystem $OSV_ROOT/include/api/$osv_
 # "unknown rune table for this platform" #error. The kernel build defines the
 # same macro (Makefile, libcxx-includes) so locale.cpp's classic_table here and
 # every ctype<char> consumer there agree on the mask layout.
-KERNEL_FLAGS="-fno-pie -fno-stack-protector -ftls-model=local-exec -fno-omit-frame-pointer -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE $OSV_HEADERS"
+KERNEL_FLAGS="-fno-pie -fno-stack-protector -ftls-model=local-exec -D_LIBCPP_PROVIDES_DEFAULT_RUNE_TABLE $OSV_HEADERS"
 
 # Pure-LLVM cross-compile when targeting a non-host arch: one clang driven at the
 # target triple (no GNU cross toolchain). cmake needs the cross vars explicitly.

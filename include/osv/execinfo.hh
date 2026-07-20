@@ -8,10 +8,13 @@
 #ifndef EXECINFO_HH_
 #define EXECINFO_HH_
 
-// Similar to backtrace(), but works even with a corrupted stack.  Uses
-// frame pointers instead of DWARF debug information, so it works in interrupt
-// contexts, but requires -fno-omit-frame-pointer
+// Backtrace helper used by the panic/abort path. Walks .eh_frame via
+// libgcc's _Unwind_Backtrace, so no frame pointers are required.
 int backtrace_safe(void** pc, int nr);
+
+// Same as backtrace_safe(), but also fills `cfa` with the canonical frame
+// address of each frame. Useful for spotting recursion / stack overflow.
+int backtrace_safe(void** pc, unsigned long* cfa, int nr);
 
 
 #endif /* EXECINFO_HH_ */
