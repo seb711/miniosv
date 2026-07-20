@@ -7,6 +7,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <cxxabi.h>
 
 #include <osv/demangle.hh>
@@ -30,12 +31,28 @@ bool demangle(const char *name, char *buf, size_t len)
     return true;
 }
 
+// Weak stubs let the stage-1 link resolve; the strong definitions from
+// gen/ksymtab.o override them in the final link.
+extern "C" {
+    __attribute__((weak)) uint32_t __ksym_count = 0;
+    __attribute__((weak)) uint64_t __ksym_addresses[1] = {0};
+    __attribute__((weak)) uint32_t __ksym_name_offsets[1] = {0};
+    __attribute__((weak)) char __ksym_names_blob[1] = {0};
+}
+
 void lookup_name_demangled(void *addr, char *buf, size_t len)
 {
-    // The ELF symbol table is no longer kept in the kernel (the application is
-    // statically linked in), so backtraces report raw addresses rather than
-    // resolved, demangled symbol names.
-    snprintf(buf, len, "%p", addr);
+    uintptr_t a = reinterpret_cast<uintptr_t>(addr);
+    uint32_t n = __ksym_count, lo = 0, hi = n;
+    if (!n || a < __ksym_addresses[0]) { snprintf(buf, len, "%p", addr); return; }
+    while (hi - lo > 1) {
+        uint32_t m = lo + (hi - lo) / 2;
+        (__ksym_addresses[m] <= a ? lo : hi) = m;
+    }
+    const char *raw = &__ksym_names_blob[__ksym_name_offsets[lo]];
+    char d[512];
+    const char *disp = demangle(raw, d, sizeof(d)) ? d : raw;
+    snprintf(buf, len, "%s+0x%lx", disp, (unsigned long)(a - __ksym_addresses[lo]));
 }
 
 std::unique_ptr<char> demangle(const char *name)

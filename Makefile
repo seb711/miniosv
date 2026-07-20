@@ -111,6 +111,7 @@ LD=ld.lld --no-dependent-libraries
 export STRIP=$(shell which llvm-strip 2>/dev/null || which llvm-strip-20 2>/dev/null || echo strip)
 OBJCOPY=$(shell which llvm-objcopy 2>/dev/null || which llvm-objcopy-20 2>/dev/null || echo objcopy)
 READELF=$(shell which llvm-readelf 2>/dev/null || which llvm-readelf-20 2>/dev/null || echo readelf)
+NM=$(shell which llvm-nm 2>/dev/null || which llvm-nm-20 2>/dev/null || echo nm)
 
 # Our makefile puts all compilation results in a single directory, $(out),
 # instead of mixing them with the source code. This allows us to compile
@@ -856,12 +857,26 @@ def_symbols = --defsym=OSV_KERNEL_BASE=$(kernel_base) \
               --defsym=OSV_KERNEL_VM_SHIFT=$(kernel_vm_shift)
 endif
 
-$(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
+# Linked twice so panic backtraces can print function+offset: stage 1 fixes
+# function addresses; scripts/gen-ksymtab.py reads .symtab into an assembly
+# source whose .rodata carries a sorted address/name table; the final link
+# folds that in. .text sits before .rodata in loader.ld, so the final link
+# does not shift addresses baked into the table.
+$(out)/loader.stage1.elf $(out)/loader.elf: $(stage1_targets) arch/$(arch)/loader.ld $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep)
 	$(call quiet, $(LD) -o $@ $(def_symbols) \
 		-static --eh-frame-hdr -L$(out)/arch/$(arch) \
             $(patsubst %.ld,-T %.ld,$(filter-out $(app_mode_dep) $(llvm_libc_dep) $(libcxx_dep) $(compiler_rt_dep),$^)) \
 	    $(linker_archives_options) $(conf_linker_extra_options), \
-		LINK loader.elf)
+		LINK $(notdir $@))
+
+$(out)/loader.elf: $(out)/gen/ksymtab.o
+
+$(out)/gen/ksymtab.S: $(out)/loader.stage1.elf scripts/gen-ksymtab.py
+	$(makedir)
+	$(call quiet, python3 scripts/gen-ksymtab.py --elf $< --nm $(NM) --out $@, GEN gen/ksymtab.S)
+
+$(out)/gen/ksymtab.o: $(out)/gen/ksymtab.S
+	$(call quiet, $(CC) -c -o $@ $<, AS gen/ksymtab.o)
 
 
 ################################################################################
